@@ -1,0 +1,18 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isTeamMember() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/team/$(request.auth.uid));
+    }
+
+    // Everything in this app is internal — nothing is publicly readable or writable.
+    // The public sign-up form does NOT write here directly; it goes through a
+    // Cloud Function using the Admin SDK, which bypasses these rules safely.
+    match /{document=**} {
+      allow read, write: if isTeamMember();
+    }
+  }
+}

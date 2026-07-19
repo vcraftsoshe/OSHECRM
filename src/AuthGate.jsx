@@ -1,0 +1,102 @@
+import React, { useState, useEffect } from "react";
+import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
+import { auth } from "./firebase";
+
+const T = {
+  charcoal: "#1A2C2E",
+  teal: "#13DCCC",
+  tealDark: "#0AADA0",
+  ink: "#152423",
+  slate: "#5C7274",
+  border: "#DCE6E4",
+  coral: "#C25B4E",
+  paperAlt: "#EBF2F0",
+};
+
+// Wraps the whole app. Nobody gets past this without a real email + password
+// that you created for them in the Firebase console (Authentication > Users).
+// There is no public sign-up here on purpose — accounts are added by you, not self-served.
+export default function AuthGate({ children }) {
+  const [user, setUser] = useState(undefined); // undefined = checking, null = logged out, object = logged in
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => setUser(u));
+    return unsub;
+  }, []);
+
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    setError("");
+    setSubmitting(true);
+    try {
+      await signInWithEmailAndPassword(auth, email.trim(), password);
+    } catch (err) {
+      setError("Incorrect email or password.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (user === undefined) {
+    return (
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "system-ui, sans-serif", color: T.slate }}>
+        Loading…
+      </div>
+    );
+  }
+
+  if (user === null) {
+    return (
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: T.charcoal, fontFamily: "system-ui, sans-serif" }}>
+        <form onSubmit={handleLogin} style={{ background: "#fff", padding: 32, borderRadius: 16, width: 320, display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ fontSize: 20, fontWeight: 700, color: T.ink }}>OSHE</div>
+          <div style={{ fontSize: 13, color: T.slate, marginBottom: 8 }}>Client Operations — sign in</div>
+          <input
+            type="email"
+            placeholder="Email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+            autoComplete="username"
+            style={{ padding: "10px 12px", borderRadius: 8, border: `1px solid ${T.border}`, fontSize: 14 }}
+          />
+          <input
+            type="password"
+            placeholder="Password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+            autoComplete="current-password"
+            style={{ padding: "10px 12px", borderRadius: 8, border: `1px solid ${T.border}`, fontSize: 14 }}
+          />
+          {error && <div style={{ color: T.coral, fontSize: 13 }}>{error}</div>}
+          <button
+            type="submit"
+            disabled={submitting}
+            style={{ background: T.tealDark, color: "#fff", padding: "10px 12px", borderRadius: 8, fontWeight: 600, border: "none", cursor: "pointer", opacity: submitting ? 0.7 : 1 }}
+          >
+            {submitting ? "Signing in…" : "Log in"}
+          </button>
+        </form>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div style={{ position: "fixed", top: 12, right: 12, zIndex: 50 }}>
+        <button
+          onClick={() => signOut(auth)}
+          style={{ fontSize: 12, background: T.paperAlt, color: T.tealDark, border: "none", padding: "6px 12px", borderRadius: 8, cursor: "pointer", fontWeight: 600 }}
+        >
+          Sign out ({user.email})
+        </button>
+      </div>
+      {children}
+    </div>
+  );
+}

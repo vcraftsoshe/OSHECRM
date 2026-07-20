@@ -228,7 +228,7 @@ function Card({ children, style, className, ...rest }) {
 }
 
 /* ---------- Onboarding (lives on the client record) ---------- */
-function ClientOnboarding({ client, onboardings, setOnboardings, workflows, pushNotification, goToWorkflows }) {
+function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, workflows, pushNotification, goToWorkflows }) {
   const [pickerWorkflowId, setPickerWorkflowId] = useState(workflows.find((w) => w.isDefault)?.id || workflows[0]?.id);
   const [showArchive, setShowArchive] = useState(false);
   const [showStarter, setShowStarter] = useState(false);
@@ -237,20 +237,16 @@ function ClientOnboarding({ client, onboardings, setOnboardings, workflows, push
   const archived = list.filter((i) => i.completedDate);
 
   const markDone = (instId, stepId) => {
-    setOnboardings((prev) => {
-      const clientList = prev[client.id] || [];
-      const updated = clientList.map((inst) => {
-        if (inst.id !== instId) return inst;
-        const steps = inst.steps.map((s) => (s.id === stepId ? { ...s, done: true } : s));
-        const nowComplete = steps.every((s) => s.done);
-        if (nowComplete) {
-          pushNotification({ forPerson: "Vanessa", clientId: client.id, clientName: client.name, message: `${client.name} — ${inst.workflowName} complete, add to billing` });
-          return { ...inst, steps, completedDate: today() };
-        }
-        return { ...inst, steps };
-      });
-      return { ...prev, [client.id]: updated };
-    });
+    updateOnboardingsForClient(client.id, (clientList) => clientList.map((inst) => {
+      if (inst.id !== instId) return inst;
+      const steps = inst.steps.map((s) => (s.id === stepId ? { ...s, done: true } : s));
+      const nowComplete = steps.every((s) => s.done);
+      if (nowComplete) {
+        pushNotification({ forPerson: "Vanessa", clientId: client.id, clientName: client.name, message: `${client.name} — ${inst.workflowName} complete, add to billing` });
+        return { ...inst, steps, completedDate: today() };
+      }
+      return { ...inst, steps };
+    }));
   };
 
   const startOnboarding = () => {
@@ -260,7 +256,7 @@ function ClientOnboarding({ client, onboardings, setOnboardings, workflows, push
       id: "ob" + Date.now(), workflowId: wf.id, workflowName: wf.name, startedDate: today(), completedDate: null,
       steps: wf.steps.map((s) => ({ ...s, done: false, dueDate: addDays(today(), s.dueDays) })),
     };
-    setOnboardings((prev) => ({ ...prev, [client.id]: [...(prev[client.id] || []), newInst] }));
+    updateOnboardingsForClient(client.id, (clientList) => [...clientList, newInst]);
     setShowStarter(false);
   };
 
@@ -367,7 +363,7 @@ function ClientOnboarding({ client, onboardings, setOnboardings, workflows, push
 }
 
 /* ---------- Clients module ---------- */
-function ClientsView({ clients, selectedId, setSelectedId, onboardings, setOnboardings, workflows, pushNotification, goToWorkflows, tabRequest }) {
+function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOnboardingsForClient, workflows, pushNotification, goToWorkflows, tabRequest }) {
   const client = clients.find((c) => c.id === selectedId) || clients[0];
   const [tab, setTab] = useState("overview");
   useEffect(() => {
@@ -837,7 +833,7 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, setOnboa
           )}
 
           {tab === "onboarding" && (
-            <ClientOnboarding client={client} onboardings={onboardings} setOnboardings={setOnboardings} workflows={workflows} pushNotification={pushNotification} goToWorkflows={goToWorkflows} />
+            <ClientOnboarding client={client} onboardings={onboardings} updateOnboardingsForClient={updateOnboardingsForClient} workflows={workflows} pushNotification={pushNotification} goToWorkflows={goToWorkflows} />
           )}
 
           {tab === "notes" && (
@@ -1004,27 +1000,28 @@ function SystemsView({ clients, selectedId, setSelectedId }) {
 }
 
 /* ---------- Sales pipeline ---------- */
-function SalesView({ leads, setLeads, convertLeadToClient }) {
+function SalesView({ leads, convertLeadToClient }) {
   const [emailDrafts, setEmailDrafts] = useState({});
   const [expandedNotes, setExpandedNotes] = useState({});
   const [noteDrafts, setNoteDrafts] = useState({});
   const [showAddLead, setShowAddLead] = useState(false);
   const [newLead, setNewLead] = useState({ company: "", contact: "", value: "" });
 
-  const setStage = (id, stage) => setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, stage } : l)));
+  const setStage = (id, stage) => updateDoc(doc(db, "leads", id), { stage });
 
   const sendForm = (lead) => {
     const email = emailDrafts[lead.id];
     if (!email) return;
-    setLeads((prev) => prev.map((l) => (l.id === lead.id ? { ...l, formEmail: email, formStatus: "sent" } : l)));
+    updateDoc(doc(db, "leads", lead.id), { formEmail: email, formStatus: "sent" });
   };
 
-  const addLead = () => {
+  const addLead = async () => {
     if (!newLead.company.trim()) return;
-    setLeads((prev) => [...prev, {
-      id: Date.now(), company: newLead.company, contact: newLead.contact, value: newLead.value,
+    const id = "lead" + Date.now();
+    await setDoc(doc(db, "leads", id), {
+      company: newLead.company, contact: newLead.contact, value: newLead.value,
       stage: "New Lead", formEmail: null, formStatus: "none", notes: [],
-    }]);
+    });
     setNewLead({ company: "", contact: "", value: "" });
     setShowAddLead(false);
   };
@@ -1032,7 +1029,9 @@ function SalesView({ leads, setLeads, convertLeadToClient }) {
   const addNote = (leadId) => {
     const text = noteDrafts[leadId];
     if (!text || !text.trim()) return;
-    setLeads((prev) => prev.map((l) => (l.id === leadId ? { ...l, notes: [...l.notes, { id: Date.now(), text, date: today() }] } : l)));
+    const lead = leads.find((l) => l.id === leadId);
+    if (!lead) return;
+    updateDoc(doc(db, "leads", leadId), { notes: [...lead.notes, { id: Date.now(), text, date: today() }] });
     setNoteDrafts({ ...noteDrafts, [leadId]: "" });
   };
 
@@ -1127,7 +1126,7 @@ function SalesView({ leads, setLeads, convertLeadToClient }) {
 }
 
 /* ---------- Resellers (consultants who resell the app, billed per user) ---------- */
-function ResellersView({ resellers, setResellers, selectedId, setSelectedId }) {
+function ResellersView({ resellers, selectedId, setSelectedId }) {
   const reseller = resellers.find((r) => r.id === selectedId) || resellers[0];
   const [showAddReseller, setShowAddReseller] = useState(false);
   const [newResellerName, setNewResellerName] = useState("");
@@ -1136,25 +1135,29 @@ function ResellersView({ resellers, setResellers, selectedId, setSelectedId }) {
   const [showArchived, setShowArchived] = useState(false);
   const visibleResellers = resellers.filter((r) => (showArchived ? r.archived : !r.archived));
 
-  const updateReseller = (fn) => setResellers((prev) => prev.map((r) => (r.id === reseller.id ? fn(r) : r)));
+  const updateReseller = (fn) => {
+    const updated = fn(reseller);
+    const { id, ...fields } = updated;
+    updateDoc(doc(db, "resellers", reseller.id), fields);
+  };
   const latestUsers = (c) => c.users.log[c.users.log.length - 1]?.count ?? 0;
   const totalUsers = reseller.clients.reduce((s, c) => s + latestUsers(c), 0);
 
-  const archiveReseller = (id) => setResellers((prev) => prev.map((r) => (r.id === id ? { ...r, archived: true } : r)));
-  const unarchiveReseller = (id) => setResellers((prev) => prev.map((r) => (r.id === id ? { ...r, archived: false } : r)));
+  const archiveReseller = (id) => updateDoc(doc(db, "resellers", id), { archived: true });
+  const unarchiveReseller = (id) => updateDoc(doc(db, "resellers", id), { archived: false });
   const deleteResellerPermanently = (id) => {
     if (!window.confirm("Permanently delete this reseller? This can't be undone.")) return;
-    setResellers((prev) => {
-      const next = prev.filter((r) => r.id !== id);
-      if (id === reseller.id && next.length > 0) setSelectedId(next[0].id);
-      return next;
-    });
+    deleteDoc(doc(db, "resellers", id));
+    if (id === reseller.id) {
+      const next = resellers.find((r) => r.id !== id);
+      if (next) setSelectedId(next.id);
+    }
   };
 
-  const addReseller = () => {
+  const addReseller = async () => {
     if (!newResellerName.trim()) return;
     const id = "res" + Date.now();
-    setResellers((prev) => [...prev, { id, name: newResellerName, contactEmail: "", contactPhone: "", clients: [], tasks: [], archived: false }]);
+    await setDoc(doc(db, "resellers", id), { name: newResellerName, contactEmail: "", contactPhone: "", clients: [], tasks: [], archived: false });
     setSelectedId(id);
     setNewResellerName("");
     setShowAddReseller(false);
@@ -1435,7 +1438,7 @@ function BillingOverview({ clients, resellers }) {
 }
 
 /* ---------- My Tasks (per person) ---------- */
-function TasksView({ tasks, setTasks, clients, onboardings, currentUser, goToClient, resellers, goToReseller }) {
+function TasksView({ tasks, clients, onboardings, currentUser, goToClient, resellers, goToReseller }) {
   const [person, setPerson] = useState(currentUser || TEAM[0]);
   const [draft, setDraft] = useState({ title: "", priority: "Medium", clientId: "", dueDate: "" });
 
@@ -1481,12 +1484,16 @@ function TasksView({ tasks, setTasks, clients, onboardings, currentUser, goToCli
   const addTask = () => {
     if (!draft.title.trim()) return;
     const clientName = clients.find((c) => c.id === draft.clientId)?.name || null;
-    setTasks((prev) => [...prev, { id: Date.now(), title: draft.title, assignee: person, priority: draft.priority, done: false, clientId: draft.clientId || null, clientName, dueDate: draft.dueDate || null }]);
+    const id = "task" + Date.now();
+    setDoc(doc(db, "tasks", id), { title: draft.title, assignee: person, priority: draft.priority, done: false, clientId: draft.clientId || null, clientName, dueDate: draft.dueDate || null });
     setDraft({ title: "", priority: "Medium", clientId: "", dueDate: "" });
   };
-  const toggleDone = (id) => setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, done: !t.done } : t)));
-  const deleteTaskPermanently = (id) => setTasks((prev) => prev.filter((t) => t.id !== id));
-  const setPriority = (id, priority) => setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, priority } : t)));
+  const toggleDone = (id) => {
+    const t = tasks.find((x) => x.id === id);
+    if (t) updateDoc(doc(db, "tasks", id), { done: !t.done });
+  };
+  const deleteTaskPermanently = (id) => deleteDoc(doc(db, "tasks", id));
+  const setPriority = (id, priority) => updateDoc(doc(db, "tasks", id), { priority });
 
   return (
     <div className="flex flex-col gap-4 h-full overflow-y-auto">
@@ -1621,10 +1628,10 @@ function TasksView({ tasks, setTasks, clients, onboardings, currentUser, goToCli
 }
 
 /* ---------- Notifications bell ---------- */
-function NotificationsBell({ notifications, setNotifications, reminderCount, currentUser }) {
+function NotificationsBell({ notifications, dismissNotification, reminderCount, currentUser }) {
   const [open, setOpen] = useState(false);
   const active = notifications.filter((n) => !n.dismissed && n.forPerson === currentUser);
-  const dismiss = (id) => setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, dismissed: true } : n)));
+  const dismiss = (id) => dismissNotification(id);
 
   return (
     <div className="relative">
@@ -1652,14 +1659,22 @@ function NotificationsBell({ notifications, setNotifications, reminderCount, cur
 }
 
 /* ---------- Workflows (onboarding templates, managed on-site) ---------- */
-function WorkflowsView({ workflows, setWorkflows }) {
+function WorkflowsView({ workflows }) {
   const addWorkflow = () => {
     const id = "wf-" + Date.now();
-    setWorkflows((prev) => [...prev, { id, name: "New Workflow", isDefault: false, steps: [{ id: "step" + Date.now(), title: "First step", owner: TEAM[0], dueDays: 3 }] }]);
+    setDoc(doc(db, "workflows", id), { name: "New Workflow", isDefault: false, steps: [{ id: "step" + Date.now(), title: "First step", owner: TEAM[0], dueDays: 3 }] });
   };
-  const removeWorkflow = (id) => setWorkflows((prev) => prev.filter((w) => w.id !== id));
-  const setDefault = (id) => setWorkflows((prev) => prev.map((w) => ({ ...w, isDefault: w.id === id })));
-  const updateWorkflow = (id, fn) => setWorkflows((prev) => prev.map((w) => (w.id === id ? fn(w) : w)));
+  const removeWorkflow = (id) => deleteDoc(doc(db, "workflows", id));
+  const setDefault = (id) => {
+    workflows.forEach((w) => updateDoc(doc(db, "workflows", w.id), { isDefault: w.id === id }));
+  };
+  const updateWorkflow = (id, fn) => {
+    const wf = workflows.find((w) => w.id === id);
+    if (!wf) return;
+    const updated = fn(wf);
+    const { id: _id, ...fields } = updated;
+    updateDoc(doc(db, "workflows", id), fields);
+  };
 
   return (
     <div className="flex flex-col gap-5">
@@ -1765,9 +1780,63 @@ export default function App() {
       }
     })();
   }, []);
-  const [leads, setLeads] = useState(initialLeads);
-  const [tasks, setTasks] = useState(initialTasks);
-  const [resellers, setResellers] = useState(initialResellers);
+  // Leads now live in Firestore, same pattern as clients: live subscription plus a
+  // one-time seed of the mock data using the same ids so nothing else breaks.
+  const [leads, setLeads] = useState([]);
+  useEffect(() => {
+    const unsub = onSnapshot(
+      collection(db, "leads"),
+      (snap) => setLeads(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
+      (err) => console.error("Leads subscription failed:", err)
+    );
+    return unsub;
+  }, []);
+  useEffect(() => {
+    (async () => {
+      try {
+        const snap = await getDocs(collection(db, "leads"));
+        if (snap.empty) {
+          await Promise.all(
+            initialLeads.map((l) => {
+              const { id, ...data } = l;
+              return setDoc(doc(db, "leads", String(id)), data);
+            })
+          );
+        }
+      } catch (err) {
+        console.error("Lead seed failed (likely a Firestore permissions issue):", err);
+      }
+    })();
+  }, []);
+  // My Tasks — real Firestore collection, one doc per task.
+  const [tasks, setTasks] = useState([]);
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "tasks"), (snap) => setTasks(snap.docs.map((d) => ({ id: d.id, ...d.data() }))), (err) => console.error("Tasks subscription failed:", err));
+    return unsub;
+  }, []);
+  useEffect(() => {
+    (async () => {
+      try {
+        const snap = await getDocs(collection(db, "tasks"));
+        if (snap.empty) await Promise.all(initialTasks.map((t) => { const { id, ...data } = t; return setDoc(doc(db, "tasks", String(id)), data); }));
+      } catch (err) { console.error("Task seed failed (likely a Firestore permissions issue):", err); }
+    })();
+  }, []);
+
+  // Resellers — real Firestore collection, one doc per reseller (their clients/tasks stay nested arrays, same as before).
+  const [resellers, setResellers] = useState([]);
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "resellers"), (snap) => setResellers(snap.docs.map((d) => ({ id: d.id, ...d.data() }))), (err) => console.error("Resellers subscription failed:", err));
+    return unsub;
+  }, []);
+  useEffect(() => {
+    (async () => {
+      try {
+        const snap = await getDocs(collection(db, "resellers"));
+        if (snap.empty) await Promise.all(initialResellers.map((r) => { const { id, ...data } = r; return setDoc(doc(db, "resellers", id), data); }));
+      } catch (err) { console.error("Reseller seed failed (likely a Firestore permissions issue):", err); }
+    })();
+  }, []);
   const [selectedReseller, setSelectedReseller] = useState(initialResellers[0].id);
   const goToReseller = (resellerId) => {
     setSelectedReseller(resellerId);
@@ -1780,7 +1849,9 @@ export default function App() {
     setModule("clients");
     setClientTabRequest({ tab: tab || "overview", nonce: Date.now() });
   };
-  const [workflows, setWorkflows] = useState([
+
+  // Workflows — real Firestore collection, one doc per workflow template.
+  const initialWorkflows = [
     { id: "wf-standard", name: "Standard Onboarding", isDefault: true, steps: defaultOnboardingTemplate },
     {
       id: "wf-fasttrack", name: "Fast-Track (small client)", isDefault: false,
@@ -1799,8 +1870,24 @@ export default function App() {
         { id: "signoff", title: "Sign off pre-qualification", owner: "Jo", dueDays: 14 },
       ],
     },
-  ]);
-  const [onboardings, setOnboardings] = useState({
+  ];
+  const [workflows, setWorkflows] = useState([]);
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "workflows"), (snap) => setWorkflows(snap.docs.map((d) => ({ id: d.id, ...d.data() }))), (err) => console.error("Workflows subscription failed:", err));
+    return unsub;
+  }, []);
+  useEffect(() => {
+    (async () => {
+      try {
+        const snap = await getDocs(collection(db, "workflows"));
+        if (snap.empty) await Promise.all(initialWorkflows.map((w) => { const { id, ...data } = w; return setDoc(doc(db, "workflows", id), data); }));
+      } catch (err) { console.error("Workflow seed failed (likely a Firestore permissions issue):", err); }
+    })();
+  }, []);
+
+  // Onboardings — one Firestore doc per client, holding that client's list of onboarding instances.
+  // Kept as a { [clientId]: [...] } shape in local state to match every existing read site.
+  const initialOnboardings = {
     radius: [
       {
         id: "ob-seed-radius", workflowId: "wf-standard", workflowName: "Standard Onboarding",
@@ -1825,15 +1912,48 @@ export default function App() {
         ],
       },
     ],
-  });
-  const [notifications, setNotifications] = useState([]);
+  };
+  const [onboardings, setOnboardingsState] = useState({});
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "onboardings"), (snap) => {
+      const map = {};
+      snap.docs.forEach((d) => { map[d.id] = d.data().list || []; });
+      setOnboardingsState(map);
+    }, (err) => console.error("Onboardings subscription failed:", err));
+    return unsub;
+  }, []);
+  useEffect(() => {
+    (async () => {
+      try {
+        const snap = await getDocs(collection(db, "onboardings"));
+        if (snap.empty) await Promise.all(Object.entries(initialOnboardings).map(([clientId, list]) => setDoc(doc(db, "onboardings", clientId), { list })));
+      } catch (err) { console.error("Onboarding seed failed (likely a Firestore permissions issue):", err); }
+    })();
+  }, []);
+  // Writes a specific client's onboarding list. updaterFn receives that client's current list and returns the new one.
+  const updateOnboardingsForClient = async (clientId, updaterFn) => {
+    const current = onboardings[clientId] || [];
+    const next = updaterFn(current);
+    await setDoc(doc(db, "onboardings", clientId), { list: next });
+  };
 
-  const pushNotification = ({ forPerson, clientId, clientName, message, type }) => {
-    setNotifications((prev) => {
-      if (prev.some((n) => n.clientId === clientId && n.forPerson === forPerson && n.message === message)) return prev;
-      return [...prev, { id: Date.now() + Math.random(), forPerson, clientId, clientName, message, type: type || (message.includes("handed over") ? "handover" : "mention"), dismissed: false }];
+  // Notifications — real Firestore collection, starts empty (nothing to seed).
+  const [notifications, setNotificationsState] = useState([]);
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "notifications"), (snap) => setNotificationsState(snap.docs.map((d) => ({ id: d.id, ...d.data() }))), (err) => console.error("Notifications subscription failed:", err));
+    return unsub;
+  }, []);
+
+  const pushNotification = async ({ forPerson, clientId, clientName, message, type }) => {
+    if (notifications.some((n) => n.clientId === clientId && n.forPerson === forPerson && n.message === message)) return;
+    const id = "notif" + Date.now();
+    await setDoc(doc(db, "notifications", id), {
+      forPerson, clientId, clientName, message,
+      type: type || (message.includes("handed over") ? "handover" : "mention"),
+      dismissed: false,
     });
   };
+  const dismissNotification = (id) => updateDoc(doc(db, "notifications", id), { dismissed: true });
 
   const convertLeadToClient = async (lead) => {
     const id = "c" + Date.now();
@@ -1844,22 +1964,21 @@ export default function App() {
     };
     const newClient = {
       name: lead.company, legalName: lead.company, logo: null,
-      contract: { start: today(), renewal: "2027-07-20", value: lead.value + " / yr", plan: "New client — plan to confirm" },
+      contract: { start: today(), renewal: addDays(today(), 365), value: lead.value + " / yr", plan: "New client — plan to confirm" },
       billing: { contact: lead.contact, email: lead.formEmail, terms: "TBC", status: "Current" },
       billingType: "FlatFee", billingSetupDone: false,
-      notes: [], reminders: [], contacts: [], ohsmsLastIssued: null, ohsmsDue: "2026-10-20",
+      notes: [], reminders: [], contacts: [], ohsmsLastIssued: null, ohsmsDue: addDays(today(), 90),
       extras: [], hours: { included: intake.supportHours, log: [] }, users: { log: [] }, intake,
     };
     await setDoc(doc(db, "clients", id), newClient);
     const wf = workflows.find((w) => w.isDefault) || workflows[0];
-    setOnboardings((prev) => ({
-      ...prev,
-      [id]: [{
+    await setDoc(doc(db, "onboardings", id), {
+      list: [{
         id: "ob" + Date.now(), workflowId: wf.id, workflowName: wf.name, startedDate: today(), completedDate: null,
         steps: wf.steps.map((s) => ({ ...s, done: false, dueDate: addDays(today(), s.dueDays) })),
       }],
-    }));
-    setLeads((prev) => prev.filter((l) => l.id !== lead.id));
+    });
+    await deleteDoc(doc(db, "leads", lead.id));
     setSelectedClient(id);
     setModule("clients");
   };
@@ -1925,7 +2044,7 @@ export default function App() {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <NotificationsBell notifications={notifications} setNotifications={setNotifications} reminderCount={upcomingReminders.length} currentUser={currentUser} />
+            <NotificationsBell notifications={notifications} dismissNotification={dismissNotification} reminderCount={upcomingReminders.length} currentUser={currentUser} />
             <button onClick={() => signOut(auth)} className="text-xs font-semibold px-3 py-2 rounded-lg" style={{ background: T.paperAlt, color: T.slate }}>
               Sign out
             </button>
@@ -1935,15 +2054,15 @@ export default function App() {
         <div className="flex-1 p-8 min-h-0">
           {module === "clients" && (
             <ClientsView clients={clients} selectedId={selectedClient} setSelectedId={setSelectedClient}
-              onboardings={onboardings} setOnboardings={setOnboardings} workflows={workflows}
+              onboardings={onboardings} updateOnboardingsForClient={updateOnboardingsForClient} workflows={workflows}
               pushNotification={pushNotification} goToWorkflows={() => setModule("workflows")} tabRequest={clientTabRequest} />
           )}
           {module === "systems" && <SystemsView clients={clients} selectedId={selectedClient} setSelectedId={setSelectedClient} />}
-          {module === "sales" && <SalesView leads={leads} setLeads={setLeads} convertLeadToClient={convertLeadToClient} />}
+          {module === "sales" && <SalesView leads={leads} convertLeadToClient={convertLeadToClient} />}
           {module === "billing" && <BillingOverview clients={clients} resellers={resellers} />}
-          {module === "workflows" && <WorkflowsView workflows={workflows} setWorkflows={setWorkflows} />}
-          {module === "resellers" && <ResellersView resellers={resellers} setResellers={setResellers} selectedId={selectedReseller} setSelectedId={setSelectedReseller} />}
-          {module === "tasks" && <TasksView tasks={tasks} setTasks={setTasks} clients={clients} onboardings={onboardings} currentUser={currentUser} goToClient={goToClient} resellers={resellers} goToReseller={goToReseller} />}
+          {module === "workflows" && <WorkflowsView workflows={workflows} />}
+          {module === "resellers" && <ResellersView resellers={resellers} selectedId={selectedReseller} setSelectedId={setSelectedReseller} />}
+          {module === "tasks" && <TasksView tasks={tasks} clients={clients} onboardings={onboardings} currentUser={currentUser} goToClient={goToClient} resellers={resellers} goToReseller={goToReseller} />}
         </div>
       </div>
     </div>

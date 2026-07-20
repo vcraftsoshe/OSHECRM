@@ -24,9 +24,17 @@ jobs:
           projectId: oshe-895ad
           channelId: live
 
-      - name: Deploy Firestore & Storage rules
+      - name: Deploy Firestore rules
         run: |
           echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}' > /tmp/gcp-key.json
-          npx firebase-tools deploy --only firestore:rules,storage:rules --project oshe-895ad
+          npx firebase-tools deploy --only firestore:rules --project oshe-895ad
         env:
           GOOGLE_APPLICATION_CREDENTIALS: /tmp/gcp-key.json
+
+      - name: Deploy Storage rules
+        run: |
+          echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}' > /tmp/gcp-key.json
+          npx firebase-tools deploy --only storage:rules --project oshe-895ad
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: /tmp/gcp-key.json
+        continue-on-error: true

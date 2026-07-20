@@ -53,7 +53,7 @@ export default function AuthGate({ children }) {
     return (
       <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: T.charcoal, fontFamily: "system-ui, sans-serif" }}>
         <form onSubmit={handleLogin} style={{ background: "#fff", padding: 32, borderRadius: 16, width: 320, display: "flex", flexDirection: "column", gap: 12 }}>
-          <img src="/logo-full.png" alt="OSHE" style={{ height: 56, width: "auto", marginBottom: 8 }} />
+          <img src="/logo-full.png" alt="OSHE" style={{ height: 56, width: "auto", maxWidth: "100%", objectFit: "contain", alignSelf: "flex-start", marginBottom: 8 }} />
           <input
             type="email"
             placeholder="Email"

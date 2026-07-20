@@ -5,8 +5,9 @@ import {
   ClipboardList, Layers, Circle, CheckCircle2, Image as ImageIcon,
   Repeat, Trash2, ListChecks, ListTodo, Mail, ArrowUpRight, Store
 } from "lucide-react";
-import { collection, doc, onSnapshot, updateDoc, setDoc, getDocs } from "firebase/firestore";
-import { db } from "./firebase";
+import { collection, doc, onSnapshot, updateDoc, setDoc, getDocs, getDoc, deleteDoc } from "firebase/firestore";
+import { signOut } from "firebase/auth";
+import { db, auth } from "./firebase";
 
 /* ---------- Design tokens (OSHE brand) ---------- */
 const T = {
@@ -200,14 +201,15 @@ const policySections = [
   { id: "electrical", title: "Electrical Safety", blurb: "Isolation and lock-out/tag-out procedures." },
 ];
 
+function today() { return new Date().toISOString().slice(0, 10); }
 function fmtDate(d) { return d ? new Date(d).toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric" }) : "—"; }
-function daysUntil(d) { return Math.ceil((new Date(d) - new Date("2026-07-20")) / 86400000); }
+function daysUntil(d) { return Math.ceil((new Date(d) - new Date(today())) / 86400000); }
 function addDays(dateStr, days) { const d = new Date(dateStr); d.setDate(d.getDate() + days); return d.toISOString().slice(0, 10); }
 function urgencyColor(dueDate) {
   const d = daysUntil(dueDate);
   return d < 0 ? T.coral : d <= 3 ? T.amber : T.slate;
 }
-function currentMonth() { return "2026-07"; }
+function currentMonth() { return today().slice(0, 7); }
 
 /* ---------- Shared bits ---------- */
 function NavItem({ icon: Icon, label, active, onClick }) {
@@ -243,7 +245,7 @@ function ClientOnboarding({ client, onboardings, setOnboardings, workflows, push
         const nowComplete = steps.every((s) => s.done);
         if (nowComplete) {
           pushNotification({ forPerson: "Vanessa", clientId: client.id, clientName: client.name, message: `${client.name} — ${inst.workflowName} complete, add to billing` });
-          return { ...inst, steps, completedDate: "2026-07-20" };
+          return { ...inst, steps, completedDate: today() };
         }
         return { ...inst, steps };
       });
@@ -255,8 +257,8 @@ function ClientOnboarding({ client, onboardings, setOnboardings, workflows, push
     const wf = workflows.find((w) => w.id === pickerWorkflowId);
     if (!wf) return;
     const newInst = {
-      id: "ob" + Date.now(), workflowId: wf.id, workflowName: wf.name, startedDate: "2026-07-20", completedDate: null,
-      steps: wf.steps.map((s) => ({ ...s, done: false, dueDate: addDays("2026-07-20", s.dueDays) })),
+      id: "ob" + Date.now(), workflowId: wf.id, workflowName: wf.name, startedDate: today(), completedDate: null,
+      steps: wf.steps.map((s) => ({ ...s, done: false, dueDate: addDays(today(), s.dueDays) })),
     };
     setOnboardings((prev) => ({ ...prev, [client.id]: [...(prev[client.id] || []), newInst] }));
     setShowStarter(false);
@@ -275,18 +277,13 @@ function ClientOnboarding({ client, onboardings, setOnboardings, workflows, push
 
       {showStarter && (
         <Card style={{ padding: 16 }}>
-          <div className="text-sm mb-3" style={{ color: T.slate }}>
-            Runs alongside anything already in progress — handy for something like a Pre-Qualification track running at the same time as onboarding.
-          </div>
           <div className="flex items-center gap-2">
             <select value={pickerWorkflowId} onChange={(e) => setPickerWorkflowId(e.target.value)}
               className="text-sm px-3 py-2 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
               {workflows.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
             </select>
             <button onClick={startOnboarding} className="text-sm font-semibold px-3 py-2 rounded-lg" style={{ background: T.tealDark, color: "#fff" }}>Start</button>
-          </div>
-          <div className="text-xs mt-3" style={{ color: T.slateLight }}>
-            Workflows themselves are set up on the <button onClick={goToWorkflows} className="font-semibold" style={{ color: T.tealDark }}>Workflows</button> page.
+            <button onClick={goToWorkflows} className="text-xs font-semibold px-3 py-2 rounded-lg" style={{ background: T.paperAlt, color: T.tealDark }}>Manage workflows</button>
           </div>
         </Card>
       )}
@@ -384,7 +381,26 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, setOnboa
   const [noteDraft, setNoteDraft] = useState({ text: "", tags: [] });
   const [newReminder, setNewReminder] = useState({ text: "", date: "", recurring: "none", assignee: TEAM[0] });
   const [showAddClient, setShowAddClient] = useState(false);
-  const [newClientName, setNewClientName] = useState("");
+  const [newClientForm, setNewClientForm] = useState({
+    name: "", legalName: "", plan: "", contractStart: "", contractRenewal: "",
+    billingContact: "", billingEmail: "", billingTerms: "", billingStatus: "Current",
+    billingType: "FlatFee", includedHours: "", ohsmsLastIssued: "",
+  });
+  const setNCF = (field, value) => setNewClientForm((f) => ({ ...f, [field]: value }));
+  const [showArchived, setShowArchived] = useState(false);
+  const [showArchivedHours, setShowArchivedHours] = useState(false);
+  const visibleClients = clients.filter((c) => (showArchived ? c.archived : !c.archived));
+
+  const archiveClient = (id) => updateDoc(doc(db, "clients", id), { archived: true });
+  const unarchiveClient = (id) => updateDoc(doc(db, "clients", id), { archived: false });
+  const deleteClientPermanently = (id) => {
+    if (!window.confirm("Permanently delete this client? This can't be undone.")) return;
+    deleteDoc(doc(db, "clients", id));
+    if (id === client.id) {
+      const next = clients.find((c) => c.id !== id);
+      if (next) setSelectedId(next.id);
+    }
+  };
 
   const updateClient = (fn) => {
     const updated = fn(client);
@@ -393,19 +409,28 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, setOnboa
   };
 
   const addClient = async () => {
-    if (!newClientName.trim()) return;
+    if (!newClientForm.name.trim()) return;
     const id = "c" + Date.now();
+    const lastIssued = newClientForm.ohsmsLastIssued || null;
     await setDoc(doc(db, "clients", id), {
-      name: newClientName, legalName: newClientName, logo: null,
-      contract: { start: "2026-07-20", renewal: "2027-07-20", plan: "Plan to confirm" },
-      billing: { contact: "", email: "", terms: "TBC", status: "Current" },
-      billingType: "FlatFee", billingSetupDone: true,
+      name: newClientForm.name, legalName: newClientForm.legalName || newClientForm.name, logo: null,
+      contract: {
+        start: newClientForm.contractStart || today(),
+        renewal: newClientForm.contractRenewal || addDays(today(), 365),
+        plan: newClientForm.plan || "Plan to confirm",
+      },
+      billing: {
+        contact: newClientForm.billingContact, email: newClientForm.billingEmail,
+        terms: newClientForm.billingTerms || "TBC", status: newClientForm.billingStatus,
+      },
+      billingType: newClientForm.billingType, billingSetupDone: true,
       contacts: [], notes: [], reminders: [], extras: [],
-      hours: { included: 0, log: [] }, users: { log: [] },
-      ohsmsLastIssued: null, ohsmsDue: addDays("2026-07-20", 365), intake: null,
+      hours: { included: Number(newClientForm.includedHours) || 0, log: [] }, users: { log: [] },
+      ohsmsLastIssued: lastIssued, ohsmsDue: lastIssued ? addDays(lastIssued, 365) : addDays(today(), 365),
+      intake: null,
     });
     setSelectedId(id);
-    setNewClientName("");
+    setNewClientForm({ name: "", legalName: "", plan: "", contractStart: "", contractRenewal: "", billingContact: "", billingEmail: "", billingTerms: "", billingStatus: "Current", billingType: "FlatFee", includedHours: "", ohsmsLastIssued: "" });
     setShowAddClient(false);
   };
 
@@ -419,7 +444,7 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, setOnboa
       const justDone = extras.find((e) => e.id === extraId && e.status === "Done");
       let hours = c.hours;
       if (justDone) {
-        hours = { ...c.hours, log: [...c.hours.log, { id: Date.now(), date: "2026-07-20", member: "—", hours: justDone.hours, description: `Extra: ${justDone.description}` }] };
+        hours = { ...c.hours, log: [...c.hours.log, { id: Date.now(), date: today(), member: "—", hours: justDone.hours, description: `Extra: ${justDone.description}`, archived: false }] };
       }
       return { ...c, extras, hours };
     });
@@ -427,12 +452,12 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, setOnboa
 
   const addExtra = () => {
     if (!newExtra.description.trim()) return;
-    updateClient((c) => ({ ...c, extras: [...c.extras, { id: Date.now(), date: "2026-07-20", description: newExtra.description, status: "Requested", hours: Number(newExtra.hours) || 0 }] }));
+    updateClient((c) => ({ ...c, extras: [...c.extras, { id: Date.now(), date: today(), description: newExtra.description, status: "Requested", hours: Number(newExtra.hours) || 0 }] }));
     setNewExtra({ description: "", hours: "" });
   };
   const addHour = () => {
     if (!newHour.description.trim() || !newHour.hours) return;
-    updateClient((c) => ({ ...c, hours: { ...c.hours, log: [...c.hours.log, { id: Date.now(), date: "2026-07-20", member: newHour.member, hours: Number(newHour.hours), description: newHour.description }] } }));
+    updateClient((c) => ({ ...c, hours: { ...c.hours, log: [...c.hours.log, { id: Date.now(), date: today(), member: newHour.member, hours: Number(newHour.hours), description: newHour.description }] } }));
     setNewHour({ member: TEAM[0], hours: "", description: "" });
   };
   const addUserCount = () => {
@@ -449,7 +474,7 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, setOnboa
   const toggleNoteTag = (person) => setNoteDraft((d) => ({ ...d, tags: d.tags.includes(person) ? d.tags.filter((p) => p !== person) : [...d.tags, person] }));
   const addNote = () => {
     if (!noteDraft.text.trim()) return;
-    updateClient((c) => ({ ...c, notes: [...c.notes, { id: Date.now(), author: "You", date: "2026-07-20", text: noteDraft.text, tags: noteDraft.tags }] }));
+    updateClient((c) => ({ ...c, notes: [...c.notes, { id: Date.now(), author: "You", date: today(), text: noteDraft.text, tags: noteDraft.tags }] }));
     noteDraft.tags.forEach((person) => pushNotification({
       forPerson: person, clientId: client.id, clientName: client.name,
       message: `Tagged on a note for ${client.name}: "${noteDraft.text.slice(0, 60)}${noteDraft.text.length > 60 ? "…" : ""}"`,
@@ -475,12 +500,12 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, setOnboa
           <input placeholder="Search clients" className="bg-transparent text-sm outline-none w-full" style={{ color: T.ink }} />
         </div>
         <div className="flex flex-col gap-2 overflow-y-auto">
-          {clients.map((c) => {
+          {visibleClients.map((c) => {
             const d = daysUntil(c.ohsmsDue);
             const dot = d < 0 ? T.coral : d <= 30 ? T.amber : T.tealDark;
             return (
               <button key={c.id} onClick={() => setSelectedId(c.id)} className="text-left p-3 rounded-xl transition-colors"
-                style={{ background: c.id === client.id ? T.paperAlt : T.card, border: `1px solid ${c.id === client.id ? T.tealDark : T.border}` }}>
+                style={{ background: c.id === client.id ? T.paperAlt : T.card, border: `1px solid ${c.id === client.id ? T.tealDark : T.border}`, opacity: c.archived ? 0.6 : 1 }}>
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-semibold" style={{ color: T.ink }}>{c.name}</span>
                   <span style={{ width: 8, height: 8, borderRadius: 999, background: dot }} />
@@ -489,28 +514,105 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, setOnboa
               </button>
             );
           })}
+          {visibleClients.length === 0 && <div className="text-xs text-center py-4" style={{ color: T.slateLight }}>{showArchived ? "No archived clients." : "No clients yet."}</div>}
         </div>
-        {showAddClient ? (
-          <div className="flex items-center gap-2 p-3 rounded-xl" style={{ background: T.card, border: `1px solid ${T.border}` }}>
-            <input placeholder="Client name" value={newClientName} onChange={(e) => setNewClientName(e.target.value)}
-              className="flex-1 text-sm px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
-            <button onClick={addClient} className="text-xs font-semibold px-3 py-1.5 rounded-lg shrink-0" style={{ background: T.tealDark, color: "#fff" }}>Save</button>
-          </div>
-        ) : (
+        {!showAddClient && (
           <button onClick={() => setShowAddClient(true)} className="flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold mt-1" style={{ background: T.charcoal, color: T.teal }}>
             <Plus size={15} /> Add client
           </button>
         )}
+        <button onClick={() => setShowArchived((v) => !v)} className="text-xs font-semibold text-center py-1" style={{ color: T.slate }}>
+          {showArchived ? "Show active clients" : `Show archived (${clients.filter((c) => c.archived).length})`}
+        </button>
       </div>
 
       <div className="flex-1 flex flex-col gap-4 min-w-0">
+        {showAddClient ? (
+          <Card style={{ padding: 24 }} className="overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <div className="text-lg font-bold" style={{ color: T.ink }}>Add client</div>
+              <button onClick={() => setShowAddClient(false)}><X size={18} color={T.slateLight} /></button>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: T.slate }}>Name *</div>
+                <input value={newClientForm.name} onChange={(e) => setNCF("name", e.target.value)} className="w-full text-sm px-2.5 py-2 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+              </div>
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: T.slate }}>Legal name</div>
+                <input value={newClientForm.legalName} onChange={(e) => setNCF("legalName", e.target.value)} className="w-full text-sm px-2.5 py-2 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+              </div>
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: T.slate }}>Plan</div>
+                <input value={newClientForm.plan} onChange={(e) => setNCF("plan", e.target.value)} placeholder="e.g. Full H&S Retainer" className="w-full text-sm px-2.5 py-2 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+              </div>
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: T.slate }}>Billing type</div>
+                <select value={newClientForm.billingType} onChange={(e) => setNCF("billingType", e.target.value)} className="w-full text-sm px-2.5 py-2 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
+                  <option value="FlatFee">Flat fee only</option>
+                  <option value="SubscriptionHours">Subscription + hours</option>
+                  <option value="Hourly">Hourly</option>
+                </select>
+              </div>
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: T.slate }}>Contract start</div>
+                <input type="date" value={newClientForm.contractStart} onChange={(e) => setNCF("contractStart", e.target.value)} className="w-full text-sm px-2.5 py-2 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+              </div>
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: T.slate }}>Contract renewal</div>
+                <input type="date" value={newClientForm.contractRenewal} onChange={(e) => setNCF("contractRenewal", e.target.value)} className="w-full text-sm px-2.5 py-2 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+              </div>
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: T.slate }}>Included hours / month</div>
+                <input type="number" value={newClientForm.includedHours} onChange={(e) => setNCF("includedHours", e.target.value)} className="w-full text-sm px-2.5 py-2 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+              </div>
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: T.slate }}>OHSMS last issued</div>
+                <input type="date" value={newClientForm.ohsmsLastIssued} onChange={(e) => setNCF("ohsmsLastIssued", e.target.value)} className="w-full text-sm px-2.5 py-2 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+                <div className="text-[11px] mt-1" style={{ color: T.slateLight }}>Renewal auto-sets to a year after this.</div>
+              </div>
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: T.slate }}>Billing contact</div>
+                <input value={newClientForm.billingContact} onChange={(e) => setNCF("billingContact", e.target.value)} className="w-full text-sm px-2.5 py-2 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+              </div>
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: T.slate }}>Billing email</div>
+                <input value={newClientForm.billingEmail} onChange={(e) => setNCF("billingEmail", e.target.value)} className="w-full text-sm px-2.5 py-2 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+              </div>
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: T.slate }}>Billing terms</div>
+                <input value={newClientForm.billingTerms} onChange={(e) => setNCF("billingTerms", e.target.value)} placeholder="e.g. Monthly, 20th" className="w-full text-sm px-2.5 py-2 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+              </div>
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: T.slate }}>Billing status</div>
+                <select value={newClientForm.billingStatus} onChange={(e) => setNCF("billingStatus", e.target.value)} className="w-full text-sm px-2.5 py-2 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
+                  <option value="Current">Current</option>
+                  <option value="Overdue">Overdue</option>
+                </select>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-6">
+              <button onClick={() => setShowAddClient(false)} className="text-sm font-semibold px-4 py-2 rounded-lg" style={{ background: T.paperAlt, color: T.slate }}>Cancel</button>
+              <button onClick={addClient} className="text-sm font-semibold px-4 py-2 rounded-lg" style={{ background: T.tealDark, color: "#fff" }}>Create client</button>
+            </div>
+          </Card>
+        ) : (
+          <>
         <Card style={{ padding: "20px 24px" }}>
           <div className="flex items-center justify-between">
             <div>
               <div className="text-lg font-bold" style={{ color: T.ink }}>{client.name}</div>
               <div className="text-sm" style={{ color: T.slate }}>{client.legalName}</div>
             </div>
-            <Pill color={urgency.color} bg={T.paperAlt}>OHSMS: {urgency.label}</Pill>
+            <div className="flex items-center gap-2">
+              <Pill color={urgency.color} bg={T.paperAlt}>OHSMS: {urgency.label}</Pill>
+              {client.archived ? (
+                <button onClick={() => unarchiveClient(client.id)} className="text-xs font-semibold px-2.5 py-1.5 rounded-lg" style={{ background: T.paperAlt, color: T.tealDark }}>Unarchive</button>
+              ) : (
+                <button onClick={() => archiveClient(client.id)} className="text-xs font-semibold px-2.5 py-1.5 rounded-lg" style={{ background: T.paperAlt, color: T.slate }}>Archive</button>
+              )}
+              <button onClick={() => deleteClientPermanently(client.id)} title="Delete permanently"><Trash2 size={15} color={T.slateLight} /></button>
+            </div>
           </div>
           <div className="flex gap-1 mt-5 border-b overflow-x-auto" style={{ borderColor: T.border }}>
             {[
@@ -545,12 +647,11 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, setOnboa
                     <span className="text-[11px]" style={{ color: T.slateLight }}>Last issued</span>
                     <input type="date" value={client.ohsmsLastIssued || ""} onChange={(e) => updateClient((c) => ({ ...c, ohsmsLastIssued: e.target.value, ohsmsDue: addDays(e.target.value, 365) }))}
                       className="text-xs px-1.5 py-1 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
-                    <button onClick={() => updateClient((c) => ({ ...c, ohsmsLastIssued: "2026-07-20", ohsmsDue: addDays("2026-07-20", 365) }))}
+                    <button onClick={() => updateClient((c) => ({ ...c, ohsmsLastIssued: today(), ohsmsDue: addDays(today(), 365) }))}
                       className="text-[11px] font-semibold px-2 py-1 rounded-lg" style={{ background: T.paperAlt, color: T.tealDark }}>
                       Mark issued today
                     </button>
                   </div>
-                  <div className="text-[11px] mt-2" style={{ color: T.slateLight }}>Renewal is always issue date + 1 year — change "last issued" and this updates on its own.</div>
                 </Card>
               </div>
               <Card style={{ padding: 20 }}>
@@ -597,9 +698,6 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, setOnboa
                       </div>
                     </div>
                   </div>
-                  <div className="text-[11px] mt-3 pt-3" style={{ color: T.slateLight, borderTop: `1px solid ${T.border}` }}>
-                    This record, the client entry, and the pre-filled hours were generated automatically when the client submitted this form.
-                  </div>
                 </Card>
               )}
             </div>
@@ -637,9 +735,13 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, setOnboa
               <div className="grid grid-cols-3 gap-4">
                 <Card style={{ padding: 16 }}>
                   <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: T.slate }}>Hours this month</div>
-                  <div className="text-xl font-bold mt-1" style={{ color: T.ink }}>
-                    {client.hours.log.reduce((s, h) => s + h.hours, 0)}
-                    {client.hours.included > 0 && <span className="text-sm font-normal" style={{ color: T.slate }}> / {client.hours.included} incl.</span>}
+                  <div className="text-xl font-bold mt-1 flex items-center gap-1" style={{ color: T.ink }}>
+                    {client.hours.log.filter((h) => h.date.slice(0, 7) === currentMonth()).reduce((s, h) => s + h.hours, 0)}
+                    <span className="text-sm font-normal flex items-center gap-1" style={{ color: T.slate }}>
+                      / <input type="number" value={client.hours.included} onChange={(e) => updateClient((c) => ({ ...c, hours: { ...c.hours, included: Number(e.target.value) || 0 } }))}
+                        className="w-14 text-sm font-normal outline-none rounded px-1" style={{ color: T.slate, border: `1px solid transparent` }}
+                        onFocus={(ev) => (ev.target.style.border = `1px solid ${T.border}`)} onBlur={(ev) => (ev.target.style.border = "1px solid transparent")} /> incl.
+                    </span>
                   </div>
                 </Card>
                 <Card style={{ padding: 16 }}>
@@ -655,13 +757,13 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, setOnboa
               <Card style={{ padding: 16 }}>
                 <div className="text-sm font-semibold mb-3" style={{ color: T.ink }}>Monthly hours</div>
                 <div className="flex flex-col gap-2 mb-3">
-                  {client.hours.log.map((h) => (
+                  {client.hours.log.filter((h) => h.date.slice(0, 7) === currentMonth()).map((h) => (
                     <div key={h.id} className="flex items-center justify-between text-sm py-1.5" style={{ borderBottom: `1px solid ${T.border}` }}>
                       <div><span className="font-medium" style={{ color: T.ink }}>{h.member}</span><span className="ml-2" style={{ color: T.slate }}>{h.description}</span></div>
                       <div className="flex items-center gap-3 shrink-0"><span style={{ color: T.slate }}>{fmtDate(h.date)}</span><span className="font-bold" style={{ color: T.tealDark }}>{h.hours}h</span></div>
                     </div>
                   ))}
-                  {client.hours.log.length === 0 && <div className="text-xs" style={{ color: T.slateLight }}>No hours logged yet.</div>}
+                  {client.hours.log.filter((h) => h.date.slice(0, 7) === currentMonth()).length === 0 && <div className="text-xs" style={{ color: T.slateLight }}>No hours logged yet this month.</div>}
                 </div>
                 <div className="flex items-center gap-2">
                   <select value={newHour.member} onChange={(e) => setNewHour({ ...newHour, member: e.target.value })}
@@ -674,6 +776,23 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, setOnboa
                     className="w-16 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
                   <button onClick={addHour} className="text-xs font-semibold px-3 py-1.5 rounded-lg shrink-0" style={{ background: T.tealDark, color: "#fff" }}>Log</button>
                 </div>
+                {client.hours.log.some((h) => h.date.slice(0, 7) !== currentMonth()) && (
+                  <div className="mt-3 pt-3" style={{ borderTop: `1px solid ${T.border}` }}>
+                    <button onClick={() => setShowArchivedHours((v) => !v)} className="text-xs font-semibold" style={{ color: T.slate }}>
+                      {showArchivedHours ? "Hide" : "Show"} previous months ({client.hours.log.filter((h) => h.date.slice(0, 7) !== currentMonth()).length})
+                    </button>
+                    {showArchivedHours && (
+                      <div className="flex flex-col gap-2 mt-2">
+                        {client.hours.log.filter((h) => h.date.slice(0, 7) !== currentMonth()).map((h) => (
+                          <div key={h.id} className="flex items-center justify-between text-sm py-1.5" style={{ opacity: 0.6, borderBottom: `1px solid ${T.border}` }}>
+                            <div><span className="font-medium" style={{ color: T.ink }}>{h.member}</span><span className="ml-2" style={{ color: T.slate }}>{h.description}</span></div>
+                            <div className="flex items-center gap-3 shrink-0"><span style={{ color: T.slate }}>{fmtDate(h.date)}</span><span className="font-bold" style={{ color: T.slate }}>{h.hours}h</span></div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </Card>
 
               <Card style={{ padding: 16 }}>
@@ -713,10 +832,7 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, setOnboa
                     className="w-16 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
                   <button onClick={addExtra} className="text-xs font-semibold px-3 py-1.5 rounded-lg shrink-0" style={{ background: T.tealDark, color: "#fff" }}>Add</button>
                 </div>
-                <div className="text-[11px] mt-2" style={{ color: T.slateLight }}>Click a status pill to move it along. Marking one "Done" logs its hours straight into the monthly hours above.</div>
               </Card>
-
-              <div className="text-xs text-center" style={{ color: T.slateLight }}>No dollar amounts here on purpose — this is the raw hours, users and extras Vanessa pulls into Xero each month.</div>
             </div>
           )}
 
@@ -797,6 +913,8 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, setOnboa
             </div>
           )}
         </div>
+        </>
+        )}
       </div>
     </div>
   );
@@ -836,7 +954,7 @@ function SystemsView({ clients, selectedId, setSelectedId }) {
             {logo ? <ImageIcon size={20} color={T.tealDark} /> : <Upload size={18} />}
             {logo ? "logo uploaded" : "Upload logo"}
           </button>
-          <div className="text-[11px] mt-2" style={{ color: T.slateLight }}>Drops into cover page + header of every generated document.</div>
+
         </Card>
         <Card style={{ padding: 16 }}>
           <div className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: T.slate }}>Redo reminder</div>
@@ -868,7 +986,7 @@ function SystemsView({ clients, selectedId, setSelectedId }) {
             </div>
             <div className="text-xs tracking-widest uppercase" style={{ color: T.teal }}>{builder === "ohsms" ? "Health & Safety Management System" : "Policies & Procedures"}</div>
             <div className="text-2xl font-bold mt-2">{client.name}</div>
-            <div className="text-sm mt-1" style={{ color: "#9FB4B3" }}>Prepared by OSHE Limited &middot; {fmtDate("2026-07-20")}</div>
+            <div className="text-sm mt-1" style={{ color: "#9FB4B3" }}>Prepared by OSHE Limited &middot; {fmtDate(today())}</div>
           </div>
           <div className="p-6 flex flex-col gap-4">
             {included.length === 0 && <div className="text-sm text-center py-10" style={{ color: T.slateLight }}>No sections selected — tick items on the left to build the manual.</div>}
@@ -914,7 +1032,7 @@ function SalesView({ leads, setLeads, convertLeadToClient }) {
   const addNote = (leadId) => {
     const text = noteDrafts[leadId];
     if (!text || !text.trim()) return;
-    setLeads((prev) => prev.map((l) => (l.id === leadId ? { ...l, notes: [...l.notes, { id: Date.now(), text, date: "2026-07-20" }] } : l)));
+    setLeads((prev) => prev.map((l) => (l.id === leadId ? { ...l, notes: [...l.notes, { id: Date.now(), text, date: today() }] } : l)));
     setNoteDrafts({ ...noteDrafts, [leadId]: "" });
   };
 
@@ -1015,15 +1133,28 @@ function ResellersView({ resellers, setResellers, selectedId, setSelectedId }) {
   const [newResellerName, setNewResellerName] = useState("");
   const [newClient, setNewClient] = useState({ name: "", users: "" });
   const [newTask, setNewTask] = useState({ text: "", assignee: TEAM[0] });
+  const [showArchived, setShowArchived] = useState(false);
+  const visibleResellers = resellers.filter((r) => (showArchived ? r.archived : !r.archived));
 
   const updateReseller = (fn) => setResellers((prev) => prev.map((r) => (r.id === reseller.id ? fn(r) : r)));
   const latestUsers = (c) => c.users.log[c.users.log.length - 1]?.count ?? 0;
   const totalUsers = reseller.clients.reduce((s, c) => s + latestUsers(c), 0);
 
+  const archiveReseller = (id) => setResellers((prev) => prev.map((r) => (r.id === id ? { ...r, archived: true } : r)));
+  const unarchiveReseller = (id) => setResellers((prev) => prev.map((r) => (r.id === id ? { ...r, archived: false } : r)));
+  const deleteResellerPermanently = (id) => {
+    if (!window.confirm("Permanently delete this reseller? This can't be undone.")) return;
+    setResellers((prev) => {
+      const next = prev.filter((r) => r.id !== id);
+      if (id === reseller.id && next.length > 0) setSelectedId(next[0].id);
+      return next;
+    });
+  };
+
   const addReseller = () => {
     if (!newResellerName.trim()) return;
     const id = "res" + Date.now();
-    setResellers((prev) => [...prev, { id, name: newResellerName, contactEmail: "", contactPhone: "", clients: [], tasks: [] }]);
+    setResellers((prev) => [...prev, { id, name: newResellerName, contactEmail: "", contactPhone: "", clients: [], tasks: [], archived: false }]);
     setSelectedId(id);
     setNewResellerName("");
     setShowAddReseller(false);
@@ -1045,7 +1176,7 @@ function ResellersView({ resellers, setResellers, selectedId, setSelectedId }) {
 
   const addTask = () => {
     if (!newTask.text.trim()) return;
-    updateReseller((r) => ({ ...r, tasks: [...r.tasks, { id: Date.now(), text: newTask.text, assignee: newTask.assignee, done: false, date: "2026-07-20" }] }));
+    updateReseller((r) => ({ ...r, tasks: [...r.tasks, { id: Date.now(), text: newTask.text, assignee: newTask.assignee, done: false, date: today() }] }));
     setNewTask({ text: "", assignee: TEAM[0] });
   };
   const toggleTask = (taskId) => updateReseller((r) => ({ ...r, tasks: r.tasks.map((t) => (t.id === taskId ? { ...t, done: !t.done } : t)) }));
@@ -1055,17 +1186,18 @@ function ResellersView({ resellers, setResellers, selectedId, setSelectedId }) {
     <div className="flex h-full gap-6">
       <div className="w-72 shrink-0 flex flex-col gap-3">
         <div className="flex flex-col gap-2 overflow-y-auto">
-          {resellers.map((r) => {
+          {visibleResellers.map((r) => {
             const activeCount = r.clients.filter((c) => c.users.log.some((u) => u.month === currentMonth())).length;
             const total = r.clients.reduce((s, c) => s + latestUsers(c), 0);
             return (
               <button key={r.id} onClick={() => setSelectedId(r.id)} className="text-left p-3 rounded-xl transition-colors"
-                style={{ background: r.id === reseller.id ? T.paperAlt : T.card, border: `1px solid ${r.id === reseller.id ? T.tealDark : T.border}` }}>
+                style={{ background: r.id === reseller.id ? T.paperAlt : T.card, border: `1px solid ${r.id === reseller.id ? T.tealDark : T.border}`, opacity: r.archived ? 0.6 : 1 }}>
                 <div className="text-sm font-semibold" style={{ color: T.ink }}>{r.name}</div>
                 <div className="text-xs mt-1" style={{ color: T.slate }}>{activeCount} client{activeCount !== 1 ? "s" : ""} this month &middot; {total} users</div>
               </button>
             );
           })}
+          {visibleResellers.length === 0 && <div className="text-xs text-center py-4" style={{ color: T.slateLight }}>{showArchived ? "No archived resellers." : "No resellers yet."}</div>}
         </div>
         {showAddReseller ? (
           <Card style={{ padding: 12 }} className="flex items-center gap-2">
@@ -1078,13 +1210,24 @@ function ResellersView({ resellers, setResellers, selectedId, setSelectedId }) {
             <Plus size={15} /> Add reseller
           </button>
         )}
+        <button onClick={() => setShowArchived((v) => !v)} className="text-xs font-semibold text-center py-1" style={{ color: T.slate }}>
+          {showArchived ? "Show active resellers" : `Show archived (${resellers.filter((r) => r.archived).length})`}
+        </button>
       </div>
 
       <div className="flex-1 flex flex-col gap-4 min-w-0 overflow-y-auto">
         <Card style={{ padding: "20px 24px" }}>
           <div className="flex items-center justify-between">
             <div className="text-lg font-bold" style={{ color: T.ink }}>{reseller.name}</div>
-            <Pill color={T.tealDark} bg={T.paperAlt}>{totalUsers} users this month</Pill>
+            <div className="flex items-center gap-2">
+              <Pill color={T.tealDark} bg={T.paperAlt}>{totalUsers} users this month</Pill>
+              {reseller.archived ? (
+                <button onClick={() => unarchiveReseller(reseller.id)} className="text-xs font-semibold px-2.5 py-1.5 rounded-lg" style={{ background: T.paperAlt, color: T.tealDark }}>Unarchive</button>
+              ) : (
+                <button onClick={() => archiveReseller(reseller.id)} className="text-xs font-semibold px-2.5 py-1.5 rounded-lg" style={{ background: T.paperAlt, color: T.slate }}>Archive</button>
+              )}
+              <button onClick={() => deleteResellerPermanently(reseller.id)} title="Delete permanently"><Trash2 size={15} color={T.slateLight} /></button>
+            </div>
           </div>
           <div className="grid grid-cols-2 gap-4 mt-4">
             <div>
@@ -1125,7 +1268,7 @@ function ResellersView({ resellers, setResellers, selectedId, setSelectedId }) {
               className="w-20 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
             <button onClick={addResellerClient} className="text-xs font-semibold px-3 py-1.5 rounded-lg shrink-0" style={{ background: T.tealDark, color: "#fff" }}>Add</button>
           </div>
-          <div className="text-[11px] mt-2" style={{ color: T.slateLight }}>Type a new user count and hit Enter to log it for this month — that's what feeds the Billing rollup.</div>
+
         </Card>
 
         <Card style={{ padding: 16 }}>
@@ -1172,7 +1315,7 @@ function BillingOverview({ clients, resellers }) {
 
   const needsAttention = setUpClients.filter((c) => (c.billingType || "FlatFee") !== "FlatFee" || hasHoursThisMonth(c)).map((c) => ({
     id: c.id, name: c.name, type: c.billingType || "FlatFee", adHoc: (c.billingType || "FlatFee") === "FlatFee",
-    logged: c.hours.log.reduce((s, h) => s + h.hours, 0),
+    logged: c.hours.log.filter((h) => h.date.slice(0, 7) === currentMonth()).reduce((s, h) => s + h.hours, 0),
     included: c.hours.included,
     users: c.users.log[c.users.log.length - 1]?.count ?? 0,
     status: c.billing.status,
@@ -1218,7 +1361,7 @@ function BillingOverview({ clients, resellers }) {
       )}
 
       <div className="grid grid-cols-3 gap-4">
-        <Card style={{ padding: 16 }}><div className="text-xs font-semibold uppercase tracking-wide" style={{ color: T.slate }}>Hours logged — July 2026</div><div className="text-xl font-bold mt-1" style={{ color: T.ink }}>{totalHours}</div></Card>
+        <Card style={{ padding: 16 }}><div className="text-xs font-semibold uppercase tracking-wide" style={{ color: T.slate }}>Hours logged this month</div><div className="text-xl font-bold mt-1" style={{ color: T.ink }}>{totalHours}</div></Card>
         <Card style={{ padding: 16 }}><div className="text-xs font-semibold uppercase tracking-wide" style={{ color: T.slate }}>Total direct app users</div><div className="text-xl font-bold mt-1" style={{ color: T.ink }}>{totalUsers}</div></Card>
         <Card style={{ padding: 16 }}><div className="text-xs font-semibold uppercase tracking-wide" style={{ color: T.slate }}>Clients with hours to review</div><div className="text-xl font-bold mt-1" style={{ color: T.ink }}>{needsAttention.length}</div></Card>
       </div>
@@ -1246,7 +1389,7 @@ function BillingOverview({ clients, resellers }) {
       </Card>
 
       <button onClick={() => setShowFlatFee((v) => !v)} className="flex items-center gap-1.5 text-xs font-semibold mt-2" style={{ color: T.slate }}>
-        <ListChecks size={13} /> {showFlatFee ? "Hide" : "Show"} flat-fee clients ({flatFeeRows.length}) — nothing to review, here if you want them
+        <ListChecks size={13} /> {showFlatFee ? "Hide" : "Show"} flat-fee clients ({flatFeeRows.length})
       </button>
       {showFlatFee && (
         <Card style={{ padding: 0 }}>
@@ -1265,7 +1408,7 @@ function BillingOverview({ clients, resellers }) {
           {flatFeeRows.length === 0 && <div className="text-xs px-4 py-3" style={{ color: T.slateLight }}>No flat-fee clients right now.</div>}
         </Card>
       )}
-      <div className="text-xs text-center" style={{ color: T.slateLight }}>Flat-fee clients stay out of the way here since there's nothing to review month to month — expand the list above if you ever need to check one.</div>
+
 
       <div className="text-xs font-semibold uppercase tracking-wide mt-2" style={{ color: T.slate }}>Resellers — billed per user</div>
       <div className="grid grid-cols-3 gap-4">
@@ -1286,14 +1429,14 @@ function BillingOverview({ clients, resellers }) {
         ))}
         {resellerRows.length === 0 && <div className="text-xs px-4 py-3" style={{ color: T.slateLight }}>No resellers yet.</div>}
       </Card>
-      <div className="text-xs text-center" style={{ color: T.slateLight }}>Resellers pay per user across their own clients, not per hour — this total is what goes on their invoice.</div>
+
     </div>
   );
 }
 
 /* ---------- My Tasks (per person) ---------- */
 function TasksView({ tasks, setTasks, clients, onboardings, currentUser, goToClient, resellers, goToReseller }) {
-  const [person, setPerson] = useState(currentUser);
+  const [person, setPerson] = useState(currentUser || TEAM[0]);
   const [draft, setDraft] = useState({ title: "", priority: "Medium", clientId: "", dueDate: "" });
 
   const resellerTasks = useMemo(() => {
@@ -1330,7 +1473,10 @@ function TasksView({ tasks, setTasks, clients, onboardings, currentUser, goToCli
     return out;
   }, [clients, person]);
 
-  const myTasks = tasks.filter((t) => t.assignee === person).sort((a, b) => (a.done === b.done ? 0 : a.done ? 1 : -1));
+  const myTasksAll = tasks.filter((t) => t.assignee === person);
+  const activeTasks = myTasksAll.filter((t) => !t.done);
+  const completedTasks = myTasksAll.filter((t) => t.done);
+  const [showCompletedTasks, setShowCompletedTasks] = useState(false);
 
   const addTask = () => {
     if (!draft.title.trim()) return;
@@ -1339,6 +1485,7 @@ function TasksView({ tasks, setTasks, clients, onboardings, currentUser, goToCli
     setDraft({ title: "", priority: "Medium", clientId: "", dueDate: "" });
   };
   const toggleDone = (id) => setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, done: !t.done } : t)));
+  const deleteTaskPermanently = (id) => setTasks((prev) => prev.filter((t) => t.id !== id));
   const setPriority = (id, priority) => setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, priority } : t)));
 
   return (
@@ -1409,17 +1556,17 @@ function TasksView({ tasks, setTasks, clients, onboardings, currentUser, goToCli
 
       <div className="flex flex-col gap-2">
         <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: T.slate }}>Tasks</div>
-        {myTasks.map((t) => {
+        {activeTasks.map((t) => {
           const meta = priorityMeta[t.priority];
           const clickable = Boolean(t.clientId);
           return (
             <Card key={t.id} onClick={() => clickable && goToClient(t.clientId, "overview")}
-              style={{ padding: 14, opacity: t.done ? 0.55 : 1, cursor: clickable ? "pointer" : "default" }}
+              style={{ padding: 14, cursor: clickable ? "pointer" : "default" }}
               className={"flex items-center justify-between" + (clickable ? " hover:opacity-80" : "")}>
               <div className="flex items-center gap-3">
-                <button onClick={(e) => { e.stopPropagation(); toggleDone(t.id); }}>{t.done ? <CheckCircle2 size={18} color={T.tealDark} /> : <Circle size={18} color={T.slateLight} />}</button>
+                <button onClick={(e) => { e.stopPropagation(); toggleDone(t.id); }}><Circle size={18} color={T.slateLight} /></button>
                 <div>
-                  <div className="text-sm font-medium" style={{ color: T.ink, textDecoration: t.done ? "line-through" : "none" }}>{t.title}</div>
+                  <div className="text-sm font-medium" style={{ color: T.ink }}>{t.title}</div>
                   {(t.clientName || t.dueDate) && (
                     <div className="text-xs mt-0.5 flex items-center gap-2" style={{ color: T.slate }}>
                       {t.clientName && <span>{t.clientName}</span>}
@@ -1435,8 +1582,25 @@ function TasksView({ tasks, setTasks, clients, onboardings, currentUser, goToCli
             </Card>
           );
         })}
-        {myTasks.length === 0 && <div className="text-xs" style={{ color: T.slateLight }}>No tasks assigned.</div>}
+        {activeTasks.length === 0 && <div className="text-xs" style={{ color: T.slateLight }}>No tasks assigned.</div>}
       </div>
+
+      {completedTasks.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <button onClick={() => setShowCompletedTasks((v) => !v)} className="flex items-center gap-1.5 text-xs font-semibold" style={{ color: T.slate }}>
+            <ListChecks size={13} /> {showCompletedTasks ? "Hide" : "Show"} completed ({completedTasks.length})
+          </button>
+          {showCompletedTasks && completedTasks.map((t) => (
+            <Card key={t.id} style={{ padding: 14, opacity: 0.6 }} className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <button onClick={() => toggleDone(t.id)}><CheckCircle2 size={18} color={T.tealDark} /></button>
+                <div className="text-sm font-medium" style={{ color: T.ink, textDecoration: "line-through" }}>{t.title}</div>
+              </div>
+              <button onClick={() => deleteTaskPermanently(t.id)}><Trash2 size={14} color={T.slateLight} /></button>
+            </Card>
+          ))}
+        </div>
+      )}
 
       <Card style={{ padding: 14 }} className="flex items-center gap-2 flex-wrap">
         <input placeholder={`Add a task for ${person}`} value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })}
@@ -1499,8 +1663,7 @@ function WorkflowsView({ workflows, setWorkflows }) {
 
   return (
     <div className="flex flex-col gap-5">
-      <div className="flex items-center justify-between">
-        <div className="text-sm" style={{ color: T.slate }}>Edit these any time — clients already onboarding keep whatever steps they started with.</div>
+      <div className="flex items-center justify-end">
         <button onClick={addWorkflow} className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold shrink-0" style={{ background: T.charcoal, color: T.teal }}>
           <Plus size={15} /> New workflow
         </button>
@@ -1550,7 +1713,20 @@ function WorkflowsView({ workflows, setWorkflows }) {
 
 export default function App() {
   const [module, setModule] = useState("clients");
-  const [currentUser, setCurrentUser] = useState(TEAM[0]);
+  const [currentUser, setCurrentUser] = useState(null);
+  useEffect(() => {
+    (async () => {
+      const uid = auth.currentUser?.uid;
+      if (!uid) return;
+      try {
+        const teamDoc = await getDoc(doc(db, "team", uid));
+        setCurrentUser(teamDoc.exists() ? teamDoc.data().name : auth.currentUser.email);
+      } catch (err) {
+        console.error("Could not look up team member:", err);
+        setCurrentUser(auth.currentUser.email);
+      }
+    })();
+  }, []);
   // Clients now live in Firestore. On first run (empty collection) we seed the
   // sample data you've been testing with, using the same ids ("bmc", "radius", etc.)
   // so everything else that references those ids keeps working.
@@ -1644,7 +1820,7 @@ export default function App() {
         steps: [
           { id: "request", title: "Request pre-qual documentation from client", owner: "Vanessa", dueDate: "2026-07-12", done: true },
           { id: "review", title: "Review submitted documentation", owner: "Judith", dueDate: "2026-07-17", done: false },
-          { id: "gapcheck", title: "Identify and flag any gaps", owner: "Sophie", dueDate: "2026-07-20", done: false },
+          { id: "gapcheck", title: "Identify and flag any gaps", owner: "Sophie", dueDate: today(), done: false },
           { id: "signoff", title: "Sign off pre-qualification", owner: "Jo", dueDate: "2026-07-24", done: false },
         ],
       },
@@ -1662,13 +1838,13 @@ export default function App() {
   const convertLeadToClient = async (lead) => {
     const id = "c" + Date.now();
     const intake = {
-      submittedDate: "2026-07-20", contactEmail: lead.formEmail, contactName: lead.contact,
+      submittedDate: today(), contactEmail: lead.formEmail, contactName: lead.contact,
       requestedSections: ["policy", "hazard", "induction", "ppe"], supportHours: 6,
       existingWork: "No formal OHSMS in place yet — currently relying on a basic site safety folder.",
     };
     const newClient = {
       name: lead.company, legalName: lead.company, logo: null,
-      contract: { start: "2026-07-20", renewal: "2027-07-20", value: lead.value + " / yr", plan: "New client — plan to confirm" },
+      contract: { start: today(), renewal: "2027-07-20", value: lead.value + " / yr", plan: "New client — plan to confirm" },
       billing: { contact: lead.contact, email: lead.formEmail, terms: "TBC", status: "Current" },
       billingType: "FlatFee", billingSetupDone: false,
       notes: [], reminders: [], contacts: [], ohsmsLastIssued: null, ohsmsDue: "2026-10-20",
@@ -1679,8 +1855,8 @@ export default function App() {
     setOnboardings((prev) => ({
       ...prev,
       [id]: [{
-        id: "ob" + Date.now(), workflowId: wf.id, workflowName: wf.name, startedDate: "2026-07-20", completedDate: null,
-        steps: wf.steps.map((s) => ({ ...s, done: false, dueDate: addDays("2026-07-20", s.dueDays) })),
+        id: "ob" + Date.now(), workflowId: wf.id, workflowName: wf.name, startedDate: today(), completedDate: null,
+        steps: wf.steps.map((s) => ({ ...s, done: false, dueDate: addDays(today(), s.dueDays) })),
       }],
     }));
     setLeads((prev) => prev.filter((l) => l.id !== lead.id));
@@ -1722,8 +1898,7 @@ export default function App() {
     <div className="flex h-screen w-full" style={{ background: T.paper, fontFamily: "'Inter', system-ui, sans-serif" }}>
       <div className="w-56 shrink-0 flex flex-col p-4 gap-1" style={{ background: T.charcoal }}>
         <div className="px-3 py-3 mb-3">
-          <div className="text-lg font-bold" style={{ color: "#fff" }}>OSHE</div>
-          <div className="text-[11px]" style={{ color: T.teal }}>Client Operations</div>
+          <img src="/logo.png" alt="OSHE" style={{ height: 36, width: "auto" }} />
         </div>
         <NavItem icon={Users} label="Clients" active={module === "clients"} onClick={() => setModule("clients")} />
         <NavItem icon={Layers} label="Systems" active={module === "systems"} onClick={() => setModule("systems")} />
@@ -1734,13 +1909,12 @@ export default function App() {
         <NavItem icon={ListTodo} label="My Tasks" active={module === "tasks"} onClick={() => setModule("tasks")} />
         <div className="flex-1" />
         <div className="px-3 pb-2">
-          <div className="text-[10px] uppercase tracking-wide mb-1.5" style={{ color: "#5C7274" }}>Acting as</div>
-          <select value={currentUser} onChange={(e) => setCurrentUser(e.target.value)}
-            className="w-full text-xs px-2 py-1.5 rounded-lg outline-none" style={{ background: T.charcoalSoft, color: "#fff", border: "1px solid #3A4E50" }}>
-            {TEAM.map((m) => <option key={m} value={m}>{m}</option>)}
-          </select>
+          <div className="text-[10px] uppercase tracking-wide mb-1.5" style={{ color: "#5C7274" }}>Logged in as</div>
+          <div className="text-xs px-2 py-1.5 rounded-lg" style={{ background: T.charcoalSoft, color: "#fff" }}>
+            {currentUser || "…"}
+          </div>
         </div>
-        <div className="text-[11px] px-3 pb-1" style={{ color: "#5C7274" }}>Rough UI &middot; mock data only</div>
+        <div className="text-[11px] px-3 pb-1" style={{ color: "#5C7274" }}>Clients is live &middot; other tabs still mock data</div>
       </div>
 
       <div className="flex-1 flex flex-col min-w-0">
@@ -1749,17 +1923,13 @@ export default function App() {
             <div className="text-xl font-bold" style={{ color: T.ink }}>
               {{ clients: "Clients", systems: "Systems", sales: "Sales", billing: "Billing", workflows: "Workflows", resellers: "Resellers", tasks: "My Tasks" }[module]}
             </div>
-            <div className="text-sm" style={{ color: T.slate }}>
-              {module === "clients" && "Contracts, billing, notes, workflows and reminders per client"}
-              {module === "systems" && "Build OHSMS manuals and policy packs per client"}
-              {module === "sales" && "Track leads through your pipeline"}
-              {module === "billing" && "Every client's hours and users, rolled up for the monthly Xero run"}
-              {module === "workflows" && "Set up and edit onboarding workflows, ready to assign to any client"}
-              {module === "resellers" && "Consultants reselling the app — their clients, user counts, and what's outstanding"}
-              {module === "tasks" && "What's assigned to each of you, with priorities"}
-            </div>
           </div>
-          <NotificationsBell notifications={notifications} setNotifications={setNotifications} reminderCount={upcomingReminders.length} currentUser={currentUser} />
+          <div className="flex items-center gap-3">
+            <NotificationsBell notifications={notifications} setNotifications={setNotifications} reminderCount={upcomingReminders.length} currentUser={currentUser} />
+            <button onClick={() => signOut(auth)} className="text-xs font-semibold px-3 py-2 rounded-lg" style={{ background: T.paperAlt, color: T.slate }}>
+              Sign out
+            </button>
+          </div>
         </div>
 
         <div className="flex-1 p-8 min-h-0">
@@ -1779,4 +1949,3 @@ export default function App() {
     </div>
   );
 }
-

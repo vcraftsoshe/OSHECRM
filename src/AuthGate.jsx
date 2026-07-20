@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
+import { onAuthStateChanged, signInWithEmailAndPassword } from "firebase/auth";
 import { auth } from "./firebase";
 
 const T = {
@@ -53,8 +53,7 @@ export default function AuthGate({ children }) {
     return (
       <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: T.charcoal, fontFamily: "system-ui, sans-serif" }}>
         <form onSubmit={handleLogin} style={{ background: "#fff", padding: 32, borderRadius: 16, width: 320, display: "flex", flexDirection: "column", gap: 12 }}>
-          <div style={{ fontSize: 20, fontWeight: 700, color: T.ink }}>OSHE</div>
-          <div style={{ fontSize: 13, color: T.slate, marginBottom: 8 }}>Client Operations — sign in</div>
+          <img src="/logo-full.png" alt="OSHE" style={{ height: 56, width: "auto", marginBottom: 8 }} />
           <input
             type="email"
             placeholder="Email"
@@ -86,17 +85,5 @@ export default function AuthGate({ children }) {
     );
   }
 
-  return (
-    <div>
-      <div style={{ position: "fixed", top: 12, right: 12, zIndex: 50 }}>
-        <button
-          onClick={() => signOut(auth)}
-          style={{ fontSize: 12, background: T.paperAlt, color: T.tealDark, border: "none", padding: "6px 12px", borderRadius: 8, cursor: "pointer", fontWeight: 600 }}
-        >
-          Sign out ({user.email})
-        </button>
-      </div>
-      {children}
-    </div>
-  );
+  return <>{children}</>;
 }

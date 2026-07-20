@@ -5,6 +5,8 @@ import {
   ClipboardList, Layers, Circle, CheckCircle2, Image as ImageIcon,
   Repeat, Trash2, ListChecks, ListTodo, Mail, ArrowUpRight, Store
 } from "lucide-react";
+import { collection, doc, onSnapshot, updateDoc, setDoc, getDocs } from "firebase/firestore";
+import { db } from "./firebase";
 
 /* ---------- Design tokens (OSHE brand) ---------- */
 const T = {
@@ -368,7 +370,7 @@ function ClientOnboarding({ client, onboardings, setOnboardings, workflows, push
 }
 
 /* ---------- Clients module ---------- */
-function ClientsView({ clients, setClients, selectedId, setSelectedId, onboardings, setOnboardings, workflows, pushNotification, goToWorkflows, tabRequest }) {
+function ClientsView({ clients, selectedId, setSelectedId, onboardings, setOnboardings, workflows, pushNotification, goToWorkflows, tabRequest }) {
   const client = clients.find((c) => c.id === selectedId) || clients[0];
   const [tab, setTab] = useState("overview");
   useEffect(() => {
@@ -381,8 +383,31 @@ function ClientsView({ clients, setClients, selectedId, setSelectedId, onboardin
   const [newContact, setNewContact] = useState({ name: "", role: "", email: "", phone: "" });
   const [noteDraft, setNoteDraft] = useState({ text: "", tags: [] });
   const [newReminder, setNewReminder] = useState({ text: "", date: "", recurring: "none", assignee: TEAM[0] });
+  const [showAddClient, setShowAddClient] = useState(false);
+  const [newClientName, setNewClientName] = useState("");
 
-  const updateClient = (fn) => setClients((prev) => prev.map((c) => (c.id === client.id ? fn(c) : c)));
+  const updateClient = (fn) => {
+    const updated = fn(client);
+    const { id, ...fields } = updated;
+    updateDoc(doc(db, "clients", client.id), fields);
+  };
+
+  const addClient = async () => {
+    if (!newClientName.trim()) return;
+    const id = "c" + Date.now();
+    await setDoc(doc(db, "clients", id), {
+      name: newClientName, legalName: newClientName, logo: null,
+      contract: { start: "2026-07-20", renewal: "2027-07-20", plan: "Plan to confirm" },
+      billing: { contact: "", email: "", terms: "TBC", status: "Current" },
+      billingType: "FlatFee", billingSetupDone: true,
+      contacts: [], notes: [], reminders: [], extras: [],
+      hours: { included: 0, log: [] }, users: { log: [] },
+      ohsmsLastIssued: null, ohsmsDue: addDays("2026-07-20", 365), intake: null,
+    });
+    setSelectedId(id);
+    setNewClientName("");
+    setShowAddClient(false);
+  };
 
   const cycleExtraStatus = (extraId) => {
     updateClient((c) => {
@@ -465,9 +490,17 @@ function ClientsView({ clients, setClients, selectedId, setSelectedId, onboardin
             );
           })}
         </div>
-        <button className="flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold mt-1" style={{ background: T.charcoal, color: T.teal }}>
-          <Plus size={15} /> Add client
-        </button>
+        {showAddClient ? (
+          <div className="flex items-center gap-2 p-3 rounded-xl" style={{ background: T.card, border: `1px solid ${T.border}` }}>
+            <input placeholder="Client name" value={newClientName} onChange={(e) => setNewClientName(e.target.value)}
+              className="flex-1 text-sm px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+            <button onClick={addClient} className="text-xs font-semibold px-3 py-1.5 rounded-lg shrink-0" style={{ background: T.tealDark, color: "#fff" }}>Save</button>
+          </div>
+        ) : (
+          <button onClick={() => setShowAddClient(true)} className="flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold mt-1" style={{ background: T.charcoal, color: T.teal }}>
+            <Plus size={15} /> Add client
+          </button>
+        )}
       </div>
 
       <div className="flex-1 flex flex-col gap-4 min-w-0">
@@ -1131,7 +1164,7 @@ function ResellersView({ resellers, setResellers, selectedId, setSelectedId }) {
 }
 
 /* ---------- Billing overview (all clients) ---------- */
-function BillingOverview({ clients, setClients, resellers }) {
+function BillingOverview({ clients, resellers }) {
   const [showFlatFee, setShowFlatFee] = useState(false);
   const newClients = clients.filter((c) => c.billingSetupDone === false);
   const setUpClients = clients.filter((c) => c.billingSetupDone !== false);
@@ -1154,7 +1187,7 @@ function BillingOverview({ clients, setClients, resellers }) {
   const totalHours = needsAttention.reduce((s, r) => s + r.logged, 0);
   const totalUsers = [...needsAttention, ...flatFeeRows].reduce((s, r) => s + r.users, 0);
 
-  const markBillingSetUp = (id) => setClients((prev) => prev.map((c) => (c.id === id ? { ...c, billingSetupDone: true } : c)));
+  const markBillingSetUp = (id) => updateDoc(doc(db, "clients", id), { billingSetupDone: true });
 
   // A reseller's client count is "how many of their clients logged a user count this month", not a running total of everyone ever added.
   const billingActiveClients = (r) => r.clients.filter((c) => c.users.log.some((u) => u.month === currentMonth()));
@@ -1518,7 +1551,29 @@ function WorkflowsView({ workflows, setWorkflows }) {
 export default function App() {
   const [module, setModule] = useState("clients");
   const [currentUser, setCurrentUser] = useState(TEAM[0]);
-  const [clients, setClients] = useState(initialClients);
+  // Clients now live in Firestore. On first run (empty collection) we seed the
+  // sample data you've been testing with, using the same ids ("bmc", "radius", etc.)
+  // so everything else that references those ids keeps working.
+  const [clients, setClients] = useState([]);
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "clients"), (snap) => {
+      setClients(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    });
+    return unsub;
+  }, []);
+  useEffect(() => {
+    (async () => {
+      const snap = await getDocs(collection(db, "clients"));
+      if (snap.empty) {
+        await Promise.all(
+          initialClients.map((c) => {
+            const { id, ...data } = c;
+            return setDoc(doc(db, "clients", id), data);
+          })
+        );
+      }
+    })();
+  }, []);
   const [leads, setLeads] = useState(initialLeads);
   const [tasks, setTasks] = useState(initialTasks);
   const [resellers, setResellers] = useState(initialResellers);
@@ -1589,7 +1644,7 @@ export default function App() {
     });
   };
 
-  const convertLeadToClient = (lead) => {
+  const convertLeadToClient = async (lead) => {
     const id = "c" + Date.now();
     const intake = {
       submittedDate: "2026-07-20", contactEmail: lead.formEmail, contactName: lead.contact,
@@ -1597,14 +1652,14 @@ export default function App() {
       existingWork: "No formal OHSMS in place yet — currently relying on a basic site safety folder.",
     };
     const newClient = {
-      id, name: lead.company, legalName: lead.company, logo: null,
+      name: lead.company, legalName: lead.company, logo: null,
       contract: { start: "2026-07-20", renewal: "2027-07-20", value: lead.value + " / yr", plan: "New client — plan to confirm" },
       billing: { contact: lead.contact, email: lead.formEmail, terms: "TBC", status: "Current" },
       billingType: "FlatFee", billingSetupDone: false,
-      notes: [], reminders: [], ohsmsLastIssued: null, ohsmsDue: "2026-10-20",
+      notes: [], reminders: [], contacts: [], ohsmsLastIssued: null, ohsmsDue: "2026-10-20",
       extras: [], hours: { included: intake.supportHours, log: [] }, users: { log: [] }, intake,
     };
-    setClients((prev) => [...prev, newClient]);
+    await setDoc(doc(db, "clients", id), newClient);
     const wf = workflows.find((w) => w.isDefault) || workflows[0];
     setOnboardings((prev) => ({
       ...prev,
@@ -1666,13 +1721,13 @@ export default function App() {
 
         <div className="flex-1 p-8 min-h-0">
           {module === "clients" && (
-            <ClientsView clients={clients} setClients={setClients} selectedId={selectedClient} setSelectedId={setSelectedClient}
+            <ClientsView clients={clients} selectedId={selectedClient} setSelectedId={setSelectedClient}
               onboardings={onboardings} setOnboardings={setOnboardings} workflows={workflows}
               pushNotification={pushNotification} goToWorkflows={() => setModule("workflows")} tabRequest={clientTabRequest} />
           )}
           {module === "systems" && <SystemsView clients={clients} selectedId={selectedClient} setSelectedId={setSelectedClient} />}
           {module === "sales" && <SalesView leads={leads} setLeads={setLeads} convertLeadToClient={convertLeadToClient} />}
-          {module === "billing" && <BillingOverview clients={clients} setClients={setClients} resellers={resellers} />}
+          {module === "billing" && <BillingOverview clients={clients} resellers={resellers} />}
           {module === "workflows" && <WorkflowsView workflows={workflows} setWorkflows={setWorkflows} />}
           {module === "resellers" && <ResellersView resellers={resellers} setResellers={setResellers} selectedId={selectedReseller} setSelectedId={setSelectedReseller} />}
           {module === "tasks" && <TasksView tasks={tasks} setTasks={setTasks} clients={clients} onboardings={onboardings} currentUser={currentUser} goToClient={goToClient} resellers={resellers} goToReseller={goToReseller} />}

@@ -1555,22 +1555,37 @@ export default function App() {
   // sample data you've been testing with, using the same ids ("bmc", "radius", etc.)
   // so everything else that references those ids keeps working.
   const [clients, setClients] = useState([]);
+  const [clientsLoaded, setClientsLoaded] = useState(false);
+  const [clientsError, setClientsError] = useState(null);
   useEffect(() => {
-    const unsub = onSnapshot(collection(db, "clients"), (snap) => {
-      setClients(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-    });
+    const unsub = onSnapshot(
+      collection(db, "clients"),
+      (snap) => {
+        setClients(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+        setClientsLoaded(true);
+      },
+      (err) => {
+        console.error("Clients subscription failed:", err);
+        setClientsError(err.message || String(err));
+        setClientsLoaded(true);
+      }
+    );
     return unsub;
   }, []);
   useEffect(() => {
     (async () => {
-      const snap = await getDocs(collection(db, "clients"));
-      if (snap.empty) {
-        await Promise.all(
-          initialClients.map((c) => {
-            const { id, ...data } = c;
-            return setDoc(doc(db, "clients", id), data);
-          })
-        );
+      try {
+        const snap = await getDocs(collection(db, "clients"));
+        if (snap.empty) {
+          await Promise.all(
+            initialClients.map((c) => {
+              const { id, ...data } = c;
+              return setDoc(doc(db, "clients", id), data);
+            })
+          );
+        }
+      } catch (err) {
+        console.error("Client seed failed (likely a Firestore permissions issue):", err);
       }
     })();
   }, []);
@@ -1675,6 +1690,34 @@ export default function App() {
 
   const upcomingReminders = useMemo(() => clients.flatMap((c) => c.reminders).filter((r) => daysUntil(r.date) <= 14), [clients]);
 
+  if (!clientsLoaded) {
+    return (
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "system-ui, sans-serif", color: T.slate }}>
+        Loading client data…
+      </div>
+    );
+  }
+
+  if (clientsError) {
+    return (
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 8, fontFamily: "system-ui, sans-serif", padding: 24, textAlign: "center" }}>
+        <div style={{ fontWeight: 700, color: T.coral }}>Couldn't load client data</div>
+        <div style={{ color: T.slate, fontSize: 13, maxWidth: 480 }}>{clientsError}</div>
+        <div style={{ color: T.slateLight, fontSize: 12, maxWidth: 480 }}>
+          This is almost always a Firestore permissions issue — check that a document exists in the <code>team</code> collection with your exact User UID as its Document ID.
+        </div>
+      </div>
+    );
+  }
+
+  if (clientsLoaded && clients.length === 0 && module === "clients") {
+    return (
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "system-ui, sans-serif", color: T.slate }}>
+        No clients yet — this should populate automatically within a moment. If it doesn't after a refresh, check the browser console for errors.
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-screen w-full" style={{ background: T.paper, fontFamily: "'Inter', system-ui, sans-serif" }}>
       <div className="w-56 shrink-0 flex flex-col p-4 gap-1" style={{ background: T.charcoal }}>
@@ -1736,3 +1779,4 @@ export default function App() {
     </div>
   );
 }
+

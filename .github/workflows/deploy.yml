@@ -16,6 +16,7 @@ jobs:
 
       - run: npm install
       - run: npm run build
+      - run: npm install --prefix functions
 
       - uses: FirebaseExtended/action-hosting-deploy@v0
         with:
@@ -38,4 +39,11 @@ jobs:
         env:
           GOOGLE_APPLICATION_CREDENTIALS: /tmp/gcp-key.json
         continue-on-error: true
-        
+
+      - name: Deploy Cloud Functions
+        run: |
+          echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}' > /tmp/gcp-key.json
+          npx firebase-tools deploy --only functions --project oshe-895ad
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: /tmp/gcp-key.json
+        continue-on-error: true

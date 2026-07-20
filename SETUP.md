@@ -2,6 +2,7 @@
 
 Everything here is done through web browsers (GitHub + Firebase console). No terminal required.
 
+
 ## 1. Create the GitHub repo
 1. Go to github.com → **New repository** → name it e.g. `oshe-crm` → **Create repository** (private is fine, recommended).
 2. On the empty repo page, click **uploading an existing file**.

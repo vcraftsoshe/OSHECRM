@@ -226,7 +226,7 @@ async function generateSignedPdf({ companyName, contactName, submittedDate, sign
 /* ---------- Main function ---------- */
 exports.submitSignup = onCall({ cors: true }, async (request) => {
   const data = request.data || {};
-  const { leadId, form, triggers, emergencies, emergencyOther, logoDataUrl, signatureDataUrl } = data;
+  const { leadId, form, triggers, emergencies, emergencyOther, logoDataUrl, signatureDataUrl, existingFiles } = data;
 
   if (!form || !form.company || !form.email || !form.contactName || !form.phone) {
     throw new HttpsError("invalid-argument", "Missing required company details.");
@@ -251,6 +251,22 @@ exports.submitSignup = onCall({ cors: true }, async (request) => {
     const file = bucket.file(`logos/${clientId}/logo.png`);
     await file.save(buffer, { metadata: { contentType: "image/png" } });
     logoPath = file.name;
+  }
+
+  // Any existing documents the client attached, uploaded as-is for OSHE to work into their system
+  const existingFilePaths = [];
+  if (Array.isArray(existingFiles)) {
+    for (const f of existingFiles) {
+      if (!f || !f.dataUrl || !f.name) continue;
+      const match = f.dataUrl.match(/^data:(.*?);base64,(.*)$/);
+      if (!match) continue;
+      const [, contentType, base64] = match;
+      const buffer = Buffer.from(base64, "base64");
+      const safeName = f.name.replace(/[^a-zA-Z0-9_.-]/g, "_");
+      const file = bucket.file(`existing-files/${clientId}/${safeName}`);
+      await file.save(buffer, { metadata: { contentType } });
+      existingFilePaths.push({ name: f.name, path: file.name });
+    }
   }
 
   // Signature upload
@@ -290,6 +306,7 @@ exports.submitSignup = onCall({ cors: true }, async (request) => {
     emergencyOther: emergencyOther || null,
     ohsmsPack: pack,
     signedTermsPath: pdfFile.name,
+    existingFiles: existingFilePaths,
     logoPath,
   };
 

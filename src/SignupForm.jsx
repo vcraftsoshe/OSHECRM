@@ -3,6 +3,7 @@ import { useParams } from "react-router-dom";
 import { httpsCallable } from "firebase/functions";
 import { functions } from "./firebase";
 import { Upload, Image as ImageIcon, Check, RotateCcw, ChevronLeft, ChevronRight, ChevronDown } from "lucide-react";
+import { ALWAYS_SECTIONS, CONDITIONAL_SECTIONS, COMPLIANCE_EXTRA_SECTIONS, ALWAYS_PROCEDURES, CONDITIONAL_PROCEDURES, COMPLIANCE_EXTRA_PROCEDURES, ALWAYS_POLICIES, CONDITIONAL_POLICIES, COMPLIANCE_EXTRA_FORMS, computeOhsmsPack } from "./ohsmsLogic";
 
 const T = {
   charcoal: "#1A2C2E", teal: "#13DCCC", tealDark: "#0AADA0",
@@ -10,73 +11,6 @@ const T = {
   ink: "#152423", slate: "#5C7274", slateLight: "#8CA1A2", border: "#DCE6E4",
   coral: "#C25B4E",
 };
-
-/* ---------- OHSMS builder logic (see ohsms-builder-logic.md) ---------- */
-const ALWAYS_SECTIONS = ["Introduction", "Purpose", "Scope", "Health & Safety Policy", "Leadership & Commitment", "Roles & Responsibilities", "Worker Participation", "Planning", "Hazard & Risk Management", "Incident Management", "Training & Competency", "Reporting", "Monitoring & Review", "Support", "Document Control"];
-const CONDITIONAL_SECTIONS = [
-  { key: "contractors", label: "Contractor Management" },
-  { key: "plant", label: "Plant & Equipment" },
-  { key: "ppe", label: "PPE" },
-  { key: "healthMonitoring", label: "Exposure & Health Monitoring" },
-  { key: "hazardousSubstances", label: "Hazardous Substances" },
-  { key: "erp", label: "Emergency Preparedness" },
-  { key: "vehicles", label: "Driving for Work" },
-  { key: "physicalWorkplace", label: "Workplace Monitoring" },
-  { key: "environmental", label: "Environmental Management" },
-  { key: "wellbeing", label: "Wellbeing" },
-  { key: "drugAlcohol", label: "Fitness for Work" },
-  { key: "continualImprovement", label: "Continual Improvement" },
-];
-const COMPLIANCE_EXTRA_SECTIONS = ["Performance Monitoring", "Objectives & KPIs", "Management Review", "Health & Safety Planning", "Worker Consultation (expanded)", "Internal Auditing / Monitoring", "Resource Allocation"];
-
-const ALWAYS_PROCEDURES = ["Incident Reporting & Investigation Procedure", "Hazard & Risk Management Procedure"];
-const CONDITIONAL_PROCEDURES = [
-  { key: "contractors", label: "Contractor Management Procedure" },
-  { key: "plant", label: "Plant & Equipment Procedure" },
-  { key: "ppe", label: "PPE Procedure" },
-  { key: "hazardousSubstances", label: "Hazardous Substances Procedure" },
-  { key: "healthMonitoring", label: "Health Monitoring Procedure" },
-  { key: "erp", label: "Emergency Response Plan" },
-  { key: "physicalWorkplace", label: "Workplace Inspection Procedure" },
-  { key: "workers", label: "Induction & Training Procedure" },
-  { key: "continualImprovement", label: "Continual Improvement Procedure" },
-  { key: "wellbeing", label: "Wellbeing Procedure" },
-];
-const COMPLIANCE_EXTRA_PROCEDURES = ["Health & Safety Budget Management Procedure", "Health & Safety Issue Resolution Procedure"];
-
-const ALWAYS_POLICIES = ["Health & Safety Policy"];
-const CONDITIONAL_POLICIES = [
-  { key: "drugAlcohol", label: "Drug & Alcohol Policy" },
-  { key: "wellbeing", label: "Wellbeing Policy" },
-  { key: "vehicles", label: "Driver Statement Policy" },
-  { key: "environmental", label: "Environmental Policy" },
-];
-
-const COMPLIANCE_EXTRA_FORMS = ["Annual Health & Safety Budget Form", "Management Review Form", "Annual Objectives & Action Plan", "Internal Audit Schedule", "Internal Audit Report", "Annual H&S Review", "Annual Management Review Minutes"];
-
-function computeOhsmsPack(t) {
-  const complianceForced = t.compliance === true;
-  const sections = [...ALWAYS_SECTIONS];
-  CONDITIONAL_SECTIONS.forEach((s) => {
-    const on = s.key === "continualImprovement" ? (t.continualImprovement || complianceForced) : t[s.key];
-    if (on) sections.push(s.label);
-  });
-  if (complianceForced) sections.push(...COMPLIANCE_EXTRA_SECTIONS);
-
-  const procedures = [...ALWAYS_PROCEDURES];
-  CONDITIONAL_PROCEDURES.forEach((p) => {
-    const on = p.key === "continualImprovement" ? (t.continualImprovement || complianceForced) : t[p.key];
-    if (on) procedures.push(p.label);
-  });
-  if (complianceForced) procedures.push(...COMPLIANCE_EXTRA_PROCEDURES);
-
-  const policies = [...ALWAYS_POLICIES];
-  CONDITIONAL_POLICIES.forEach((p) => { if (t[p.key]) policies.push(p.label); });
-
-  const forms = complianceForced ? [...COMPLIANCE_EXTRA_FORMS] : [];
-
-  return { sections, procedures, policies, forms };
-}
 
 const termsSections = [
   { title: "1. Subscription and Access", body: [
@@ -289,11 +223,12 @@ export default function SignupForm() {
   const [t, setT] = useState({
     contractors: null, physicalWorkplace: null, plant: null, vehicles: null, ppe: null,
     hazardousSubstances: null, healthMonitoring: null, erp: true,
-    workers: null, wellbeing: null, drugAlcohol: null,
-    environmental: null, continualImprovement: true,
+    workers: null, wellbeing: null,
+    continualImprovement: true,
     compliance: null,
   });
   const [logo, setLogo] = useState(null);
+  const [existingFiles, setExistingFiles] = useState([]);
   const [signed, setSigned] = useState(false);
   const [agreed, setAgreed] = useState(false);
   const [submitted, setSubmitted] = useState(false);
@@ -317,7 +252,7 @@ export default function SignupForm() {
   const pack = wantsOhsms ? computeOhsmsPack(t) : null;
 
   const step0Valid = form.company && form.email && form.contactName && form.accountsEmail && form.phone && form.address;
-  const triggersAnswered = !wantsOhsms || [t.contractors, t.physicalWorkplace, t.plant, t.vehicles, t.ppe, t.hazardousSubstances, t.healthMonitoring, t.workers, t.wellbeing, t.drugAlcohol, t.environmental, t.compliance].every((v) => v !== null);
+  const triggersAnswered = !wantsOhsms || [t.contractors, t.physicalWorkplace, t.plant, t.vehicles, t.ppe, t.hazardousSubstances, t.healthMonitoring, t.workers, t.wellbeing, t.compliance].every((v) => v !== null);
   const step1Valid = form.appUsers && form.paymentFreq && form.requireOhsms && triggersAnswered;
   const canSubmit = step0Valid && step1Valid && agreed && signed;
   const canAdvance = step === 0 ? step0Valid : step === 1 ? step1Valid : true;
@@ -336,6 +271,7 @@ export default function SignupForm() {
         emergencies,
         emergencyOther,
         logoDataUrl: logo,
+        existingFiles,
         signatureDataUrl,
       });
       setSubmitted(true);
@@ -367,7 +303,7 @@ export default function SignupForm() {
     <div className="min-h-screen" style={{ background: T.paper, fontFamily: "'Inter', system-ui, sans-serif" }}>
       <div className="max-w-3xl mx-auto px-6 py-10 flex flex-col gap-6">
         <div>
-          <div className="text-2xl font-bold" style={{ color: T.tealDark, letterSpacing: "0.5px" }}>OSHE</div>
+          <img src="/logo-full.png" alt="OSHE" style={{ height: 40, width: "auto" }} />
           <div className="text-2xl font-bold mt-4" style={{ color: T.ink }}>Client Information Form</div>
         </div>
 
@@ -428,7 +364,6 @@ export default function SignupForm() {
                   <option>$179+ per month for upto 10 users</option>
                   <option>$249+ per month for upto 20 users</option>
                   <option>20+ users, enterprise cost quoted</option>
-                  <option>No app, paper system only</option>
                   <option>Sole Trader</option>
                 </select>
               </Field>
@@ -442,7 +377,7 @@ export default function SignupForm() {
                 <Field label="Do you require a OHSMS" required hint="This is the system (manual, policy, procedures etc)">
                   <select value={form.requireOhsms} onChange={(e) => set("requireOhsms", e.target.value)} className="w-full text-sm px-3 py-2.5 rounded-lg outline-none" style={inputStyle}>
                     <option value="">Select option...</option>
-                    <option>Yes</option><option>Not required, app only</option>
+                    <option>Yes</option>
                   </select>
                 </Field>
               </div>
@@ -478,14 +413,9 @@ export default function SignupForm() {
                   <div className="text-xs font-bold uppercase tracking-wide mt-4 mb-1" style={{ color: T.tealDark }}>3. Worker Management</div>
                   <YesNo question="Do you employ workers?" value={t.workers} onChange={(v) => setTrig("workers", v)} />
                   <YesNo question="Would you like to include a Wellbeing Management System?" value={t.wellbeing} onChange={(v) => setTrig("wellbeing", v)} />
-                  <YesNo question="Does your business require a Drug & Alcohol Policy?" value={t.drugAlcohol} onChange={(v) => setTrig("drugAlcohol", v)} />
 
-                  <div className="text-xs font-bold uppercase tracking-wide mt-4 mb-1" style={{ color: T.tealDark }}>4. Optional Management Modules</div>
-                  <YesNo question="Include Environmental Management?" value={t.environmental} onChange={(v) => setTrig("environmental", v)} />
-
-                  <div className="text-xs font-bold uppercase tracking-wide mt-4 mb-1" style={{ color: T.tealDark }}>5. Compliance schemes</div>
+                  <div className="text-xs font-bold uppercase tracking-wide mt-4 mb-1" style={{ color: T.tealDark }}>4. Compliance schemes</div>
                   <YesNo question="Do you need to meet SiteWise and/or Totika?" value={t.compliance} onChange={(v) => setTrig("compliance", v)} />
-                  <YesNo question="Include Continual Improvement System?" value={t.continualImprovement} onChange={(v) => setTrig("continualImprovement", v)} disabled={t.compliance === true} hint={t.compliance === true ? "Locked on — required for SiteWise/Totika" : undefined} />
                 </div>
                 {/* `pack` is computed above from the trigger answers and is what drives document generation
                     internally (the CRM's Systems builder) — deliberately not displayed to the client here. */}
@@ -511,6 +441,37 @@ export default function SignupForm() {
                     reader.readAsDataURL(file);
                   }} />
                 </label>
+              </Field>
+            </div>
+
+            <div className="rounded-2xl p-6" style={{ background: T.card, border: `1px solid ${T.border}` }}>
+              <Field label="Do you have any existing documents you'd like to send us?" hint="Anything you already have — old H&S folders, registers, policies — attach them here and we'll work them into your system.">
+                <label className="w-full flex flex-col items-center justify-center gap-2 py-8 rounded-lg text-sm cursor-pointer"
+                  style={{ border: `1.5px dashed ${T.slateLight}`, color: T.slate, background: T.paperAlt }}>
+                  <Upload size={20} />
+                  Click to upload one or more files
+                  <input type="file" multiple className="hidden" onChange={(e) => {
+                    const files = Array.from(e.target.files || []);
+                    files.forEach((file) => {
+                      const reader = new FileReader();
+                      reader.onload = () => setExistingFiles((prev) => [...prev, { name: file.name, dataUrl: reader.result }]);
+                      reader.readAsDataURL(file);
+                    });
+                    e.target.value = "";
+                  }} />
+                </label>
+                {existingFiles.length > 0 && (
+                  <div className="flex flex-col gap-1.5 mt-3">
+                    {existingFiles.map((f, i) => (
+                      <div key={i} className="flex items-center justify-between text-xs px-3 py-2 rounded-lg" style={{ background: T.paperAlt }}>
+                        <span style={{ color: T.ink }}>{f.name}</span>
+                        <button type="button" onClick={() => setExistingFiles((prev) => prev.filter((_, idx) => idx !== i))} style={{ color: T.slateLight }}>
+                          <RotateCcw size={12} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </Field>
             </div>
 

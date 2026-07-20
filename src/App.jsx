@@ -8,6 +8,7 @@ import {
 import { collection, doc, onSnapshot, updateDoc, setDoc, getDocs, getDoc, deleteDoc } from "firebase/firestore";
 import { signOut } from "firebase/auth";
 import { db, auth } from "./firebase";
+import { ALWAYS_SECTIONS, CONDITIONAL_SECTIONS, COMPLIANCE_EXTRA_SECTIONS, ALWAYS_PROCEDURES, CONDITIONAL_PROCEDURES, COMPLIANCE_EXTRA_PROCEDURES, ALWAYS_POLICIES, CONDITIONAL_POLICIES, COMPLIANCE_EXTRA_FORMS } from "./ohsmsLogic";
 
 /* ---------- Design tokens (OSHE brand) ---------- */
 const T = {
@@ -182,25 +183,6 @@ const initialResellers = [
       { id: 1, text: "They've asked about a bulk discount past 20 users — needs a decision", done: false, assignee: "Vanessa", date: "2026-07-28" },
     ],
   },
-];
-
-const ohsmsSections = [
-  { id: "policy", title: "H&S Policy Statement", blurb: "Signed policy statement establishing {{COMPANY}}'s commitment to health and safety." },
-  { id: "hazard", title: "Hazard Identification & Management", blurb: "Process for identifying, assessing and controlling hazards across {{COMPANY}} sites." },
-  { id: "emergency", title: "Emergency Procedures", blurb: "Evacuation, fire, medical emergency and civil defence procedures for {{COMPANY}} sites." },
-  { id: "induction", title: "Training & Site Induction", blurb: "Induction requirements and ongoing training register for {{COMPANY}} workers." },
-  { id: "incident", title: "Incident & Near-Miss Reporting", blurb: "Reporting, investigation and corrective action process." },
-  { id: "ppe", title: "PPE Requirements", blurb: "Minimum PPE standards across {{COMPANY}} sites." },
-  { id: "contractor", title: "Contractor & Subcontractor Management", blurb: "Pre-qualification and induction of contractors working for {{COMPANY}}." },
-  { id: "drugalcohol", title: "Drug & Alcohol Policy", blurb: "Testing regime and consequences under {{COMPANY}}'s zero-tolerance approach." },
-];
-const policySections = [
-  { id: "siterules", title: "Site-Specific Rules", blurb: "Rules specific to each {{COMPANY}} site, reviewed per project." },
-  { id: "vehicles", title: "Vehicle & Mobile Plant", blurb: "Operating rules for vehicles and plant on {{COMPANY}} sites." },
-  { id: "heights", title: "Working at Height", blurb: "Fall prevention and control procedures." },
-  { id: "manualhandling", title: "Manual Handling", blurb: "Safe lifting and manual handling procedures for {{COMPANY}} staff." },
-  { id: "confinedspace", title: "Confined Space Entry", blurb: "Entry permit and monitoring procedure." },
-  { id: "electrical", title: "Electrical Safety", blurb: "Isolation and lock-out/tag-out procedures." },
 ];
 
 function today() { return new Date().toISOString().slice(0, 10); }
@@ -717,14 +699,57 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
                   </div>
                   <div className="grid grid-cols-2 gap-y-3 gap-x-8 text-sm">
                     <div><div className="text-xs font-semibold" style={{ color: T.slate }}>CONTACT</div><div style={{ color: T.ink }}>{client.intake.contactName} &middot; {client.intake.contactEmail}</div></div>
-                    <div><div className="text-xs font-semibold" style={{ color: T.slate }}>SUPPORT HOURS REQUESTED</div><div style={{ color: T.ink }}>{client.intake.supportHours} hrs / month</div></div>
-                    <div className="col-span-2"><div className="text-xs font-semibold" style={{ color: T.slate }}>EXISTING WORK IN PLACE</div><div style={{ color: T.ink }}>{client.intake.existingWork}</div></div>
-                    <div className="col-span-2">
-                      <div className="text-xs font-semibold mb-1" style={{ color: T.slate }}>REQUESTED OHSMS SECTIONS</div>
-                      <div className="flex flex-wrap gap-1.5">
-                        {client.intake.requestedSections.map((s) => <Pill key={s} color={T.tealDark} bg={T.paperAlt}>{s}</Pill>)}
+                    {client.intake.phone && <div><div className="text-xs font-semibold" style={{ color: T.slate }}>PHONE</div><div style={{ color: T.ink }}>{client.intake.phone}</div></div>}
+                    {client.intake.address && <div><div className="text-xs font-semibold" style={{ color: T.slate }}>ADDRESS</div><div style={{ color: T.ink }}>{client.intake.address}</div></div>}
+                    {client.intake.appUsers && <div><div className="text-xs font-semibold" style={{ color: T.slate }}>APP TIER</div><div style={{ color: T.ink }}>{client.intake.appUsers}</div></div>}
+                    {client.intake.paymentFreq && <div><div className="text-xs font-semibold" style={{ color: T.slate }}>PAYMENT</div><div style={{ color: T.ink }}>{client.intake.paymentFreq}</div></div>}
+                    {client.intake.requireOhsms && <div><div className="text-xs font-semibold" style={{ color: T.slate }}>OHSMS REQUIRED</div><div style={{ color: T.ink }}>{client.intake.requireOhsms}</div></div>}
+                    {client.intake.supportHours != null && <div><div className="text-xs font-semibold" style={{ color: T.slate }}>SUPPORT HOURS REQUESTED</div><div style={{ color: T.ink }}>{client.intake.supportHours} hrs / month</div></div>}
+                    {client.intake.workTasks && <div className="col-span-2"><div className="text-xs font-semibold" style={{ color: T.slate }}>GENERAL WORK TASKS</div><div style={{ color: T.ink }}>{client.intake.workTasks}</div></div>}
+                    {client.intake.existingWork && <div className="col-span-2"><div className="text-xs font-semibold" style={{ color: T.slate }}>EXISTING WORK IN PLACE</div><div style={{ color: T.ink }}>{client.intake.existingWork}</div></div>}
+
+                    {Array.isArray(client.intake.requestedSections) && client.intake.requestedSections.length > 0 && (
+                      <div className="col-span-2">
+                        <div className="text-xs font-semibold mb-1" style={{ color: T.slate }}>REQUESTED OHSMS SECTIONS</div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {client.intake.requestedSections.map((s) => <Pill key={s} color={T.tealDark} bg={T.paperAlt}>{s}</Pill>)}
+                        </div>
                       </div>
-                    </div>
+                    )}
+
+                    {Array.isArray(client.intake.emergencies) && client.intake.emergencies.length > 0 && (
+                      <div className="col-span-2">
+                        <div className="text-xs font-semibold mb-1" style={{ color: T.slate }}>EMERGENCIES IDENTIFIED</div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {client.intake.emergencies.map((e) => <Pill key={e} color={T.tealDark} bg={T.paperAlt}>{e}</Pill>)}
+                        </div>
+                        {client.intake.emergencyOther && <div className="text-xs mt-1" style={{ color: T.slate }}>Other: {client.intake.emergencyOther}</div>}
+                      </div>
+                    )}
+
+                    {client.intake.ohsmsPack && (
+                      <div className="col-span-2">
+                        <div className="text-xs font-semibold mb-1" style={{ color: T.slate }}>OHSMS PACK (from their answers)</div>
+                        <div className="flex gap-2 flex-wrap">
+                          <Pill color={T.tealDark} bg={T.paperAlt}>{(client.intake.ohsmsPack.sections || []).length} sections</Pill>
+                          <Pill color={T.tealDark} bg={T.paperAlt}>{(client.intake.ohsmsPack.procedures || []).length} procedures</Pill>
+                          <Pill color={T.tealDark} bg={T.paperAlt}>{(client.intake.ohsmsPack.policies || []).length} policies</Pill>
+                          {(client.intake.ohsmsPack.forms || []).length > 0 && <Pill color={T.tealDark} bg={T.paperAlt}>{client.intake.ohsmsPack.forms.length} forms</Pill>}
+                        </div>
+                      </div>
+                    )}
+
+                    {client.intake.signedTermsPath && (
+                      <div className="col-span-2 text-xs" style={{ color: T.slateLight }}>Signed T&amp;Cs PDF stored at: {client.intake.signedTermsPath}</div>
+                    )}
+                    {Array.isArray(client.intake.existingFiles) && client.intake.existingFiles.length > 0 && (
+                      <div className="col-span-2">
+                        <div className="text-xs font-semibold mb-1" style={{ color: T.slate }}>FILES THEY UPLOADED</div>
+                        <div className="flex flex-col gap-1">
+                          {client.intake.existingFiles.map((f, i) => <div key={i} className="text-xs" style={{ color: T.ink }}>{f.name}</div>)}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </Card>
               )}
@@ -956,13 +981,41 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
 }
 
 /* ---------- Systems / document builder ---------- */
+const DOCUMENT_CATEGORIES = [
+  { key: "sections", label: "Manual Sections", always: ALWAYS_SECTIONS, conditional: CONDITIONAL_SECTIONS, complianceExtra: COMPLIANCE_EXTRA_SECTIONS },
+  { key: "procedures", label: "Procedures", always: ALWAYS_PROCEDURES, conditional: CONDITIONAL_PROCEDURES, complianceExtra: COMPLIANCE_EXTRA_PROCEDURES },
+  { key: "policies", label: "Policies", always: ALWAYS_POLICIES, conditional: CONDITIONAL_POLICIES, complianceExtra: [] },
+  { key: "forms", label: "Forms", always: [], conditional: [], complianceExtra: COMPLIANCE_EXTRA_FORMS },
+];
+
+function categoryItems(category) {
+  return [...category.always, ...category.conditional.map((c) => c.label), ...category.complianceExtra];
+}
+
+// Default ticks: if this client actually has a computed OHSMS pack (came through the real
+// sign-up form), use exactly what their answers produced. Otherwise (legacy/manually-added
+// clients), fall back to just the always-included items ticked, everything else left for
+// Sophie/Vanessa to decide manually.
+function defaultChecked(client, category) {
+  const packList = client?.intake?.ohsmsPack?.[category.key];
+  return Object.fromEntries(categoryItems(category).map((label) => [label, packList ? packList.includes(label) : category.always.includes(label)]));
+}
+
 function SystemsView({ clients, selectedId, setSelectedId }) {
   const client = clients.find((c) => c.id === selectedId) || clients[0];
-  const [builder, setBuilder] = useState("ohsms");
-  const sections = builder === "ohsms" ? ohsmsSections : policySections;
-  const [checked, setChecked] = useState(() => Object.fromEntries(sections.map((s) => [s.id, true])));
+  const [categoryKey, setCategoryKey] = useState("sections");
+  const category = DOCUMENT_CATEGORIES.find((c) => c.key === categoryKey);
+  const [checked, setChecked] = useState(() => defaultChecked(client, category));
   const [logo, setLogo] = useState(null);
-  const included = sections.filter((s) => checked[s.id]);
+
+  useEffect(() => {
+    setChecked(defaultChecked(client, category));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [client.id, categoryKey]);
+
+  const items = categoryItems(category);
+  const included = items.filter((label) => checked[label]);
+  const hasRealAnswers = Boolean(client?.intake?.ohsmsPack);
 
   return (
     <div className="flex h-full gap-6">
@@ -973,12 +1026,17 @@ function SystemsView({ clients, selectedId, setSelectedId }) {
             className="w-full text-sm px-3 py-2 rounded-lg outline-none" style={{ background: T.card, border: `1px solid ${T.border}`, color: T.ink }}>
             {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
+          {hasRealAnswers ? (
+            <div className="text-[11px] mt-1.5" style={{ color: T.tealDark }}>Pre-filled from their sign-up form answers</div>
+          ) : (
+            <div className="text-[11px] mt-1.5" style={{ color: T.slateLight }}>No sign-up answers on file — defaults only, tick manually</div>
+          )}
         </div>
-        <div className="flex rounded-lg p-1" style={{ background: T.paperAlt }}>
-          {["ohsms", "policies"].map((b) => (
-            <button key={b} onClick={() => setBuilder(b)} className="flex-1 text-xs font-semibold py-1.5 rounded-md"
-              style={{ background: builder === b ? T.card : "transparent", color: builder === b ? T.tealDark : T.slate }}>
-              {b === "ohsms" ? "OHSMS" : "Policies & Procedures"}
+        <div className="flex flex-col gap-1 rounded-lg p-1" style={{ background: T.paperAlt }}>
+          {DOCUMENT_CATEGORIES.map((cat) => (
+            <button key={cat.key} onClick={() => setCategoryKey(cat.key)} className="text-xs font-semibold py-1.5 rounded-md text-left px-2"
+              style={{ background: categoryKey === cat.key ? T.card : "transparent", color: categoryKey === cat.key ? T.tealDark : T.slate }}>
+              {cat.label}
             </button>
           ))}
         </div>
@@ -989,46 +1047,53 @@ function SystemsView({ clients, selectedId, setSelectedId }) {
             {logo ? <ImageIcon size={20} color={T.tealDark} /> : <Upload size={18} />}
             {logo ? "logo uploaded" : "Upload logo"}
           </button>
-
         </Card>
         <Card style={{ padding: 16 }}>
           <div className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: T.slate }}>Redo reminder</div>
           <div className="text-sm font-medium" style={{ color: T.ink }}>{fmtDate(client.ohsmsDue)}</div>
           <div className="text-xs mt-1" style={{ color: T.slate }}>Auto-reminder fires 1 month prior</div>
-          <div className="text-xs mt-3 pt-3" style={{ color: T.tealDark, borderTop: `1px solid ${T.border}` }}>
-            Client form link →<br /><span style={{ color: T.slate }}>oshe.co.nz/renew/{client.id}</span>
-          </div>
         </Card>
       </div>
 
       <div className="w-80 shrink-0 flex flex-col gap-2 overflow-y-auto">
-        <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: T.slate }}>Sections {included.length}/{sections.length} selected</div>
-        {sections.map((s) => (
-          <button key={s.id} onClick={() => setChecked((c) => ({ ...c, [s.id]: !c[s.id] }))} className="flex items-start gap-3 p-3 rounded-lg text-left transition-colors"
-            style={{ background: checked[s.id] ? T.paperAlt : T.card, border: `1px solid ${checked[s.id] ? T.tealDark : T.border}` }}>
-            {checked[s.id] ? <CheckCircle2 size={17} color={T.tealDark} className="shrink-0 mt-0.5" /> : <Circle size={17} color={T.slateLight} className="shrink-0 mt-0.5" />}
-            <div className="text-sm font-medium" style={{ color: T.ink }}>{s.title}</div>
-          </button>
-        ))}
+        <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: T.slate }}>{category.label} {included.length}/{items.length} selected</div>
+        {items.map((label) => {
+          const isAlways = category.always.includes(label);
+          const isComplianceExtra = category.complianceExtra.includes(label);
+          return (
+            <button key={label} onClick={() => setChecked((c) => ({ ...c, [label]: !c[label] }))} className="flex items-start gap-3 p-3 rounded-lg text-left transition-colors"
+              style={{ background: checked[label] ? T.paperAlt : T.card, border: `1px solid ${checked[label] ? T.tealDark : T.border}` }}>
+              {checked[label] ? <CheckCircle2 size={17} color={T.tealDark} className="shrink-0 mt-0.5" /> : <Circle size={17} color={T.slateLight} className="shrink-0 mt-0.5" />}
+              <div>
+                <div className="text-sm font-medium" style={{ color: T.ink }}>{label}</div>
+                {isAlways && <div className="text-[10px]" style={{ color: T.slateLight }}>Always included</div>}
+                {isComplianceExtra && <div className="text-[10px]" style={{ color: T.amber }}>SiteWise / Totika add-on</div>}
+              </div>
+            </button>
+          );
+        })}
+        {items.length === 0 && <div className="text-xs text-center py-6" style={{ color: T.slateLight }}>No items in this category.</div>}
       </div>
 
       <div className="flex-1 min-w-0">
-        <div className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: T.slate }}>Live preview — {builder === "ohsms" ? "OHSMS Manual" : "Policies & Procedures"}</div>
+        <div className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: T.slate }}>Live preview — {category.label}</div>
         <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${T.border}`, background: "#fff", maxHeight: "calc(100% - 28px)", overflowY: "auto" }}>
           <div style={{ background: T.charcoal, padding: "36px 32px", color: "#fff" }}>
             <div className="w-16 h-16 rounded-md flex items-center justify-center mb-6" style={{ background: logo ? T.teal : "rgba(255,255,255,0.08)", border: "1px dashed rgba(255,255,255,0.3)" }}>
               {logo ? <ImageIcon size={22} color={T.charcoal} /> : <ImageIcon size={18} color="rgba(255,255,255,0.4)" />}
             </div>
-            <div className="text-xs tracking-widest uppercase" style={{ color: T.teal }}>{builder === "ohsms" ? "Health & Safety Management System" : "Policies & Procedures"}</div>
+            <div className="text-xs tracking-widest uppercase" style={{ color: T.teal }}>{category.label}</div>
             <div className="text-2xl font-bold mt-2">{client.name}</div>
             <div className="text-sm mt-1" style={{ color: "#9FB4B3" }}>Prepared by OSHE Limited &middot; {fmtDate(today())}</div>
           </div>
           <div className="p-6 flex flex-col gap-4">
-            {included.length === 0 && <div className="text-sm text-center py-10" style={{ color: T.slateLight }}>No sections selected — tick items on the left to build the manual.</div>}
-            {included.map((s, i) => (
-              <div key={s.id}>
-                <div className="text-sm font-bold" style={{ color: T.tealDark }}>{i + 1}. {s.title}</div>
-                <div className="text-xs mt-1 leading-relaxed" style={{ color: T.slate }}>{s.blurb.replace("{{COMPANY}}", client.name)}</div>
+            {included.length === 0 && <div className="text-sm text-center py-10" style={{ color: T.slateLight }}>Nothing selected — tick items on the left to build this document.</div>}
+            {included.map((label, i) => (
+              <div key={label}>
+                <div className="text-sm font-bold" style={{ color: T.tealDark }}>{i + 1}. {label}</div>
+                <div className="text-xs mt-1 leading-relaxed" style={{ color: T.slate }}>
+                  Standard OSHE template content for {client.name} — final wording to confirm.
+                </div>
               </div>
             ))}
           </div>
@@ -1129,9 +1194,9 @@ function SalesView({ leads, convertLeadToClient }) {
                       <div className="mt-3 pt-3 flex flex-col gap-2" style={{ borderTop: `1px solid ${T.border}` }}>
                         <div className="text-xs" style={{ color: T.amber }}>Awaiting client form &middot; sent to {l.formEmail}</div>
                         <div className="flex items-center gap-1.5">
-                          <input readOnly value={`${window.location.origin}/signup/${l.id}`}
+                          <input readOnly value={`https://signup.oshe.co.nz/${l.id}`}
                             className="flex-1 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.slate, background: T.paperAlt }} />
-                          <button onClick={() => navigator.clipboard.writeText(`${window.location.origin}/signup/${l.id}`)}
+                          <button onClick={() => navigator.clipboard.writeText(`https://signup.oshe.co.nz/${l.id}`)}
                             className="text-xs font-semibold px-2 py-1.5 rounded-lg shrink-0" style={{ background: T.paperAlt, color: T.tealDark }}>Copy</button>
                         </div>
                         <div className="text-[11px]" style={{ color: T.slateLight }}>Automated emailing isn't live yet — copy this link and send it yourself for now.</div>

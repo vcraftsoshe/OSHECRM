@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import {
   Users, TrendingUp, Bell, Building2, CreditCard, StickyNote,
   ChevronRight, Plus, Check, Upload, Calendar, X, Search,
@@ -202,6 +202,30 @@ const policySections = [
 ];
 
 function today() { return new Date().toISOString().slice(0, 10); }
+
+// A short two-tone chime, synthesized in-browser — no audio file needed.
+function playChime() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const now = ctx.currentTime;
+    [880, 1175].forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      const start = now + i * 0.12;
+      gain.gain.setValueAtTime(0, start);
+      gain.gain.linearRampToValueAtTime(0.15, start + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, start + 0.25);
+      osc.start(start);
+      osc.stop(start + 0.26);
+    });
+  } catch (err) {
+    console.error("Couldn't play notification sound:", err);
+  }
+}
 function fmtDate(d) { return d ? new Date(d).toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric" }) : "—"; }
 function daysUntil(d) { return Math.ceil((new Date(d) - new Date(today())) / 86400000); }
 function addDays(dateStr, days) { const d = new Date(dateStr); d.setDate(d.getDate() + days); return d.toISOString().slice(0, 10); }
@@ -1089,6 +1113,13 @@ function SalesView({ leads, convertLeadToClient }) {
                     {stage === "Won" && l.formStatus === "sent" && (
                       <div className="mt-3 pt-3 flex flex-col gap-2" style={{ borderTop: `1px solid ${T.border}` }}>
                         <div className="text-xs" style={{ color: T.amber }}>Awaiting client form &middot; sent to {l.formEmail}</div>
+                        <div className="flex items-center gap-1.5">
+                          <input readOnly value={`${window.location.origin}/signup/${l.id}`}
+                            className="flex-1 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.slate, background: T.paperAlt }} />
+                          <button onClick={() => navigator.clipboard.writeText(`${window.location.origin}/signup/${l.id}`)}
+                            className="text-xs font-semibold px-2 py-1.5 rounded-lg shrink-0" style={{ background: T.paperAlt, color: T.tealDark }}>Copy</button>
+                        </div>
+                        <div className="text-[11px]" style={{ color: T.slateLight }}>Automated emailing isn't live yet — copy this link and send it yourself for now.</div>
                         <button onClick={() => convertLeadToClient(l)} className="flex items-center justify-center gap-1.5 text-xs font-semibold py-1.5 rounded-lg" style={{ background: T.paperAlt, color: T.tealDark }}>
                           <ArrowUpRight size={12} /> Simulate form completed
                         </button>
@@ -1943,6 +1974,33 @@ export default function App() {
     const unsub = onSnapshot(collection(db, "notifications"), (snap) => setNotificationsState(snap.docs.map((d) => ({ id: d.id, ...d.data() }))), (err) => console.error("Notifications subscription failed:", err));
     return unsub;
   }, []);
+
+  // Sound alert: chime whenever a brand-new notification arrives for the logged-in person
+  // (not for the batch that loads in on first page load — only genuinely new ones after that).
+  const seenNotificationIds = useRef(null);
+  useEffect(() => {
+    const mine = notifications.filter((n) => n.forPerson === currentUser && !n.dismissed);
+    const mineIds = new Set(mine.map((n) => n.id));
+    if (seenNotificationIds.current === null) {
+      seenNotificationIds.current = mineIds;
+      return;
+    }
+    const isNew = [...mineIds].some((id) => !seenNotificationIds.current.has(id));
+    if (isNew) playChime();
+    seenNotificationIds.current = mineIds;
+  }, [notifications, currentUser]);
+
+  // Sound alert: once per day, if there's a reminder due within 2 weeks for anyone.
+  // Gated by localStorage so it doesn't chime on every single page load/refresh.
+  useEffect(() => {
+    if (!clientsLoaded || clients.length === 0) return;
+    const dueSoon = clients.flatMap((c) => c.reminders).some((r) => daysUntil(r.date) <= 14);
+    if (!dueSoon) return;
+    const key = "oshe-reminder-chime-" + today();
+    if (localStorage.getItem(key)) return;
+    localStorage.setItem(key, "1");
+    playChime();
+  }, [clients, clientsLoaded]);
 
   const pushNotification = async ({ forPerson, clientId, clientName, message, type }) => {
     if (notifications.some((n) => n.clientId === clientId && n.forPerson === forPerson && n.message === message)) return;

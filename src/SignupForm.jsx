@@ -1,5 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import { useParams } from "react-router-dom";
+import { httpsCallable } from "firebase/functions";
+import { functions } from "./firebase";
 import { Upload, Image as ImageIcon, Check, RotateCcw, ChevronLeft, ChevronRight, ChevronDown } from "lucide-react";
 
 const T = {
@@ -226,7 +228,7 @@ function PackList({ title, items }) {
   );
 }
 
-function SignaturePad({ onSign }) {
+const SignaturePad = React.forwardRef(function SignaturePad({ onSign }, forwardedRef) {
   const canvasRef = useRef(null);
   const drawing = useRef(false);
 
@@ -236,7 +238,8 @@ function SignaturePad({ onSign }) {
     ctx.strokeStyle = T.ink;
     ctx.lineWidth = 2;
     ctx.lineCap = "round";
-  }, []);
+    if (forwardedRef) forwardedRef.current = canvasRef.current;
+  }, [forwardedRef]);
 
   const pos = (e) => {
     const rect = canvasRef.current.getBoundingClientRect();
@@ -274,7 +277,7 @@ function SignaturePad({ onSign }) {
       </button>
     </div>
   );
-}
+});
 
 export default function SignupForm() {
   const { leadId } = useParams();
@@ -294,6 +297,9 @@ export default function SignupForm() {
   const [signed, setSigned] = useState(false);
   const [agreed, setAgreed] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState(null);
+  const signatureCanvasRef = useRef(null);
   const [emergencies, setEmergencies] = useState([]);
   const [emergencyOther, setEmergencyOther] = useState("");
 
@@ -316,15 +322,29 @@ export default function SignupForm() {
   const canSubmit = step0Valid && step1Valid && agreed && signed;
   const canAdvance = step === 0 ? step0Valid : step === 1 ? step1Valid : true;
 
-  // TODO (phase 2): replace this with a real call to the "submitSignup" Cloud Function.
-  // The function will receive this same payload, look up the lead by leadId, create the
-  // real client + onboarding in Firestore, upload the logo + signature to Storage, and
-  // generate the signed T&Cs PDF. For now this just shows the thank-you screen.
-  const handleSubmit = () => {
-    if (!canSubmit) return;
-    const payload = { leadId: leadId || null, form, triggers: t, emergencies, emergencyOther, pack, hasLogo: Boolean(logo) };
-    console.log("Sign-up form submitted (not yet wired to a backend):", payload);
-    setSubmitted(true);
+  const handleSubmit = async () => {
+    if (!canSubmit || submitting) return;
+    setSubmitError(null);
+    setSubmitting(true);
+    try {
+      const signatureDataUrl = signatureCanvasRef.current ? signatureCanvasRef.current.toDataURL("image/png") : null;
+      const submitSignup = httpsCallable(functions, "submitSignup");
+      await submitSignup({
+        leadId: leadId || null,
+        form,
+        triggers: t,
+        emergencies,
+        emergencyOther,
+        logoDataUrl: logo,
+        signatureDataUrl,
+      });
+      setSubmitted(true);
+    } catch (err) {
+      console.error("Sign-up submission failed:", err);
+      setSubmitError("Something went wrong submitting this — please try again, or contact OSHE directly if it keeps happening.");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   if (submitted) {
@@ -479,12 +499,18 @@ export default function SignupForm() {
           <div className="flex flex-col gap-6">
             <div className="rounded-2xl p-6" style={{ background: T.card, border: `1px solid ${T.border}` }}>
               <Field label="Would you like your logo on all documents? ($250+ one-off fee)" hint="Please attach your logo here">
-                <button onClick={() => setLogo(logo ? null : "placeholder")} type="button"
-                  className="w-full flex flex-col items-center justify-center gap-2 py-8 rounded-lg text-sm"
+                <label className="w-full flex flex-col items-center justify-center gap-2 py-8 rounded-lg text-sm cursor-pointer"
                   style={{ border: `1.5px dashed ${T.slateLight}`, color: T.slate, background: T.paperAlt }}>
                   {logo ? <ImageIcon size={22} color={T.tealDark} /> : <Upload size={20} />}
-                  {logo ? "logo-file.png attached" : "Drop your files here to upload"}
-                </button>
+                  {logo ? "Logo attached — click to change" : "Click to upload your logo"}
+                  <input type="file" accept="image/*" className="hidden" onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    const reader = new FileReader();
+                    reader.onload = () => setLogo(reader.result);
+                    reader.readAsDataURL(file);
+                  }} />
+                </label>
               </Field>
             </div>
 
@@ -506,9 +532,13 @@ export default function SignupForm() {
 
             <div className="rounded-2xl p-6" style={{ background: T.card, border: `1px solid ${T.border}` }}>
               <div className="text-sm font-semibold mb-2" style={{ color: T.ink }}>Sign here <span style={{ color: T.coral }}>*</span></div>
-              <SignaturePad onSign={setSigned} />
+              <SignaturePad ref={signatureCanvasRef} onSign={setSigned} />
             </div>
           </div>
+        )}
+
+        {submitError && (
+          <div className="text-sm text-center rounded-lg px-4 py-3" style={{ background: "#F8EBE9", color: T.coral }}>{submitError}</div>
         )}
 
         <div className="flex items-center justify-between pb-6">
@@ -523,10 +553,10 @@ export default function SignupForm() {
               Next <ChevronRight size={16} />
             </button>
           ) : (
-            <button disabled={!canSubmit} onClick={handleSubmit}
+            <button disabled={!canSubmit || submitting} onClick={handleSubmit}
               className="text-sm font-semibold px-6 py-2.5 rounded-lg"
-              style={{ background: canSubmit ? T.tealDark : T.slateLight, color: "#fff", cursor: canSubmit ? "pointer" : "not-allowed" }}>
-              Submit
+              style={{ background: canSubmit && !submitting ? T.tealDark : T.slateLight, color: "#fff", cursor: canSubmit && !submitting ? "pointer" : "not-allowed" }}>
+              {submitting ? "Submitting…" : "Submit"}
             </button>
           )}
         </div>

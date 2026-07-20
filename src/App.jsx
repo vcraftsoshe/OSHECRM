@@ -3,7 +3,7 @@ import {
   Users, TrendingUp, Bell, Building2, CreditCard, StickyNote,
   ChevronRight, Plus, Check, Upload, Calendar, X, Search,
   ClipboardList, Layers, Circle, CheckCircle2, Image as ImageIcon,
-  Repeat, Trash2, ListChecks, ListTodo, Mail, ArrowUpRight, Store
+  Repeat, Trash2, ListChecks, ListTodo, Mail, ArrowUpRight, Store, LayoutDashboard, ChevronDown
 } from "lucide-react";
 import { collection, doc, onSnapshot, updateDoc, setDoc, getDocs, getDoc, deleteDoc } from "firebase/firestore";
 import { signOut } from "firebase/auth";
@@ -36,6 +36,8 @@ const extraStatusMeta = {
 };
 const extraStatusFlow = ["Requested", "In Progress", "Done"];
 
+const CLIENT_PROFILES = ["Enterprise Client", "Hourly Client", "Standard Client"];
+
 const billingTypeMeta = {
   Hourly: { label: "Hourly — billed against included hours", color: T.tealDark },
   SubscriptionHours: { label: "Subscription + hours — flat fee plus an hours allowance to track", color: T.blue },
@@ -63,7 +65,7 @@ const initialClients = [
     id: "bmc", name: "BMC Construction", legalName: "Brendan Murray Construction 2019 Ltd", logo: null,
     contract: { start: "2024-02-01", renewal: "2027-02-01", value: "$24,000 / yr", plan: "Full H&S Retainer" },
     billing: { contact: "Darryl Dawson", email: "accounts@bmcconstruction.co.nz", terms: "Monthly, 20th", status: "Current" },
-    billingType: "Hourly", billingSetupDone: true,
+    billingType: "Hourly", billingSetupDone: true, profile: "Enterprise Client",
     contacts: [
       { id: 1, name: "Darryl Dawson", role: "Director", email: "darryl@bmcconstruction.co.nz", phone: "021 555 0110" },
       { id: 2, name: "Site Manager — Applefields", role: "Site Contact", email: "applefields@bmcconstruction.co.nz", phone: "021 555 0192" },
@@ -97,7 +99,7 @@ const initialClients = [
     id: "radius", name: "Radius Care Applefields", legalName: "Radius Care Applefields Ltd", logo: null,
     contract: { start: "2026-05-12", renewal: "2027-05-12", value: "$8,500 / yr", plan: "HSMP Build + Support" },
     billing: { contact: "Finance Team", email: "finance@radiuscare.co.nz", terms: "Quarterly", status: "Current" },
-    billingType: "FlatFee", billingSetupDone: true,
+    billingType: "FlatFee", billingSetupDone: true, profile: "Standard Client",
     contacts: [
       { id: 1, name: "Finance Team", role: "Billing Contact", email: "finance@radiuscare.co.nz", phone: "" },
       { id: 2, name: "Facility Manager", role: "Primary Contact", email: "facility@radiuscare.co.nz", phone: "021 555 0233" },
@@ -113,7 +115,7 @@ const initialClients = [
     id: "manaaki", name: "Manaaki Ora Trust", legalName: "Manaaki Ora Trust", logo: null,
     contract: { start: "2025-11-01", renewal: "2026-11-01", value: "$6,000 / yr", plan: "Monthly Reporting" },
     billing: { contact: "Trust Board", email: "admin@manaakiora.org.nz", terms: "Monthly, 1st", status: "Overdue" },
-    billingType: "SubscriptionHours", billingSetupDone: true,
+    billingType: "SubscriptionHours", billingSetupDone: true, profile: "Hourly Client",
     contacts: [{ id: 1, name: "Trust Board", role: "Billing Contact", email: "admin@manaakiora.org.nz", phone: "" }],
     notes: [{ id: 1, author: "Sarah Thomas", date: "2026-06-28", text: "May report delivered, they'd like donut chart to include YoY comparison next time." }],
     reminders: [{ id: 1, text: "Follow up on overdue invoice", date: "2026-07-22", recurring: "none", done: false, assignee: "Vanessa" }],
@@ -127,7 +129,7 @@ const initialClients = [
     id: "coastal", name: "Coastal Build Group", legalName: "Coastal Build Group Ltd", logo: null,
     contract: { start: "2025-03-01", renewal: "2026-03-01", value: "$4,200 / yr", plan: "Monthly Compliance Pack" },
     billing: { contact: "Rangi Ropata", email: "accounts@coastalbuild.co.nz", terms: "Monthly, 1st", status: "Current" },
-    billingType: "FlatFee", billingSetupDone: true,
+    billingType: "FlatFee", billingSetupDone: true, profile: "Standard Client",
     contacts: [{ id: 1, name: "Rangi Ropata", role: "Director", email: "rangi@coastalbuild.co.nz", phone: "" }],
     notes: [], reminders: [], ohsmsLastIssued: "2025-09-01", ohsmsDue: "2026-09-01",
     extras: [], hours: { included: 0, log: [{ id: 1, date: "2026-07-18", member: "Sophie", hours: 3, description: "Ad-hoc query support outside the usual pack" }] }, users: { log: [{ id: 1, month: "2026-07", count: 4 }] },
@@ -137,7 +139,7 @@ const initialClients = [
     id: "primefencing", name: "Prime Fencing Ltd", legalName: "Prime Fencing Ltd", logo: null,
     contract: { start: "2025-08-15", renewal: "2026-08-15", value: "$3,000 / yr", plan: "Monthly Compliance Pack" },
     billing: { contact: "Aroha Ngata", email: "office@primefencing.co.nz", terms: "Monthly, 15th", status: "Current" },
-    billingType: "FlatFee", billingSetupDone: true,
+    billingType: "FlatFee", billingSetupDone: true, profile: "Standard Client",
     contacts: [{ id: 1, name: "Aroha Ngata", role: "Office Manager", email: "aroha@primefencing.co.nz", phone: "" }],
     notes: [], reminders: [], ohsmsLastIssued: "2025-08-15", ohsmsDue: "2026-08-15",
     extras: [], hours: { included: 0, log: [] }, users: { log: [{ id: 1, month: "2026-07", count: 2 }] },
@@ -404,7 +406,7 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
   const [newClientForm, setNewClientForm] = useState({
     name: "", legalName: "", plan: "", contractStart: "", contractRenewal: "",
     billingContact: "", billingEmail: "", billingTerms: "", billingStatus: "Current",
-    billingType: "FlatFee", includedHours: "", ohsmsLastIssued: "",
+    billingType: "FlatFee", profile: "Standard Client", includedHours: "", ohsmsLastIssued: "",
   });
   const setNCF = (field, value) => setNewClientForm((f) => ({ ...f, [field]: value }));
   const [showArchived, setShowArchived] = useState(false);
@@ -443,14 +445,14 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
         contact: newClientForm.billingContact, email: newClientForm.billingEmail,
         terms: newClientForm.billingTerms || "TBC", status: newClientForm.billingStatus,
       },
-      billingType: newClientForm.billingType, billingSetupDone: true,
+      billingType: newClientForm.billingType, billingSetupDone: true, profile: newClientForm.profile,
       contacts: [], notes: [], reminders: [], extras: [],
       hours: { included: Number(newClientForm.includedHours) || 0, log: [] }, users: { log: [] },
       ohsmsLastIssued: lastIssued, ohsmsDue: lastIssued ? addDays(lastIssued, 365) : addDays(today(), 365),
       intake: null,
     });
     setSelectedId(id);
-    setNewClientForm({ name: "", legalName: "", plan: "", contractStart: "", contractRenewal: "", billingContact: "", billingEmail: "", billingTerms: "", billingStatus: "Current", billingType: "FlatFee", includedHours: "", ohsmsLastIssued: "" });
+    setNewClientForm({ name: "", legalName: "", plan: "", contractStart: "", contractRenewal: "", billingContact: "", billingEmail: "", billingTerms: "", billingStatus: "Current", billingType: "FlatFee", profile: "Standard Client", includedHours: "", ohsmsLastIssued: "" });
     setShowAddClient(false);
   };
 
@@ -572,6 +574,12 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
                   <option value="FlatFee">Flat fee only</option>
                   <option value="SubscriptionHours">Subscription + hours</option>
                   <option value="Hourly">Hourly</option>
+                </select>
+              </div>
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: T.slate }}>Client profile</div>
+                <select value={newClientForm.profile} onChange={(e) => setNCF("profile", e.target.value)} className="w-full text-sm px-2.5 py-2 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
+                  {CLIENT_PROFILES.map((p) => <option key={p} value={p}>{p}</option>)}
                 </select>
               </div>
               <div>
@@ -739,6 +747,13 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
                     <option value="FlatFee">Flat fee only — nothing to track</option>
                     <option value="SubscriptionHours">Subscription + hours to track</option>
                     <option value="Hourly">Hourly — billed against included hours</option>
+                  </select>
+                </div>
+                <div>
+                  <div className="text-xs font-semibold" style={{ color: T.slate }}>CLIENT PROFILE</div>
+                  <select value={client.profile || "Standard Client"} onChange={(e) => updateClient((c) => ({ ...c, profile: e.target.value }))}
+                    className="text-sm px-2 py-1 rounded-lg outline-none mt-0.5" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
+                    {CLIENT_PROFILES.map((p) => <option key={p} value={p}>{p}</option>)}
                   </select>
                 </div>
               </div>
@@ -1162,6 +1177,8 @@ function ResellersView({ resellers, selectedId, setSelectedId }) {
   const [showAddReseller, setShowAddReseller] = useState(false);
   const [newResellerName, setNewResellerName] = useState("");
   const [newClient, setNewClient] = useState({ name: "", users: "" });
+  const [expandedResellerClients, setExpandedResellerClients] = useState({});
+  const toggleResellerClientHistory = (id) => setExpandedResellerClients((prev) => ({ ...prev, [id]: !prev[id] }));
   const [newTask, setNewTask] = useState({ text: "", assignee: TEAM[0] });
   const [showArchived, setShowArchived] = useState(false);
   const visibleResellers = resellers.filter((r) => (showArchived ? r.archived : !r.archived));
@@ -1283,14 +1300,30 @@ function ResellersView({ resellers, selectedId, setSelectedId }) {
           <div className="text-sm font-semibold mb-3" style={{ color: T.ink }}>Their clients</div>
           <div className="flex flex-col gap-2 mb-3">
             {reseller.clients.map((c) => (
-              <div key={c.id} className="flex items-center justify-between text-sm py-1.5" style={{ borderBottom: `1px solid ${T.border}` }}>
-                <span style={{ color: T.ink }}>{c.name}</span>
-                <div className="flex items-center gap-3">
-                  <span className="font-bold" style={{ color: T.tealDark }}>{latestUsers(c)} users</span>
-                  <input type="number" placeholder="New count" onKeyDown={(e) => { if (e.key === "Enter") { logResellerClientUsers(c.id, e.target.value); e.target.value = ""; } }}
-                    className="w-24 text-xs px-2 py-1 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
-                  <button onClick={() => removeResellerClient(c.id)}><Trash2 size={14} color={T.slateLight} /></button>
+              <div key={c.id} style={{ borderBottom: `1px solid ${T.border}` }} className="py-1.5">
+                <div className="flex items-center justify-between text-sm">
+                  <button onClick={() => toggleResellerClientHistory(c.id)} className="flex items-center gap-1.5" style={{ color: T.ink }}>
+                    <ChevronDown size={13} color={T.slateLight} style={{ transform: expandedResellerClients[c.id] ? "none" : "rotate(-90deg)" }} />
+                    {c.name}
+                  </button>
+                  <div className="flex items-center gap-3">
+                    <span className="font-bold" style={{ color: T.tealDark }}>{latestUsers(c)} users</span>
+                    <input type="number" placeholder="New count" onKeyDown={(e) => { if (e.key === "Enter") { logResellerClientUsers(c.id, e.target.value); e.target.value = ""; } }}
+                      className="w-24 text-xs px-2 py-1 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+                    <button onClick={() => removeResellerClient(c.id)}><Trash2 size={14} color={T.slateLight} /></button>
+                  </div>
                 </div>
+                {expandedResellerClients[c.id] && (
+                  <div className="mt-2 mb-1 rounded-lg" style={{ background: T.paperAlt, border: `1px solid ${T.border}` }}>
+                    {[...c.users.log].reverse().map((u) => (
+                      <div key={u.id} className="flex items-center justify-between text-xs px-3 py-1.5" style={{ borderBottom: `1px solid ${T.border}` }}>
+                        <span style={{ color: T.slate }}>{u.month}</span>
+                        <span className="font-semibold" style={{ color: T.ink }}>{u.count} users</span>
+                      </div>
+                    ))}
+                    {c.users.log.length === 0 && <div className="text-xs px-3 py-2" style={{ color: T.slateLight }}>No history logged yet.</div>}
+                  </div>
+                )}
               </div>
             ))}
             {reseller.clients.length === 0 && <div className="text-xs" style={{ color: T.slateLight }}>No clients logged for this reseller yet.</div>}
@@ -1757,6 +1790,81 @@ function WorkflowsView({ workflows }) {
 }
 
 
+/* ---------- Dashboards (client journey, split by profile) ---------- */
+function dashboardMonths() {
+  const months = [];
+  for (let i = 11; i >= 0; i--) {
+    const d = new Date();
+    d.setMonth(d.getMonth() - i);
+    months.push(d.toISOString().slice(0, 7));
+  }
+  return months;
+}
+function monthLabel(m) {
+  return new Date(m + "-02").toLocaleDateString("en-NZ", { month: "short" });
+}
+// Touchpoints = logged hours + notes for that month — the two things in the data model
+// that carry a real date and represent actual client-facing activity.
+function touchpointCounts(client, months) {
+  const counts = Object.fromEntries(months.map((m) => [m, 0]));
+  (client.hours?.log || []).forEach((h) => { const m = (h.date || "").slice(0, 7); if (m in counts) counts[m]++; });
+  (client.notes || []).forEach((n) => { const m = (n.date || "").slice(0, 7); if (m in counts) counts[m]++; });
+  return counts;
+}
+
+function DashboardsView({ clients }) {
+  const months = useMemo(() => dashboardMonths(), []);
+  const active = clients.filter((c) => !c.archived);
+  const groups = CLIENT_PROFILES.map((p) => ({ profile: p, list: active.filter((c) => (c.profile || "Standard Client") === p) }));
+
+  return (
+    <div className="flex flex-col gap-8">
+      <div className="text-sm" style={{ color: T.slate }}>
+        Each dot is a month; darker means more touchpoints (hours logged + notes added) that month — a quick way to spot a client who's gone quiet.
+      </div>
+      {groups.map((g) => (
+        <div key={g.profile}>
+          <div className="text-sm font-bold mb-3" style={{ color: T.ink }}>
+            {g.profile} <span className="font-normal" style={{ color: T.slateLight }}>({g.list.length})</span>
+          </div>
+          <Card style={{ padding: 16, overflowX: "auto" }}>
+            {g.list.length === 0 ? (
+              <div className="text-xs py-3" style={{ color: T.slateLight }}>No clients with this profile yet.</div>
+            ) : (
+              <div style={{ display: "grid", gridTemplateColumns: "160px repeat(12, minmax(28px, 1fr))", gap: 6, minWidth: 560 }}>
+                <div />
+                {months.map((m) => <div key={m} className="text-[10px] text-center font-semibold" style={{ color: T.slateLight }}>{monthLabel(m)}</div>)}
+                {g.list.map((c) => {
+                  const counts = touchpointCounts(c, months);
+                  return (
+                    <React.Fragment key={c.id}>
+                      <div className="text-xs font-medium py-1.5 truncate" style={{ color: T.ink }}>{c.name}</div>
+                      {months.map((m) => {
+                        const n = counts[m];
+                        const color = n === 0 ? T.border : n <= 2 ? T.amber : T.tealDark;
+                        return (
+                          <div key={m} className="flex items-center justify-center py-1.5">
+                            <div title={`${c.name} — ${monthLabel(m)}: ${n} touchpoint${n === 1 ? "" : "s"}`}
+                              style={{ width: 14, height: 14, borderRadius: 999, background: color, opacity: n === 0 ? 0.5 : 1 }} />
+                          </div>
+                        );
+                      })}
+                    </React.Fragment>
+                  );
+                })}
+              </div>
+            )}
+          </Card>
+        </div>
+      ))}
+      <div className="text-xs text-center" style={{ color: T.slateLight }}>
+        Hover a dot to see the exact count. Task completions aren't counted yet since tasks don't currently record a completion date.
+      </div>
+    </div>
+  );
+}
+
+
 export default function App() {
   const [module, setModule] = useState("clients");
   const [currentUser, setCurrentUser] = useState(null);
@@ -2024,7 +2132,7 @@ export default function App() {
       name: lead.company, legalName: lead.company, logo: null,
       contract: { start: today(), renewal: addDays(today(), 365), value: lead.value + " / yr", plan: "New client — plan to confirm" },
       billing: { contact: lead.contact, email: lead.formEmail, terms: "TBC", status: "Current" },
-      billingType: "FlatFee", billingSetupDone: false,
+      billingType: "FlatFee", billingSetupDone: false, profile: "Standard Client",
       notes: [], reminders: [], contacts: [], ohsmsLastIssued: null, ohsmsDue: addDays(today(), 90),
       extras: [], hours: { included: intake.supportHours, log: [] }, users: { log: [] }, intake,
     };
@@ -2081,6 +2189,7 @@ export default function App() {
         <NavItem icon={Layers} label="Systems" active={module === "systems"} onClick={() => setModule("systems")} />
         <NavItem icon={TrendingUp} label="Sales" active={module === "sales"} onClick={() => setModule("sales")} />
         <NavItem icon={ClipboardList} label="Billing" active={module === "billing"} onClick={() => setModule("billing")} />
+        <NavItem icon={LayoutDashboard} label="Dashboards" active={module === "dashboards"} onClick={() => setModule("dashboards")} />
         <NavItem icon={Store} label="Resellers" active={module === "resellers"} onClick={() => setModule("resellers")} />
         <NavItem icon={ListChecks} label="Workflows" active={module === "workflows"} onClick={() => setModule("workflows")} />
         <NavItem icon={ListTodo} label="My Tasks" active={module === "tasks"} onClick={() => setModule("tasks")} />
@@ -2098,7 +2207,7 @@ export default function App() {
         <div className="flex items-center justify-between px-8 py-5" style={{ borderBottom: `1px solid ${T.border}` }}>
           <div>
             <div className="text-xl font-bold" style={{ color: T.ink }}>
-              {{ clients: "Clients", systems: "Systems", sales: "Sales", billing: "Billing", workflows: "Workflows", resellers: "Resellers", tasks: "My Tasks" }[module]}
+              {{ clients: "Clients", systems: "Systems", sales: "Sales", billing: "Billing", workflows: "Workflows", resellers: "Resellers", tasks: "My Tasks", dashboards: "Dashboards" }[module]}
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -2118,6 +2227,7 @@ export default function App() {
           {module === "systems" && <SystemsView clients={clients} selectedId={selectedClient} setSelectedId={setSelectedClient} />}
           {module === "sales" && <SalesView leads={leads} convertLeadToClient={convertLeadToClient} />}
           {module === "billing" && <BillingOverview clients={clients} resellers={resellers} />}
+          {module === "dashboards" && <DashboardsView clients={clients} />}
           {module === "workflows" && <WorkflowsView workflows={workflows} />}
           {module === "resellers" && <ResellersView resellers={resellers} selectedId={selectedReseller} setSelectedId={setSelectedReseller} />}
           {module === "tasks" && <TasksView tasks={tasks} clients={clients} onboardings={onboardings} currentUser={currentUser} goToClient={goToClient} resellers={resellers} goToReseller={goToReseller} />}

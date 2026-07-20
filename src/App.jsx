@@ -7,8 +7,9 @@ import {
 } from "lucide-react";
 import { collection, doc, onSnapshot, updateDoc, setDoc, getDocs, getDoc, deleteDoc } from "firebase/firestore";
 import { signOut } from "firebase/auth";
-import { db, auth } from "./firebase";
-import { ALWAYS_SECTIONS, CONDITIONAL_SECTIONS, COMPLIANCE_EXTRA_SECTIONS, ALWAYS_PROCEDURES, CONDITIONAL_PROCEDURES, COMPLIANCE_EXTRA_PROCEDURES, ALWAYS_POLICIES, CONDITIONAL_POLICIES, COMPLIANCE_EXTRA_FORMS } from "./ohsmsLogic";
+import { ref as storageRef, getDownloadURL } from "firebase/storage";
+import { db, auth, storage } from "./firebase";
+import { ALWAYS_SECTIONS, CONDITIONAL_SECTIONS, COMPLIANCE_EXTRA_SECTIONS, ALWAYS_PROCEDURES, CONDITIONAL_PROCEDURES, COMPLIANCE_EXTRA_PROCEDURES, ALWAYS_POLICIES, CONDITIONAL_POLICIES } from "./ohsmsLogic";
 
 /* ---------- Design tokens (OSHE brand) ---------- */
 const T = {
@@ -985,11 +986,14 @@ const DOCUMENT_CATEGORIES = [
   { key: "sections", label: "Manual Sections", always: ALWAYS_SECTIONS, conditional: CONDITIONAL_SECTIONS, complianceExtra: COMPLIANCE_EXTRA_SECTIONS },
   { key: "procedures", label: "Procedures", always: ALWAYS_PROCEDURES, conditional: CONDITIONAL_PROCEDURES, complianceExtra: COMPLIANCE_EXTRA_PROCEDURES },
   { key: "policies", label: "Policies", always: ALWAYS_POLICIES, conditional: CONDITIONAL_POLICIES, complianceExtra: [] },
-  { key: "forms", label: "Forms", always: [], conditional: [], complianceExtra: COMPLIANCE_EXTRA_FORMS },
 ];
 
 function categoryItems(category) {
   return [...category.always, ...category.conditional.map((c) => c.label), ...category.complianceExtra];
+}
+
+function templateKey(categoryKey, label) {
+  return `${categoryKey}::${label}`.replace(/\//g, "-");
 }
 
 // Default ticks: if this client actually has a computed OHSMS pack (came through the real
@@ -1001,12 +1005,168 @@ function defaultChecked(client, category) {
   return Object.fromEntries(categoryItems(category).map((label) => [label, packList ? packList.includes(label) : category.always.includes(label)]));
 }
 
-function SystemsView({ clients, selectedId, setSelectedId }) {
+async function exportReviewLogPdf(client) {
+  const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib");
+  const pdfDoc = await PDFDocument.create();
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const margin = 50;
+  let page = pdfDoc.addPage([595, 842]);
+  let y = 792;
+
+  const ensureSpace = (needed) => { if (y - needed < margin) { page = pdfDoc.addPage([595, 842]); y = 792; } };
+
+  page.drawText(`${client.name} — OHSMS Review & Change Log`, { x: margin, y, size: 14, font: boldFont, color: rgb(0.08, 0.16, 0.14) });
+  y -= 20;
+  page.drawText(`Exported ${fmtDate(today())}`, { x: margin, y, size: 9, font, color: rgb(0.36, 0.45, 0.45) });
+  y -= 26;
+
+  const entries = [...(client.reviewLog || [])].reverse();
+  if (entries.length === 0) {
+    page.drawText("No review or change entries logged yet.", { x: margin, y, size: 10, font, color: rgb(0.36, 0.45, 0.45) });
+  }
+  entries.forEach((entry) => {
+    ensureSpace(40);
+    page.drawText(`${fmtDate(entry.date)} — ${entry.type} — ${entry.person}`, { x: margin, y, size: 10, font: boldFont, color: rgb(0.08, 0.16, 0.14) });
+    y -= 14;
+    const words = (entry.notes || "").split(" ");
+    let line = "";
+    words.forEach((w) => {
+      const test = line ? `${line} ${w}` : w;
+      if (font.widthOfTextAtSize(test, 9) > 495 && line) {
+        ensureSpace(12);
+        page.drawText(line, { x: margin, y, size: 9, font, color: rgb(0.36, 0.45, 0.45) });
+        y -= 12;
+        line = w;
+      } else line = test;
+    });
+    if (line) { ensureSpace(12); page.drawText(line, { x: margin, y, size: 9, font, color: rgb(0.36, 0.45, 0.45) }); y -= 12; }
+    y -= 10;
+  });
+
+  const bytes = await pdfDoc.save();
+  const blob = new Blob([bytes], { type: "application/pdf" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${client.name.replace(/\s+/g, "_")}-review-log.pdf`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+async function loadClientLogoImage(client, pdfDoc) {
+  if (!client.logo) return null;
+  try {
+    const url = await getDownloadURL(storageRef(storage, client.logo));
+    const resp = await fetch(url);
+    const bytes = await resp.arrayBuffer();
+    if (client.logo.toLowerCase().endsWith(".jpg") || client.logo.toLowerCase().endsWith(".jpeg")) {
+      return await pdfDoc.embedJpg(bytes);
+    }
+    return await pdfDoc.embedPng(bytes);
+  } catch (err) {
+    console.error("Couldn't load client logo for PDF:", err);
+    return null;
+  }
+}
+
+function wrapTextLines(text, font, size, maxWidth) {
+  const words = text.split(" ");
+  const lines = [];
+  let line = "";
+  for (const word of words) {
+    const test = line ? `${line} ${word}` : word;
+    if (font.widthOfTextAtSize(test, size) > maxWidth && line) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = test;
+    }
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+// Downloads a real PDF of what's currently ticked. Manual sections flow continuously (a
+// section only forces a new page if there genuinely isn't room left); Procedures and
+// Policies each start on their own fresh page, since they're separate standalone documents
+// just bundled together for convenience, not one flowing manual.
+async function downloadBuildPdf({ client, category, categoryKey, included, documentTemplates }) {
+  const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib");
+  const pdfDoc = await PDFDocument.create();
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const pageWidth = 595, pageHeight = 842, margin = 50;
+  const maxWidth = pageWidth - margin * 2;
+  const ink = rgb(0.08, 0.14, 0.13);
+  const slate = rgb(0.36, 0.45, 0.45);
+  const teal = rgb(0.04, 0.68, 0.63);
+  const charcoal = rgb(0.10, 0.17, 0.18);
+
+  const logoImage = await loadClientLogoImage(client, pdfDoc);
+
+  // Cover page
+  let page = pdfDoc.addPage([pageWidth, pageHeight]);
+  page.drawRectangle({ x: 0, y: pageHeight - 230, width: pageWidth, height: 230, color: charcoal });
+  if (logoImage) {
+    const scale = Math.min(1, 44 / logoImage.height);
+    page.drawImage(logoImage, { x: margin, y: pageHeight - 90, width: logoImage.width * scale, height: logoImage.height * scale });
+  }
+  page.drawText(category.label.toUpperCase(), { x: margin, y: pageHeight - 140, size: 10, font: boldFont, color: teal });
+  page.drawText(client.name, { x: margin, y: pageHeight - 172, size: 22, font: boldFont, color: rgb(1, 1, 1) });
+  page.drawText(`Prepared by OSHE Limited  ·  ${fmtDate(today())}`, { x: margin, y: pageHeight - 198, size: 10, font, color: rgb(0.72, 0.78, 0.78) });
+
+  page = pdfDoc.addPage([pageWidth, pageHeight]);
+  let y = pageHeight - margin;
+  const isFlowing = categoryKey === "sections";
+
+  const newPage = () => { page = pdfDoc.addPage([pageWidth, pageHeight]); y = pageHeight - margin; };
+  const ensureSpace = (needed) => { if (y - needed < margin) newPage(); };
+
+  included.forEach((label, i) => {
+    const raw = documentTemplates[templateKey(categoryKey, label)] || "";
+    const content = raw.replaceAll("The Company", client.name) || `No template text written yet for "${label}".`;
+    const bodyLines = wrapTextLines(content, font, 10, maxWidth);
+
+    if (!isFlowing && i > 0) newPage();
+    else ensureSpace(24 + Math.min(bodyLines.length, 3) * 13);
+
+    page.drawText(`${i + 1}. ${label}`, { x: margin, y, size: 12, font: boldFont, color: teal });
+    y -= 20;
+    bodyLines.forEach((line) => {
+      ensureSpace(13);
+      page.drawText(line, { x: margin, y, size: 10, font, color: ink });
+      y -= 13;
+    });
+    y -= 16;
+  });
+
+  const pageCount = pdfDoc.getPageCount();
+  for (let p = 1; p < pageCount; p++) {
+    const pg = pdfDoc.getPage(p);
+    pg.drawText(`${client.name} — ${category.label}  ·  Page ${p} of ${pageCount - 1}`, { x: margin, y: 24, size: 8, font, color: slate });
+  }
+
+  const bytes = await pdfDoc.save();
+  const blob = new Blob([bytes], { type: "application/pdf" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${client.name.replace(/\s+/g, "_")}-${category.label.replace(/\s+/g, "_")}.pdf`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+
+function SystemsView({ clients, selectedId, setSelectedId, documentTemplates, saveDocumentTemplate }) {
   const client = clients.find((c) => c.id === selectedId) || clients[0];
+  const [mode, setMode] = useState("build");
   const [categoryKey, setCategoryKey] = useState("sections");
   const category = DOCUMENT_CATEGORIES.find((c) => c.key === categoryKey);
   const [checked, setChecked] = useState(() => defaultChecked(client, category));
   const [logo, setLogo] = useState(null);
+  const [downloading, setDownloading] = useState(false);
+  const [newLogEntry, setNewLogEntry] = useState({ type: "Review", person: TEAM[0], notes: "" });
 
   useEffect(() => {
     setChecked(defaultChecked(client, category));
@@ -1017,88 +1177,215 @@ function SystemsView({ clients, selectedId, setSelectedId }) {
   const included = items.filter((label) => checked[label]);
   const hasRealAnswers = Boolean(client?.intake?.ohsmsPack);
 
+  const contentFor = (label) => {
+    const raw = documentTemplates[templateKey(categoryKey, label)];
+    if (!raw) return `No template written yet for "${label}" — add it on the Templates tab.`;
+    return raw.replaceAll("The Company", client.name);
+  };
+
+  const addLogEntry = () => {
+    if (!newLogEntry.notes.trim()) return;
+    const entry = { id: Date.now(), date: today(), type: newLogEntry.type, person: newLogEntry.person, notes: newLogEntry.notes };
+    updateDoc(doc(db, "clients", client.id), { reviewLog: [...(client.reviewLog || []), entry] });
+    setNewLogEntry({ type: "Review", person: TEAM[0], notes: "" });
+  };
+
   return (
-    <div className="flex h-full gap-6">
-      <div className="w-64 shrink-0 flex flex-col gap-4">
-        <div>
-          <div className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: T.slate }}>Client</div>
-          <select value={client.id} onChange={(e) => setSelectedId(e.target.value)}
-            className="w-full text-sm px-3 py-2 rounded-lg outline-none" style={{ background: T.card, border: `1px solid ${T.border}`, color: T.ink }}>
-            {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
-          {hasRealAnswers ? (
-            <div className="text-[11px] mt-1.5" style={{ color: T.tealDark }}>Pre-filled from their sign-up form answers</div>
-          ) : (
-            <div className="text-[11px] mt-1.5" style={{ color: T.slateLight }}>No sign-up answers on file — defaults only, tick manually</div>
-          )}
-        </div>
-        <div className="flex flex-col gap-1 rounded-lg p-1" style={{ background: T.paperAlt }}>
-          {DOCUMENT_CATEGORIES.map((cat) => (
-            <button key={cat.key} onClick={() => setCategoryKey(cat.key)} className="text-xs font-semibold py-1.5 rounded-md text-left px-2"
-              style={{ background: categoryKey === cat.key ? T.card : "transparent", color: categoryKey === cat.key ? T.tealDark : T.slate }}>
-              {cat.label}
-            </button>
-          ))}
-        </div>
-        <Card style={{ padding: 16 }}>
-          <div className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: T.slate }}>Client logo</div>
-          <button onClick={() => setLogo(logo ? null : "placeholder")} className="w-full flex flex-col items-center justify-center gap-1.5 py-6 rounded-lg text-xs"
-            style={{ border: `1.5px dashed ${T.slateLight}`, color: T.slate, background: T.paperAlt }}>
-            {logo ? <ImageIcon size={20} color={T.tealDark} /> : <Upload size={18} />}
-            {logo ? "logo uploaded" : "Upload logo"}
+    <div className="flex h-full flex-col gap-4">
+      <div className="flex rounded-lg p-1 w-fit" style={{ background: T.paperAlt }}>
+        {[{ key: "build", label: "Build" }, { key: "templates", label: "Templates" }, { key: "reviewlog", label: "Review Log" }].map((m) => (
+          <button key={m.key} onClick={() => setMode(m.key)} className="text-xs font-semibold px-4 py-1.5 rounded-md"
+            style={{ background: mode === m.key ? T.card : "transparent", color: mode === m.key ? T.tealDark : T.slate }}>
+            {m.label}
           </button>
-        </Card>
-        <Card style={{ padding: 16 }}>
-          <div className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: T.slate }}>Redo reminder</div>
-          <div className="text-sm font-medium" style={{ color: T.ink }}>{fmtDate(client.ohsmsDue)}</div>
-          <div className="text-xs mt-1" style={{ color: T.slate }}>Auto-reminder fires 1 month prior</div>
-        </Card>
+        ))}
       </div>
 
-      <div className="w-80 shrink-0 flex flex-col gap-2 overflow-y-auto">
-        <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: T.slate }}>{category.label} {included.length}/{items.length} selected</div>
-        {items.map((label) => {
-          const isAlways = category.always.includes(label);
-          const isComplianceExtra = category.complianceExtra.includes(label);
-          return (
-            <button key={label} onClick={() => setChecked((c) => ({ ...c, [label]: !c[label] }))} className="flex items-start gap-3 p-3 rounded-lg text-left transition-colors"
-              style={{ background: checked[label] ? T.paperAlt : T.card, border: `1px solid ${checked[label] ? T.tealDark : T.border}` }}>
-              {checked[label] ? <CheckCircle2 size={17} color={T.tealDark} className="shrink-0 mt-0.5" /> : <Circle size={17} color={T.slateLight} className="shrink-0 mt-0.5" />}
-              <div>
-                <div className="text-sm font-medium" style={{ color: T.ink }}>{label}</div>
-                {isAlways && <div className="text-[10px]" style={{ color: T.slateLight }}>Always included</div>}
-                {isComplianceExtra && <div className="text-[10px]" style={{ color: T.amber }}>SiteWise / Totika add-on</div>}
-              </div>
-            </button>
-          );
-        })}
-        {items.length === 0 && <div className="text-xs text-center py-6" style={{ color: T.slateLight }}>No items in this category.</div>}
-      </div>
-
-      <div className="flex-1 min-w-0">
-        <div className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: T.slate }}>Live preview — {category.label}</div>
-        <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${T.border}`, background: "#fff", maxHeight: "calc(100% - 28px)", overflowY: "auto" }}>
-          <div style={{ background: T.charcoal, padding: "36px 32px", color: "#fff" }}>
-            <div className="w-16 h-16 rounded-md flex items-center justify-center mb-6" style={{ background: logo ? T.teal : "rgba(255,255,255,0.08)", border: "1px dashed rgba(255,255,255,0.3)" }}>
-              {logo ? <ImageIcon size={22} color={T.charcoal} /> : <ImageIcon size={18} color="rgba(255,255,255,0.4)" />}
+      {mode === "build" && (
+        <div className="flex flex-1 gap-6 min-h-0">
+          <div className="w-64 shrink-0 flex flex-col gap-4">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: T.slate }}>Client</div>
+              <select value={client.id} onChange={(e) => setSelectedId(e.target.value)}
+                className="w-full text-sm px-3 py-2 rounded-lg outline-none" style={{ background: T.card, border: `1px solid ${T.border}`, color: T.ink }}>
+                {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+              {hasRealAnswers ? (
+                <div className="text-[11px] mt-1.5" style={{ color: T.tealDark }}>Pre-filled from their sign-up form answers</div>
+              ) : (
+                <div className="text-[11px] mt-1.5" style={{ color: T.slateLight }}>No sign-up answers on file — defaults only, tick manually</div>
+              )}
             </div>
-            <div className="text-xs tracking-widest uppercase" style={{ color: T.teal }}>{category.label}</div>
-            <div className="text-2xl font-bold mt-2">{client.name}</div>
-            <div className="text-sm mt-1" style={{ color: "#9FB4B3" }}>Prepared by OSHE Limited &middot; {fmtDate(today())}</div>
+            <div className="flex flex-col gap-1 rounded-lg p-1" style={{ background: T.paperAlt }}>
+              {DOCUMENT_CATEGORIES.map((cat) => (
+                <button key={cat.key} onClick={() => setCategoryKey(cat.key)} className="text-xs font-semibold py-1.5 rounded-md text-left px-2"
+                  style={{ background: categoryKey === cat.key ? T.card : "transparent", color: categoryKey === cat.key ? T.tealDark : T.slate }}>
+                  {cat.label}
+                </button>
+              ))}
+            </div>
+            <Card style={{ padding: 16 }}>
+              <div className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: T.slate }}>Client logo</div>
+              <button onClick={() => setLogo(logo ? null : "placeholder")} className="w-full flex flex-col items-center justify-center gap-1.5 py-6 rounded-lg text-xs"
+                style={{ border: `1.5px dashed ${T.slateLight}`, color: T.slate, background: T.paperAlt }}>
+                {logo ? <ImageIcon size={20} color={T.tealDark} /> : <Upload size={18} />}
+                {logo ? "logo uploaded" : "Upload logo"}
+              </button>
+              <div className="text-[11px] mt-2" style={{ color: T.slateLight }}>Same spot on every document — the cover header below.</div>
+            </Card>
+            <Card style={{ padding: 16 }}>
+              <div className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: T.slate }}>Redo reminder</div>
+              <div className="text-sm font-medium" style={{ color: T.ink }}>{fmtDate(client.ohsmsDue)}</div>
+              <div className="text-xs mt-1" style={{ color: T.slate }}>Auto-reminder fires 1 month prior</div>
+            </Card>
           </div>
-          <div className="p-6 flex flex-col gap-4">
-            {included.length === 0 && <div className="text-sm text-center py-10" style={{ color: T.slateLight }}>Nothing selected — tick items on the left to build this document.</div>}
-            {included.map((label, i) => (
-              <div key={label}>
-                <div className="text-sm font-bold" style={{ color: T.tealDark }}>{i + 1}. {label}</div>
-                <div className="text-xs mt-1 leading-relaxed" style={{ color: T.slate }}>
-                  Standard OSHE template content for {client.name} — final wording to confirm.
+
+          <div className="w-80 shrink-0 flex flex-col gap-2 overflow-y-auto">
+            <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: T.slate }}>{category.label} {included.length}/{items.length} selected</div>
+            {items.map((label) => {
+              const isAlways = category.always.includes(label);
+              const isComplianceExtra = category.complianceExtra.includes(label);
+              const hasContent = Boolean(documentTemplates[templateKey(categoryKey, label)]);
+              return (
+                <button key={label} onClick={() => setChecked((c) => ({ ...c, [label]: !c[label] }))} className="flex items-start gap-3 p-3 rounded-lg text-left transition-colors"
+                  style={{ background: checked[label] ? T.paperAlt : T.card, border: `1px solid ${checked[label] ? T.tealDark : T.border}` }}>
+                  {checked[label] ? <CheckCircle2 size={17} color={T.tealDark} className="shrink-0 mt-0.5" /> : <Circle size={17} color={T.slateLight} className="shrink-0 mt-0.5" />}
+                  <div>
+                    <div className="text-sm font-medium" style={{ color: T.ink }}>{label}</div>
+                    {isAlways && <div className="text-[10px]" style={{ color: T.slateLight }}>Always included</div>}
+                    {isComplianceExtra && <div className="text-[10px]" style={{ color: T.amber }}>SiteWise / Totika add-on</div>}
+                    {!hasContent && <div className="text-[10px]" style={{ color: T.coral }}>No template text yet</div>}
+                  </div>
+                </button>
+              );
+            })}
+            {items.length === 0 && <div className="text-xs text-center py-6" style={{ color: T.slateLight }}>No items in this category.</div>}
+          </div>
+
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: T.slate }}>Live preview — {category.label}</div>
+              <button
+                disabled={included.length === 0 || downloading}
+                onClick={async () => {
+                  setDownloading(true);
+                  try {
+                    await downloadBuildPdf({ client, category, categoryKey, included, documentTemplates });
+                  } catch (err) {
+                    console.error("PDF download failed:", err);
+                  } finally {
+                    setDownloading(false);
+                  }
+                }}
+                className="text-xs font-semibold px-3 py-1.5 rounded-lg"
+                style={{ background: included.length === 0 ? T.paperAlt : T.tealDark, color: included.length === 0 ? T.slateLight : "#fff", cursor: included.length === 0 ? "not-allowed" : "pointer" }}
+              >
+                {downloading ? "Generating…" : "Download as PDF"}
+              </button>
+            </div>
+            <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${T.border}`, background: "#fff", maxHeight: "calc(100% - 28px)", overflowY: "auto" }}>
+              <div style={{ background: T.charcoal, padding: "36px 32px", color: "#fff" }}>
+                <div className="w-16 h-16 rounded-md flex items-center justify-center mb-6" style={{ background: logo ? T.teal : "rgba(255,255,255,0.08)", border: "1px dashed rgba(255,255,255,0.3)" }}>
+                  {logo ? <ImageIcon size={22} color={T.charcoal} /> : <ImageIcon size={18} color="rgba(255,255,255,0.4)" />}
                 </div>
+                <div className="text-xs tracking-widest uppercase" style={{ color: T.teal }}>{category.label}</div>
+                <div className="text-2xl font-bold mt-2">{client.name}</div>
+                <div className="text-sm mt-1" style={{ color: "#9FB4B3" }}>Prepared by OSHE Limited &middot; {fmtDate(today())}</div>
               </div>
+              <div className="p-6 flex flex-col gap-4">
+                {included.length === 0 && <div className="text-sm text-center py-10" style={{ color: T.slateLight }}>Nothing selected — tick items on the left to build this document.</div>}
+                {included.map((label, i) => (
+                  <div key={label}>
+                    <div className="text-sm font-bold" style={{ color: T.tealDark }}>{i + 1}. {label}</div>
+                    <div className="text-xs mt-1 leading-relaxed whitespace-pre-wrap" style={{ color: T.slate }}>{contentFor(label)}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {mode === "templates" && (
+        <div className="flex-1 min-h-0 flex flex-col gap-4">
+          <div className="text-sm" style={{ color: T.slate }}>
+            Write the master text once here — every client's document pulls from this. Type <b>The Company</b> anywhere you'd refer to the client, and it's swapped for their real name automatically when built.
+          </div>
+          <div className="flex gap-2">
+            {DOCUMENT_CATEGORIES.map((cat) => (
+              <button key={cat.key} onClick={() => setCategoryKey(cat.key)} className="text-xs font-semibold px-3 py-1.5 rounded-lg"
+                style={{ background: categoryKey === cat.key ? T.tealDark : T.paperAlt, color: categoryKey === cat.key ? "#fff" : T.slate }}>
+                {cat.label}
+              </button>
             ))}
           </div>
+          <div className="flex-1 overflow-y-auto flex flex-col gap-3">
+            {categoryItems(category).map((label) => {
+              const key = templateKey(categoryKey, label);
+              return (
+                <Card key={key} style={{ padding: 16 }}>
+                  <div className="text-sm font-semibold mb-2" style={{ color: T.ink }}>{label}</div>
+                  <textarea
+                    defaultValue={documentTemplates[key] || ""}
+                    onBlur={(e) => saveDocumentTemplate(key, e.target.value)}
+                    placeholder={`e.g. The Company is committed to ensuring the health and safety of all workers...`}
+                    rows={3}
+                    className="w-full text-sm px-3 py-2 rounded-lg outline-none resize-y"
+                    style={{ border: `1px solid ${T.border}`, color: T.ink }}
+                  />
+                  <div className="text-[11px] mt-1" style={{ color: T.slateLight }}>Saves automatically when you click away.</div>
+                </Card>
+              );
+            })}
+          </div>
         </div>
-      </div>
+      )}
+
+      {mode === "reviewlog" && (
+        <div className="flex-1 min-h-0 flex flex-col gap-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: T.slate }}>Client</div>
+              <select value={client.id} onChange={(e) => setSelectedId(e.target.value)}
+                className="text-sm px-3 py-2 rounded-lg outline-none" style={{ background: T.card, border: `1px solid ${T.border}`, color: T.ink }}>
+                {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+            <button onClick={() => exportReviewLogPdf(client)} className="text-xs font-semibold px-3 py-2 rounded-lg" style={{ background: T.paperAlt, color: T.tealDark }}>
+              Download log as PDF
+            </button>
+          </div>
+          <div className="text-xs" style={{ color: T.slateLight }}>
+            Tracks when this client's system was reviewed or updated, for compliance purposes — this never appears on the manual/policy/procedure documents themselves, only here and in the downloadable log.
+          </div>
+          <Card style={{ padding: 16 }} className="flex items-center gap-2 flex-wrap">
+            <select value={newLogEntry.type} onChange={(e) => setNewLogEntry({ ...newLogEntry, type: e.target.value })}
+              className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
+              <option>Review</option>
+              <option>Update</option>
+            </select>
+            <select value={newLogEntry.person} onChange={(e) => setNewLogEntry({ ...newLogEntry, person: e.target.value })}
+              className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
+              {TEAM.map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>
+            <input placeholder="What was reviewed or changed?" value={newLogEntry.notes} onChange={(e) => setNewLogEntry({ ...newLogEntry, notes: e.target.value })}
+              className="flex-1 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink, minWidth: 200 }} />
+            <button onClick={addLogEntry} className="text-xs font-semibold px-3 py-1.5 rounded-lg shrink-0" style={{ background: T.tealDark, color: "#fff" }}>Log entry</button>
+          </Card>
+          <div className="flex-1 overflow-y-auto flex flex-col gap-2">
+            {[...(client.reviewLog || [])].reverse().map((entry) => (
+              <Card key={entry.id} style={{ padding: 14 }}>
+                <div className="flex items-center justify-between">
+                  <Pill color={entry.type === "Update" ? T.amber : T.tealDark} bg={T.paperAlt}>{entry.type}</Pill>
+                  <div className="text-xs" style={{ color: T.slate }}>{fmtDate(entry.date)} &middot; {entry.person}</div>
+                </div>
+                <div className="text-sm mt-2" style={{ color: T.ink }}>{entry.notes}</div>
+              </Card>
+            ))}
+            {(!client.reviewLog || client.reviewLog.length === 0) && <div className="text-xs text-center py-6" style={{ color: T.slateLight }}>No entries logged yet.</div>}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2054,6 +2341,19 @@ export default function App() {
     setClientTabRequest({ tab: tab || "overview", nonce: Date.now() });
   };
 
+  // Document templates — the master content library. One doc per item (e.g. "sections::Introduction"),
+  // shared across every client. Written once by Sophie/Vanessa, substituted per client at generation time.
+  const [documentTemplates, setDocumentTemplates] = useState({});
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "documentTemplates"), (snap) => {
+      const map = {};
+      snap.docs.forEach((d) => { map[d.id] = d.data().content || ""; });
+      setDocumentTemplates(map);
+    }, (err) => console.error("Document templates subscription failed:", err));
+    return unsub;
+  }, []);
+  const saveDocumentTemplate = (key, content) => setDoc(doc(db, "documentTemplates", key), { content });
+
   // Workflows — real Firestore collection, one doc per workflow template.
   const initialWorkflows = [
     { id: "wf-standard", name: "Standard Onboarding", isDefault: true, steps: defaultOnboardingTemplate },
@@ -2289,7 +2589,7 @@ export default function App() {
               onboardings={onboardings} updateOnboardingsForClient={updateOnboardingsForClient} workflows={workflows}
               pushNotification={pushNotification} goToWorkflows={() => setModule("workflows")} tabRequest={clientTabRequest} />
           )}
-          {module === "systems" && <SystemsView clients={clients} selectedId={selectedClient} setSelectedId={setSelectedClient} />}
+          {module === "systems" && <SystemsView clients={clients} selectedId={selectedClient} setSelectedId={setSelectedClient} documentTemplates={documentTemplates} saveDocumentTemplate={saveDocumentTemplate} />}
           {module === "sales" && <SalesView leads={leads} convertLeadToClient={convertLeadToClient} />}
           {module === "billing" && <BillingOverview clients={clients} resellers={resellers} />}
           {module === "dashboards" && <DashboardsView clients={clients} />}

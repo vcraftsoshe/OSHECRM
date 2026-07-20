@@ -36,7 +36,7 @@ export const CONDITIONAL_PROCEDURES = [
   { key: "wellbeing", label: "Wellbeing Procedure" },
 ];
 
-export const COMPLIANCE_EXTRA_PROCEDURES = ["Health & Safety Budget Management Procedure", "Health & Safety Issue Resolution Procedure"];
+export const COMPLIANCE_EXTRA_PROCEDURES = ["Health & Safety Budget Management Procedure", "Health & Safety Issue Resolution Procedure", "Annual Health & Safety Budget Form", "Management Review Form", "Annual Objectives & Action Plan", "Internal Audit Schedule", "Internal Audit Report", "Annual H&S Review", "Annual Management Review Minutes"];
 
 export const ALWAYS_POLICIES = ["Health & Safety Policy"];
 
@@ -46,8 +46,6 @@ export const CONDITIONAL_POLICIES = [
   { key: "vehicles", label: "Driver Statement Policy" },
   { key: "environmental", label: "Environmental Policy" },
 ];
-
-export const COMPLIANCE_EXTRA_FORMS = ["Annual Health & Safety Budget Form", "Management Review Form", "Annual Objectives & Action Plan", "Internal Audit Schedule", "Internal Audit Report", "Annual H&S Review", "Annual Management Review Minutes"];
 
 export function computeOhsmsPack(t) {
   const complianceForced = t.compliance === true;
@@ -68,7 +66,5 @@ export function computeOhsmsPack(t) {
   const policies = [...ALWAYS_POLICIES];
   CONDITIONAL_POLICIES.forEach((p) => { if (t[p.key]) policies.push(p.label); });
 
-  const forms = complianceForced ? [...COMPLIANCE_EXTRA_FORMS] : [];
-
-  return { sections, procedures, policies, forms };
+  return { sections, procedures, policies, forms: [] };
 }

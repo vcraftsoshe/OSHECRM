@@ -56,12 +56,6 @@ const SECTION_ITEMS = [
   { label: "19.1 Resources", always: true },
   { label: "19.2 External Advice", always: true },
   { label: "20. Document Control", always: true },
-  { label: "Driving for Work", key: "vehicles" },
-  { label: "Workplace Monitoring", key: "physicalWorkplace" },
-  { label: "Environmental Management", key: "environmental" },
-  { label: "Wellbeing", key: "wellbeing" },
-  { label: "Fitness for Work", key: "drugAlcohol" },
-  { label: "Continual Improvement", key: "continualImprovement" },
 ];
 const ALWAYS_PROCEDURES = ["Incident Reporting & Investigation Procedure", "Hazard & Risk Management Procedure"];
 const CONDITIONAL_PROCEDURES = [

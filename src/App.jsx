@@ -7,9 +7,9 @@ import {
 } from "lucide-react";
 import { collection, doc, onSnapshot, updateDoc, setDoc, getDocs, getDoc, deleteDoc } from "firebase/firestore";
 import { signOut } from "firebase/auth";
-import { ref as storageRef, getDownloadURL } from "firebase/storage";
+import { ref as storageRef, getDownloadURL, uploadBytes } from "firebase/storage";
 import { db, auth, storage } from "./firebase";
-import { SECTION_ITEMS, COMPLIANCE_EXTRA_SECTIONS, ALWAYS_PROCEDURES, CONDITIONAL_PROCEDURES, COMPLIANCE_EXTRA_PROCEDURES, ALWAYS_POLICIES, CONDITIONAL_POLICIES } from "./ohsmsLogic";
+import { SECTION_ITEMS, ALWAYS_PROCEDURES, CONDITIONAL_PROCEDURES, COMPLIANCE_EXTRA_PROCEDURES, ALWAYS_POLICIES, CONDITIONAL_POLICIES } from "./ohsmsLogic";
 
 /* ---------- Design tokens (OSHE brand) ---------- */
 const T = {
@@ -1007,9 +1007,9 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
 const DOCUMENT_CATEGORIES = [
   {
     key: "sections", label: "Manual Sections",
-    itemList: [...SECTION_ITEMS.map((i) => i.label), ...COMPLIANCE_EXTRA_SECTIONS],
+    itemList: SECTION_ITEMS.map((i) => i.label),
     alwaysLabels: SECTION_ITEMS.filter((i) => i.always).map((i) => i.label),
-    complianceExtraLabels: COMPLIANCE_EXTRA_SECTIONS,
+    complianceExtraLabels: [],
   },
   {
     key: "procedures", label: "Procedures",
@@ -1130,68 +1130,125 @@ function wrapTextLines(text, font, size, maxWidth) {
 // just bundled together for convenience, not one flowing manual.
 async function downloadBuildPdf({ client, category, categoryKey, included, documentTemplates }) {
   const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib");
-  const pdfDoc = await PDFDocument.create();
-  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-  const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-  const pageWidth = 595, pageHeight = 842, margin = 50;
-  const maxWidth = pageWidth - margin * 2;
+  const isFlowing = categoryKey === "sections";
   const ink = rgb(0.08, 0.14, 0.13);
   const slate = rgb(0.36, 0.45, 0.45);
   const teal = rgb(0.04, 0.68, 0.63);
   const charcoal = rgb(0.10, 0.17, 0.18);
+  const pageWidth = 595, pageHeight = 842, margin = 50;
+  const maxWidth = pageWidth - margin * 2;
 
-  const logoImage = await loadClientLogoImage(client, pdfDoc);
+  if (isFlowing) {
+    // Manual: one flowing document, sections stack continuously.
+    const pdfDoc = await PDFDocument.create();
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    const logoImage = await loadClientLogoImage(client, pdfDoc);
 
-  // Cover page
-  let page = pdfDoc.addPage([pageWidth, pageHeight]);
-  page.drawRectangle({ x: 0, y: pageHeight - 230, width: pageWidth, height: 230, color: charcoal });
-  if (logoImage) {
-    const scale = Math.min(1, 44 / logoImage.height);
-    page.drawImage(logoImage, { x: margin, y: pageHeight - 90, width: logoImage.width * scale, height: logoImage.height * scale });
+    let page = pdfDoc.addPage([pageWidth, pageHeight]);
+    const bandHeight = 140;
+    page.drawRectangle({ x: 0, y: pageHeight - bandHeight, width: pageWidth, height: bandHeight, color: charcoal });
+    if (logoImage) {
+      const maxLogoH = 50, maxLogoW = 140;
+      const scale = Math.min(maxLogoH / logoImage.height, maxLogoW / logoImage.width, 1);
+      const w = logoImage.width * scale, h = logoImage.height * scale;
+      page.drawImage(logoImage, { x: pageWidth - margin - w, y: pageHeight - bandHeight / 2 - h / 2, width: w, height: h });
+    }
+    page.drawText(category.label.toUpperCase(), { x: margin, y: pageHeight - 55, size: 10, font: boldFont, color: teal });
+    page.drawText(client.name, { x: margin, y: pageHeight - 85, size: 20, font: boldFont, color: rgb(1, 1, 1) });
+    page.drawText("Prepared by OSHE Limited", { x: margin, y: pageHeight - 108, size: 9, font, color: rgb(0.72, 0.78, 0.78) });
+
+    page = pdfDoc.addPage([pageWidth, pageHeight]);
+    let y = pageHeight - margin;
+    const newPage = () => { page = pdfDoc.addPage([pageWidth, pageHeight]); y = pageHeight - margin; };
+    const ensureSpace = (needed) => { if (y - needed < margin) newPage(); };
+
+    included.forEach((label) => {
+      const raw = documentTemplates[templateKey(categoryKey, label)] || "";
+      const content = raw.replaceAll("The Company", client.name) || `No template text written yet for "${label}".`;
+      const bodyLines = wrapTextLines(content, font, 10, maxWidth);
+      ensureSpace(24 + Math.min(bodyLines.length, 3) * 13);
+      page.drawText(label, { x: margin, y, size: 12, font: boldFont, color: teal });
+      y -= 20;
+      bodyLines.forEach((line) => { ensureSpace(13); page.drawText(line, { x: margin, y, size: 10, font, color: ink }); y -= 13; });
+      y -= 16;
+    });
+
+    const pageCount = pdfDoc.getPageCount();
+    for (let p = 0; p < pageCount; p++) {
+      const pg = pdfDoc.getPage(p);
+      const footerText = p === 0
+        ? `Prepared for ${client.name}  ·  ${fmtDate(today())}`
+        : `Prepared for ${client.name}  ·  ${fmtDate(today())}  ·  Page ${p} of ${pageCount - 1}`;
+      pg.drawText(footerText, { x: margin, y: 24, size: 8, font, color: slate });
+    }
+
+    const bytes = await pdfDoc.save();
+    const blob = new Blob([bytes], { type: "application/pdf" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${client.name.replace(/\s+/g, "_")}-${category.label.replace(/\s+/g, "_")}.pdf`;
+    a.click();
+    URL.revokeObjectURL(url);
+    return;
   }
-  page.drawText(category.label.toUpperCase(), { x: margin, y: pageHeight - 140, size: 10, font: boldFont, color: teal });
-  page.drawText(client.name, { x: margin, y: pageHeight - 172, size: 22, font: boldFont, color: rgb(1, 1, 1) });
-  page.drawText(`Prepared by OSHE Limited  ·  ${fmtDate(today())}`, { x: margin, y: pageHeight - 198, size: 10, font, color: rgb(0.72, 0.78, 0.78) });
 
-  page = pdfDoc.addPage([pageWidth, pageHeight]);
-  let y = pageHeight - margin;
-  const isFlowing = categoryKey === "sections";
+  // Procedures / Policies: each ticked item is a genuinely separate standalone document —
+  // download each one as its own real PDF file, not bundled into anything.
+  for (let idx = 0; idx < included.length; idx++) {
+    const label = included[idx];
+    const pdfDoc = await PDFDocument.create();
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    const logoImage = await loadClientLogoImage(client, pdfDoc);
 
-  const newPage = () => { page = pdfDoc.addPage([pageWidth, pageHeight]); y = pageHeight - margin; };
-  const ensureSpace = (needed) => { if (y - needed < margin) newPage(); };
+    let page = pdfDoc.addPage([pageWidth, pageHeight]);
+    const bandHeight = 100;
+    page.drawRectangle({ x: 0, y: pageHeight - bandHeight, width: pageWidth, height: bandHeight, color: charcoal });
+    if (logoImage) {
+      const maxLogoH = 36, maxLogoW = 110;
+      const scale = Math.min(maxLogoH / logoImage.height, maxLogoW / logoImage.width, 1);
+      const w = logoImage.width * scale, h = logoImage.height * scale;
+      page.drawImage(logoImage, { x: pageWidth - margin - w, y: pageHeight - bandHeight / 2 - h / 2, width: w, height: h });
+    }
+    page.drawText(category.label.toUpperCase(), { x: margin, y: pageHeight - 38, size: 9, font: boldFont, color: teal });
+    page.drawText(label, { x: margin, y: pageHeight - 62, size: 15, font: boldFont, color: rgb(1, 1, 1) });
 
-  included.forEach((label, i) => {
+    let y = pageHeight - bandHeight - 30;
+    const newPage = () => { page = pdfDoc.addPage([pageWidth, pageHeight]); y = pageHeight - margin; };
+    const ensureSpace = (needed) => { if (y - needed < margin) newPage(); };
+
     const raw = documentTemplates[templateKey(categoryKey, label)] || "";
     const content = raw.replaceAll("The Company", client.name) || `No template text written yet for "${label}".`;
-    const bodyLines = wrapTextLines(content, font, 10, maxWidth);
-
-    if (!isFlowing && i > 0) newPage();
-    else ensureSpace(24 + Math.min(bodyLines.length, 3) * 13);
-
-    page.drawText(`${i + 1}. ${label}`, { x: margin, y, size: 12, font: boldFont, color: teal });
-    y -= 20;
-    bodyLines.forEach((line) => {
+    wrapTextLines(content, font, 10, maxWidth).forEach((line) => {
       ensureSpace(13);
       page.drawText(line, { x: margin, y, size: 10, font, color: ink });
       y -= 13;
     });
-    y -= 16;
-  });
 
-  const pageCount = pdfDoc.getPageCount();
-  for (let p = 1; p < pageCount; p++) {
-    const pg = pdfDoc.getPage(p);
-    pg.drawText(`${client.name} — ${category.label}  ·  Page ${p} of ${pageCount - 1}`, { x: margin, y: 24, size: 8, font, color: slate });
+    const pageCount = pdfDoc.getPageCount();
+    for (let p = 0; p < pageCount; p++) {
+      const pg = pdfDoc.getPage(p);
+      const footerText = pageCount > 1
+        ? `Prepared for ${client.name}  ·  ${fmtDate(today())}  ·  Page ${p + 1} of ${pageCount}`
+        : `Prepared for ${client.name}  ·  ${fmtDate(today())}`;
+      pg.drawText(footerText, { x: margin, y: 24, size: 8, font, color: slate });
+    }
+
+    const bytes = await pdfDoc.save();
+    const safeName = label.replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+    const blob = new Blob([bytes], { type: "application/pdf" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${client.name.replace(/\s+/g, "_")}-${safeName}.pdf`;
+    a.click();
+    URL.revokeObjectURL(url);
+    // A small gap between each download — most browsers will block or warn on a burst of
+    // simultaneous downloads triggered from one click, so this keeps it reliable.
+    if (idx < included.length - 1) await new Promise((resolve) => setTimeout(resolve, 400));
   }
-
-  const bytes = await pdfDoc.save();
-  const blob = new Blob([bytes], { type: "application/pdf" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `${client.name.replace(/\s+/g, "_")}-${category.label.replace(/\s+/g, "_")}.pdf`;
-  a.click();
-  URL.revokeObjectURL(url);
 }
 
 
@@ -1201,7 +1258,8 @@ function SystemsView({ clients, selectedId, setSelectedId, documentTemplates, sa
   const [categoryKey, setCategoryKey] = useState("sections");
   const category = DOCUMENT_CATEGORIES.find((c) => c.key === categoryKey);
   const [checked, setChecked] = useState(() => defaultChecked(client, category));
-  const [logo, setLogo] = useState(null);
+  const [uploadingLogo, setUploadingLogo] = useState(false);
+  const [logoPreviewUrl, setLogoPreviewUrl] = useState(null);
   const [downloading, setDownloading] = useState(false);
   const [newLogEntry, setNewLogEntry] = useState({ type: "Review", person: TEAM[0], notes: "" });
 
@@ -1209,6 +1267,31 @@ function SystemsView({ clients, selectedId, setSelectedId, documentTemplates, sa
     setChecked(defaultChecked(client, category));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client.id, categoryKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!client.logo) { setLogoPreviewUrl(null); return; }
+    getDownloadURL(storageRef(storage, client.logo))
+      .then((url) => { if (!cancelled) setLogoPreviewUrl(url); })
+      .catch((err) => { console.error("Couldn't load client logo:", err); if (!cancelled) setLogoPreviewUrl(null); });
+    return () => { cancelled = true; };
+  }, [client.logo]);
+
+  const uploadClientLogo = async (file) => {
+    if (!file) return;
+    setUploadingLogo(true);
+    try {
+      const ext = file.name.split(".").pop().toLowerCase();
+      const path = `logos/${client.id}/logo.${ext}`;
+      await uploadBytes(storageRef(storage, path), file);
+      await updateDoc(doc(db, "clients", client.id), { logo: path });
+    } catch (err) {
+      console.error("Logo upload failed:", err);
+      alert(`Couldn't upload the logo: ${err.message || err}`);
+    } finally {
+      setUploadingLogo(false);
+    }
+  };
 
   const items = categoryItems(category);
   const included = items.filter((label) => checked[label]);
@@ -1263,11 +1346,23 @@ function SystemsView({ clients, selectedId, setSelectedId, documentTemplates, sa
             </div>
             <Card style={{ padding: 16 }}>
               <div className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: T.slate }}>Client logo</div>
-              <button onClick={() => setLogo(logo ? null : "placeholder")} className="w-full flex flex-col items-center justify-center gap-1.5 py-6 rounded-lg text-xs"
+              <label className="w-full flex flex-col items-center justify-center gap-1.5 py-6 rounded-lg text-xs cursor-pointer"
                 style={{ border: `1.5px dashed ${T.slateLight}`, color: T.slate, background: T.paperAlt }}>
-                {logo ? <ImageIcon size={20} color={T.tealDark} /> : <Upload size={18} />}
-                {logo ? "logo uploaded" : "Upload logo"}
-              </button>
+                {uploadingLogo ? (
+                  "Uploading…"
+                ) : logoPreviewUrl ? (
+                  <>
+                    <img src={logoPreviewUrl} alt="" style={{ height: 32, width: "auto", maxWidth: "80%", objectFit: "contain" }} />
+                    <span>Click to replace</span>
+                  </>
+                ) : (
+                  <>
+                    <Upload size={18} />
+                    Upload logo
+                  </>
+                )}
+                <input type="file" accept="image/*" className="hidden" disabled={uploadingLogo} onChange={(e) => uploadClientLogo(e.target.files?.[0])} />
+              </label>
               <div className="text-[11px] mt-2" style={{ color: T.slateLight }}>Same spot on every document — the cover header below.</div>
             </Card>
             <Card style={{ padding: 16 }}>
@@ -1318,27 +1413,39 @@ function SystemsView({ clients, selectedId, setSelectedId, documentTemplates, sa
                 className="text-xs font-semibold px-3 py-1.5 rounded-lg"
                 style={{ background: included.length === 0 ? T.paperAlt : T.tealDark, color: included.length === 0 ? T.slateLight : "#fff", cursor: included.length === 0 ? "not-allowed" : "pointer" }}
               >
-                {downloading ? "Generating…" : "Download as PDF"}
+                {downloading ? "Generating…" : categoryKey === "sections" ? "Download as PDF" : "Download as individual PDFs"}
               </button>
             </div>
             <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${T.border}`, background: "#fff", maxHeight: "calc(100% - 28px)", overflowY: "auto" }}>
-              <div style={{ background: T.charcoal, padding: "36px 32px", color: "#fff" }}>
-                <div className="w-16 h-16 rounded-md flex items-center justify-center mb-6" style={{ background: logo ? T.teal : "rgba(255,255,255,0.08)", border: "1px dashed rgba(255,255,255,0.3)" }}>
-                  {logo ? <ImageIcon size={22} color={T.charcoal} /> : <ImageIcon size={18} color="rgba(255,255,255,0.4)" />}
+              <div className="flex items-center justify-between" style={{ background: T.charcoal, padding: "22px 32px", color: "#fff" }}>
+                <div>
+                  <div className="text-xs tracking-widest uppercase" style={{ color: T.teal }}>{category.label}</div>
+                  <div className="text-xl font-bold mt-1">{client.name}</div>
+                  <div className="text-xs mt-1" style={{ color: "#9FB4B3" }}>Prepared by OSHE Limited</div>
                 </div>
-                <div className="text-xs tracking-widest uppercase" style={{ color: T.teal }}>{category.label}</div>
-                <div className="text-2xl font-bold mt-2">{client.name}</div>
-                <div className="text-sm mt-1" style={{ color: "#9FB4B3" }}>Prepared by OSHE Limited &middot; {fmtDate(today())}</div>
+                {logoPreviewUrl && (
+                  <div className="w-16 h-10 rounded flex items-center justify-center overflow-hidden shrink-0 ml-4" style={{ background: "#fff" }}>
+                    <img src={logoPreviewUrl} alt="" style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
+                  </div>
+                )}
               </div>
               <div className="p-6 flex flex-col gap-4">
                 {included.length === 0 && <div className="text-sm text-center py-10" style={{ color: T.slateLight }}>Nothing selected — tick items on the left to build this document.</div>}
+                {categoryKey !== "sections" && included.length > 0 && (
+                  <div className="text-[11px] -mt-2 mb-1" style={{ color: T.slateLight }}>Each of these downloads as its own separate PDF, not one combined document.</div>
+                )}
                 {included.map((label, i) => (
-                  <div key={label}>
-                    <div className="text-sm font-bold" style={{ color: T.tealDark }}>{i + 1}. {label}</div>
+                  <div key={label} className={categoryKey === "sections" ? "" : "pb-4"} style={categoryKey === "sections" ? {} : { borderBottom: i < included.length - 1 ? `1px dashed ${T.border}` : "none" }}>
+                    <div className="text-sm font-bold" style={{ color: T.tealDark }}>{categoryKey === "sections" ? label : `${i + 1}. ${label}`}</div>
                     <div className="text-xs mt-1 leading-relaxed whitespace-pre-wrap" style={{ color: T.slate }}>{contentFor(label)}</div>
                   </div>
                 ))}
               </div>
+              {included.length > 0 && (
+                <div className="px-6 py-3 text-[11px]" style={{ borderTop: `1px solid ${T.border}`, color: T.slateLight }}>
+                  Prepared for {client.name} &middot; {fmtDate(today())}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -1362,11 +1469,13 @@ function SystemsView({ clients, selectedId, setSelectedId, documentTemplates, sa
               const key = templateKey(categoryKey, label);
               return (
                 <Card key={key} style={{ padding: 16 }}>
-                  <div className="text-sm font-semibold mb-2" style={{ color: T.ink }}>{label}</div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="text-sm font-semibold" style={{ color: T.ink }}>{label}</div>
+                  </div>
                   <textarea
                     defaultValue={documentTemplates[key] || ""}
                     onBlur={(e) => saveDocumentTemplate(key, e.target.value)}
-                    placeholder={`e.g. The Company is committed to ensuring the health and safety of all workers...`}
+                    placeholder="e.g. The Company is committed to ensuring the health and safety of all workers..."
                     rows={3}
                     className="w-full text-sm px-3 py-2 rounded-lg outline-none resize-y"
                     style={{ border: `1px solid ${T.border}`, color: T.ink }}

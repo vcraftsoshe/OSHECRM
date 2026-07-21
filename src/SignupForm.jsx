@@ -3,7 +3,7 @@ import { useParams } from "react-router-dom";
 import { httpsCallable } from "firebase/functions";
 import { functions } from "./firebase";
 import { Upload, Image as ImageIcon, Check, RotateCcw, ChevronLeft, ChevronRight, ChevronDown } from "lucide-react";
-import { SECTION_ITEMS, COMPLIANCE_EXTRA_SECTIONS, ALWAYS_PROCEDURES, CONDITIONAL_PROCEDURES, COMPLIANCE_EXTRA_PROCEDURES, ALWAYS_POLICIES, CONDITIONAL_POLICIES, computeOhsmsPack } from "./ohsmsLogic";
+import { SECTION_ITEMS, ALWAYS_PROCEDURES, CONDITIONAL_PROCEDURES, COMPLIANCE_EXTRA_PROCEDURES, ALWAYS_POLICIES, CONDITIONAL_POLICIES, computeOhsmsPack } from "./ohsmsLogic";
 
 const T = {
   charcoal: "#1A2C2E", teal: "#13DCCC", tealDark: "#0AADA0",

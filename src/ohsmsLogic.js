@@ -8,6 +8,13 @@
 // (10-15) rather than being tacked on at the end, so a generated document reads in proper
 // order. "Document Review History" (21 in the real manual) is deliberately excluded — that's
 // handled separately by the Review Log feature, not printed on the document itself.
+//
+// SiteWise/Totika compliance-scheme items live entirely under Procedures now, not Manual
+// Sections — several of them (Management of Change, Management Review) duplicated content
+// already covered by the Manual's own Monitoring & Review subsections (18.x), so they were
+// pulled out of the Manual and run as their own standalone documents instead. Items that are
+// genuinely fillable forms (budget forms, audit schedules, meeting minutes) are excluded
+// entirely — those live inside the OSHE App itself, not as documents this builder generates.
 
 export const SECTION_ITEMS = [
   { label: "1. Introduction", always: true },
@@ -59,8 +66,6 @@ export const SECTION_ITEMS = [
   { label: "Continual Improvement", key: "continualImprovement" },
 ];
 
-export const COMPLIANCE_EXTRA_SECTIONS = ["Performance Monitoring", "Objectives & KPIs", "Management Review", "Health & Safety Planning", "Worker Consultation (expanded)", "Internal Auditing / Monitoring", "Resource Allocation"];
-
 export const ALWAYS_PROCEDURES = ["Incident Reporting & Investigation Procedure", "Hazard & Risk Management Procedure"];
 
 export const CONDITIONAL_PROCEDURES = [
@@ -76,7 +81,18 @@ export const CONDITIONAL_PROCEDURES = [
   { key: "wellbeing", label: "Wellbeing Procedure" },
 ];
 
-export const COMPLIANCE_EXTRA_PROCEDURES = ["Health & Safety Budget Management Procedure", "Health & Safety Issue Resolution Procedure", "Annual Health & Safety Budget Form", "Management Review Form", "Annual Objectives & Action Plan", "Internal Audit Schedule", "Internal Audit Report", "Annual H&S Review", "Annual Management Review Minutes"];
+export const COMPLIANCE_EXTRA_PROCEDURES = [
+  "Health & Safety Budget Management Procedure",
+  "Health & Safety Issue Resolution Procedure",
+  "Annual H&S Review",
+  "Performance Monitoring",
+  "Objectives & KPIs",
+  "Management Review",
+  "Health & Safety Planning",
+  "Worker Consultation (expanded)",
+  "Internal Auditing / Monitoring",
+  "Resource Allocation",
+];
 
 export const ALWAYS_POLICIES = ["Health & Safety Policy"];
 
@@ -95,7 +111,6 @@ export function computeOhsmsPack(t) {
     if (item.key === "continualImprovement") return t.continualImprovement || complianceForced;
     return Boolean(t[item.key]);
   }).map((item) => item.label);
-  if (complianceForced) sections.push(...COMPLIANCE_EXTRA_SECTIONS);
 
   const procedures = [...ALWAYS_PROCEDURES];
   CONDITIONAL_PROCEDURES.forEach((p) => {

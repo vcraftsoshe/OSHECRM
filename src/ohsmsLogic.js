@@ -56,14 +56,6 @@ export const SECTION_ITEMS = [
   { label: "19.1 Resources", always: true },
   { label: "19.2 External Advice", always: true },
   { label: "20. Document Control", always: true },
-  // These aren't in the base Manual's own numbering — they're additional sections that get
-  // switched on by their own trigger question, layered on top of the core document.
-  { label: "Driving for Work", key: "vehicles" },
-  { label: "Workplace Monitoring", key: "physicalWorkplace" },
-  { label: "Environmental Management", key: "environmental" },
-  { label: "Wellbeing", key: "wellbeing" },
-  { label: "Fitness for Work", key: "drugAlcohol" },
-  { label: "Continual Improvement", key: "continualImprovement" },
 ];
 
 export const ALWAYS_PROCEDURES = ["Incident Reporting & Investigation Procedure", "Hazard & Risk Management Procedure"];

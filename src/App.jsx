@@ -1042,7 +1042,7 @@ function defaultChecked(client, category) {
   return Object.fromEntries(categoryItems(category).map((label) => [label, packList ? packList.includes(label) : category.alwaysLabels.includes(label)]));
 }
 
-async function exportReviewLogPdf(client) {
+async function exportReviewLogPdf(entries) {
   const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib");
   const pdfDoc = await PDFDocument.create();
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
@@ -1053,16 +1053,16 @@ async function exportReviewLogPdf(client) {
 
   const ensureSpace = (needed) => { if (y - needed < margin) { page = pdfDoc.addPage([595, 842]); y = 792; } };
 
-  page.drawText(`${client.name} — OHSMS Review & Change Log`, { x: margin, y, size: 14, font: boldFont, color: rgb(0.08, 0.16, 0.14) });
+  page.drawText("OSHE System Review & Change Log", { x: margin, y, size: 14, font: boldFont, color: rgb(0.08, 0.16, 0.14) });
   y -= 20;
   page.drawText(`Exported ${fmtDate(today())}`, { x: margin, y, size: 9, font, color: rgb(0.36, 0.45, 0.45) });
   y -= 26;
 
-  const entries = [...(client.reviewLog || [])].reverse();
-  if (entries.length === 0) {
+  const sorted = [...entries].reverse();
+  if (sorted.length === 0) {
     page.drawText("No review or change entries logged yet.", { x: margin, y, size: 10, font, color: rgb(0.36, 0.45, 0.45) });
   }
-  entries.forEach((entry) => {
+  sorted.forEach((entry) => {
     ensureSpace(40);
     page.drawText(`${fmtDate(entry.date)} — ${entry.type} — ${entry.person}`, { x: margin, y, size: 10, font: boldFont, color: rgb(0.08, 0.16, 0.14) });
     y -= 14;
@@ -1086,7 +1086,7 @@ async function exportReviewLogPdf(client) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `${client.name.replace(/\s+/g, "_")}-review-log.pdf`;
+  a.download = `OSHE-system-review-log.pdf`;
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -1252,7 +1252,7 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
 }
 
 
-function SystemsView({ clients, selectedId, setSelectedId, documentTemplates, saveDocumentTemplate }) {
+function SystemsView({ clients, selectedId, setSelectedId, documentTemplates, saveDocumentTemplate, systemReviewLog, addSystemReviewLogEntry }) {
   const client = clients.find((c) => c.id === selectedId) || clients[0];
   const [mode, setMode] = useState("build");
   const [categoryKey, setCategoryKey] = useState("sections");
@@ -1305,9 +1305,16 @@ function SystemsView({ clients, selectedId, setSelectedId, documentTemplates, sa
 
   const addLogEntry = () => {
     if (!newLogEntry.notes.trim()) return;
-    const entry = { id: Date.now(), date: today(), type: newLogEntry.type, person: newLogEntry.person, notes: newLogEntry.notes };
-    updateDoc(doc(db, "clients", client.id), { reviewLog: [...(client.reviewLog || []), entry] });
+    addSystemReviewLogEntry({ date: today(), type: newLogEntry.type, person: newLogEntry.person, notes: newLogEntry.notes });
     setNewLogEntry({ type: "Review", person: TEAM[0], notes: "" });
+  };
+
+  const [newReissueMonth, setNewReissueMonth] = useState("");
+  const addReissueEntry = () => {
+    if (!newReissueMonth) return;
+    const entry = { id: Date.now(), monthYear: newReissueMonth };
+    updateDoc(doc(db, "clients", client.id), { reissueLog: [...(client.reissueLog || []), entry] });
+    setNewReissueMonth("");
   };
 
   return (
@@ -1489,47 +1496,69 @@ function SystemsView({ clients, selectedId, setSelectedId, documentTemplates, sa
       )}
 
       {mode === "reviewlog" && (
-        <div className="flex-1 min-h-0 flex flex-col gap-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: T.slate }}>Client</div>
+        <div className="flex-1 min-h-0 flex flex-col gap-6 overflow-y-auto">
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <div className="text-sm font-bold" style={{ color: T.ink }}>System Review Log</div>
+              <button onClick={() => exportReviewLogPdf(systemReviewLog)} className="text-xs font-semibold px-3 py-2 rounded-lg" style={{ background: T.paperAlt, color: T.tealDark }}>
+                Download log as PDF
+              </button>
+            </div>
+            <div className="text-xs mb-3" style={{ color: T.slateLight }}>
+              Shared across every client — when the templates or system itself change, that's one entry here, not something logged per client. This never appears on the manual/policy/procedure documents themselves, only here and in the downloadable log.
+            </div>
+            <Card style={{ padding: 16 }} className="flex items-center gap-2 flex-wrap">
+              <select value={newLogEntry.type} onChange={(e) => setNewLogEntry({ ...newLogEntry, type: e.target.value })}
+                className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
+                <option>Review</option>
+                <option>Update</option>
+              </select>
+              <select value={newLogEntry.person} onChange={(e) => setNewLogEntry({ ...newLogEntry, person: e.target.value })}
+                className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
+                {TEAM.map((m) => <option key={m} value={m}>{m}</option>)}
+              </select>
+              <input placeholder="What was reviewed or changed?" value={newLogEntry.notes} onChange={(e) => setNewLogEntry({ ...newLogEntry, notes: e.target.value })}
+                className="flex-1 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink, minWidth: 200 }} />
+              <button onClick={addLogEntry} className="text-xs font-semibold px-3 py-1.5 rounded-lg shrink-0" style={{ background: T.tealDark, color: "#fff" }}>Log entry</button>
+            </Card>
+            <div className="flex flex-col gap-2 mt-2">
+              {[...systemReviewLog].reverse().map((entry) => (
+                <Card key={entry.id} style={{ padding: 14 }}>
+                  <div className="flex items-center justify-between">
+                    <Pill color={entry.type === "Update" ? T.amber : T.tealDark} bg={T.paperAlt}>{entry.type}</Pill>
+                    <div className="text-xs" style={{ color: T.slate }}>{fmtDate(entry.date)} &middot; {entry.person}</div>
+                  </div>
+                  <div className="text-sm mt-2" style={{ color: T.ink }}>{entry.notes}</div>
+                </Card>
+              ))}
+              {systemReviewLog.length === 0 && <div className="text-xs text-center py-6" style={{ color: T.slateLight }}>No entries logged yet.</div>}
+            </div>
+          </div>
+
+          <div style={{ borderTop: `1px solid ${T.border}`, paddingTop: 20 }}>
+            <div className="flex items-center justify-between mb-1">
+              <div className="text-sm font-bold" style={{ color: T.ink }}>Reissue History</div>
               <select value={client.id} onChange={(e) => setSelectedId(e.target.value)}
-                className="text-sm px-3 py-2 rounded-lg outline-none" style={{ background: T.card, border: `1px solid ${T.border}`, color: T.ink }}>
+                className="text-xs px-2.5 py-1.5 rounded-lg outline-none" style={{ background: T.card, border: `1px solid ${T.border}`, color: T.ink }}>
                 {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             </div>
-            <button onClick={() => exportReviewLogPdf(client)} className="text-xs font-semibold px-3 py-2 rounded-lg" style={{ background: T.paperAlt, color: T.tealDark }}>
-              Download log as PDF
-            </button>
-          </div>
-          <div className="text-xs" style={{ color: T.slateLight }}>
-            Tracks when this client's system was reviewed or updated, for compliance purposes — this never appears on the manual/policy/procedure documents themselves, only here and in the downloadable log.
-          </div>
-          <Card style={{ padding: 16 }} className="flex items-center gap-2 flex-wrap">
-            <select value={newLogEntry.type} onChange={(e) => setNewLogEntry({ ...newLogEntry, type: e.target.value })}
-              className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
-              <option>Review</option>
-              <option>Update</option>
-            </select>
-            <select value={newLogEntry.person} onChange={(e) => setNewLogEntry({ ...newLogEntry, person: e.target.value })}
-              className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
-              {TEAM.map((m) => <option key={m} value={m}>{m}</option>)}
-            </select>
-            <input placeholder="What was reviewed or changed?" value={newLogEntry.notes} onChange={(e) => setNewLogEntry({ ...newLogEntry, notes: e.target.value })}
-              className="flex-1 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink, minWidth: 200 }} />
-            <button onClick={addLogEntry} className="text-xs font-semibold px-3 py-1.5 rounded-lg shrink-0" style={{ background: T.tealDark, color: "#fff" }}>Log entry</button>
-          </Card>
-          <div className="flex-1 overflow-y-auto flex flex-col gap-2">
-            {[...(client.reviewLog || [])].reverse().map((entry) => (
-              <Card key={entry.id} style={{ padding: 14 }}>
-                <div className="flex items-center justify-between">
-                  <Pill color={entry.type === "Update" ? T.amber : T.tealDark} bg={T.paperAlt}>{entry.type}</Pill>
-                  <div className="text-xs" style={{ color: T.slate }}>{fmtDate(entry.date)} &middot; {entry.person}</div>
-                </div>
-                <div className="text-sm mt-2" style={{ color: T.ink }}>{entry.notes}</div>
-              </Card>
-            ))}
-            {(!client.reviewLog || client.reviewLog.length === 0) && <div className="text-xs text-center py-6" style={{ color: T.slateLight }}>No entries logged yet.</div>}
+            <div className="text-xs mb-3" style={{ color: T.slateLight }}>
+              The one thing that genuinely is specific to {client.name} — when their documents were last reissued. Month and year only.
+            </div>
+            <Card style={{ padding: 16 }} className="flex items-center gap-2">
+              <input type="month" value={newReissueMonth} onChange={(e) => setNewReissueMonth(e.target.value)}
+                className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+              <button onClick={addReissueEntry} className="text-xs font-semibold px-3 py-1.5 rounded-lg shrink-0" style={{ background: T.tealDark, color: "#fff" }}>Log reissue</button>
+            </Card>
+            <div className="flex flex-wrap gap-2 mt-2">
+              {[...(client.reissueLog || [])].reverse().map((entry) => (
+                <Pill key={entry.id} color={T.ink} bg={T.paperAlt}>
+                  {new Date(entry.monthYear + "-02").toLocaleDateString("en-NZ", { month: "long", year: "numeric" })}
+                </Pill>
+              ))}
+              {(!client.reissueLog || client.reissueLog.length === 0) && <div className="text-xs py-2" style={{ color: T.slateLight }}>No reissues logged yet for {client.name}.</div>}
+            </div>
           </div>
         </div>
       )}
@@ -2501,6 +2530,90 @@ export default function App() {
   }, []);
   const saveDocumentTemplate = (key, content) => setDoc(doc(db, "documentTemplates", key), { content });
 
+  // System Review Log — global, not per-client. When the shared templates/system change,
+  // that's one entry that applies to every client, not something logged separately for each.
+  const [systemReviewLog, setSystemReviewLog] = useState([]);
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "systemReviewLog"), (snap) => setSystemReviewLog(snap.docs.map((d) => ({ id: d.id, ...d.data() }))), (err) => console.error("System review log subscription failed:", err));
+    return unsub;
+  }, []);
+  const addSystemReviewLogEntry = (entry) => setDoc(doc(db, "systemReviewLog", "log" + Date.now()), entry);
+
+  // One-time seed of real procedure content, condensed from OSHE's actual reference documents.
+  // Never overwrites anything already written — only fills in a key if it's genuinely empty,
+  // so any edits Sophie/Vanessa have already made are always safe.
+  useEffect(() => {
+    const realProcedureContent = {
+      "Contractor Management Procedure": "The Company selects and manages contractors to protect the health and safety of workers and others affected by contracted work. This applies to all staff engaging contractors on a contract-for-services basis, across all sites and operations.\n\nPrequalification: The Company prequalifies contractors to confirm they have the skills, experience, resources and systems to work safely. Prequalified contractors are reviewed every 2 years, or sooner following a serious safety issue or significant change to their systems or work type. Contractors who don't meet The Company's minimum requirements are given feedback on what's needed before they can be engaged.\n\nDocumentation: The Company provides contractors with all H&S requirements as part of prequalification. Contracts clearly define performance standards, site handover arrangements, and health and safety roles and responsibilities.\n\nOnboarding & Induction: All contractors receive a health and safety induction before starting work, covering at minimum: roles and responsibilities, an overview of the work, hazards and controls for the work/site, emergency procedures, incident and hazard reporting, available facilities, and site requirements.",
+      "Hazard & Risk Management Procedure": "The Company identifies and manages hazards and risks to protect the health and safety of workers and others affected by its work.\n\nRisk Assessment: Hazards are risk-rated using a Risk Matrix, scoring Likelihood (Rare to Almost Certain) against Consequence (Insignificant to Catastrophic) to produce an initial risk score, and again after controls are applied to produce a residual score. Risk levels range from Very Low (manage by routine procedure) through to Critical (stop work immediately).\n\nHierarchy of Controls: The Company eliminates a risk where reasonably practicable. Where it cannot be eliminated, risks are minimised in order using: substitution with a lower-risk activity or substance; isolating people from the hazard; engineering controls; then administrative controls; and finally personal protective equipment (PPE) as a last resort or to supplement higher-level controls — PPE is never the first or only control used.\n\nWorker Participation: Workers who do the work are best placed to identify risks and controls, and are involved throughout this process.\n\nHealth Monitoring: Where minimisation is used to manage a risk, The Company monitors affected workers' health in relation to their exposure, with their consent, and undertakes exposure monitoring if levels are uncertain.",
+      "Hazardous Substances Procedure": "This procedure covers the safe storage, handling, use, transport, and disposal of hazardous substances at The Company's sites, in line with the Hazardous Substances and New Organisms (HSNO) Act 1996, EPA and WorkSafe NZ guidance.\n\nScope: Applies to all workers, contractors, and visitors at all company-controlled sites where hazardous substances are present — covering identification, inventory, storage, segregation, spill response, decanting, transport, and emergency preparedness.\n\nResponsibilities: Management ensures resources, maintains an accurate hazardous substance inventory, and implements controls identified by the Calculator, SDS, or HSNO approval. Workers follow safe work procedures, use PPE as directed, and report unsafe conditions. Supervisors conduct regular inspections, review SDS accessibility, and monitor PPE use and emergency readiness.\n\nPotential Hazards: Workers are made aware of risks including spills, skin reactions, chemical burns, environmental damage, toxic fumes, manual handling injuries from container weight, acute or chronic exposure effects, eye injuries, and fire or explosion risk.",
+      "Incident Reporting & Investigation Procedure": "This procedure defines how incidents are reported and investigated within The Company, applying to all staff and contractors.\n\nReporting: All incidents or non-conformities must be notified to a supervisor as soon as safely possible, and documented via a formal report within 24 hours — including date, time, location, people involved, and a full description for investigation and corrective actions.\n\nInvestigation: Management determines appropriate corrective actions with worker input, to be recorded, assigned, and closed out. Investigations determine whether procedures need review, and outcomes are communicated to relevant workers and PCBUs. For notifiable or extreme-risk incidents, The Company engages H.A.R.M to conduct a full ICAM investigation, with results discussed with management.\n\nNotifiable Events: The incident scene is preserved until the supervisor has been notified, to determine whether it's a notifiable event. If notifiable, the scene is frozen, the notifiable event process followed, and WorkSafe NZ notified.",
+      "Induction & Training Procedure": "The Company ensures all workers are inducted and trained to perform their duties safely. Induction provides essential information to workers, contractors, labour-hire workers, volunteers, and visitors before they undertake any work or face any health, safety, or welfare risk, and is completed before work begins.\n\nRoles: Managers/Supervisors conduct inductions and maintain induction records. Workers, contractors, labour hire workers, volunteers, and visitors ensure their actions don't endanger themselves or others, actively participate in induction, and comply with The Company's policies and procedures.\n\nOnboarding Process — Day One: employment contract signed, licenses/certificates collected, bank and next-of-kin details obtained, absence and employment policies reviewed, site security/entry/exit procedures explained, and any special medical needs documented and passed to the first aider.\n\nInduction & Orientation Program covers: incident and accident reporting (including notifiable events and near-miss reporting); health and safety responsibilities; and hazard identification and risk management training, with competency confirmed before sign-off.",
+      "PPE Procedure": "This procedure defines the requirements, responsibilities and practices for the use of personal protective equipment (PPE) at The Company, applying to all PPE used in the workplace.\n\nHazard Identification: The Company completes a risk assessment of all work, in consultation with workers, recorded in the Hazard Register. Hazard identification takes place when new plant/equipment or tasks are introduced, for existing plant and equipment, before changes to a system of work, before plant is used outside its designed purpose, or when new safety information becomes available.\n\nRisk Management: Risks are eliminated where reasonably practicable, or otherwise minimised using the Hierarchy of Controls. PPE is only used when no other practical control is available, as an interim measure until a better control is in place, or to supplement higher-level controls.\n\nSelection: PPE must be appropriate to the task and risk level, used wherever a risk assessment or safe work procedure identifies the need, compliant with relevant AS/NZS standards and manufacturer's instructions, and fitted to the individual user. Proof of AS/NZS compliance is required before purchase.",
+    };
+
+    const realSectionContent = {
+      "1. Introduction": "This manual provides The Company's workers, contractors, and visitors with a clear framework for how health and safety is managed across the business, and forms the foundation of The Company's Health and Safety Management System (OHSMS).",
+      "2. Purpose": "The purpose of this manual is to provide a framework to meet The Company's responsibilities under the Health and Safety at Work Act 2015 (HSWA) and all associated regulations, guidelines, codes of practice and standards in New Zealand. This framework provides a management system to manage health and safety risks, opportunities, and performance.",
+      "3. Scope": "The Company has adapted this Health and Safety Management System (OHSMS) with the assistance of H.A.R.M Limited to provide all workers with clear and defined processes and procedures. H.A.R.M Limited provides The Company with ongoing support and advice, as well as additional forms and templates to work alongside this system.",
+      "4. Health & Safety Policy": "The Company has outlined all levels of authority and responsibility within the health and safety policy to ensure all workers are enabled and supported to fulfil their individual health and safety responsibilities.",
+      "5. Leadership, Commitment, and Worker Participation": "The Officers of The Company and any person in a position of influence demonstrate their commitment to this OHSMS by following the Health and Safety Policy, which states the support, culture, leadership, responsibilities, and accountabilities within The Company. The Company takes overall responsibility to provide a safe, healthy workplace, free from risk so far as is reasonably practicable. Management ensures all policies, procedures, and objectives are in place and compatible with The Company's direction, work practices, goals, and targets. Workers at each level are responsible for the aspects of this OHSMS over which they have control, as outlined in the Health and Safety Policy.",
+      "5.1 Organisational Roles, Responsibilities, Accountabilities & Authorities": "The Company's level of authority by position is outlined in its organisational structure. Position responsibilities are set out in The Company's Health and Safety Policy as commitments.",
+      "5.2 Participation and Consultation": "The Company provides time, training, and resources to enable participation by workers at all levels, and communicates OHSMS information clearly and understandably. Barriers to participation — including language barriers, fear of retaliation, or discouraging practices — are minimised. Workers are actively involved in regular meetings covering risk management, competency and training, incident investigation, objectives and planning, contractor management, audit programs, continual improvement, and relevant hazards and risks. All meetings are documented in minutes and kept on record.",
+      "5.3 Health & Safety Issue Resolution": "Health and safety issues may arise when a worker's concerns remain unresolved following discussion with the worker and the PCBU, often stemming from differing opinions on risk or the acceptability of controls. In this event, The Company follows the Health & Safety Issue Resolution Procedure to ensure a resolution is found.",
+      "5.4 Health & Safety Representatives": "The Company ensures a Health & Safety Representative (HSR) is selected when a worker or group of workers requests one. The HSR is made known to all workers including contractors, given appropriate training to fulfil their duties, and given the opportunity to actively participate in regular health and safety meetings.",
+      "6. Planning": "This OHSMS prevents or reduces risk within The Company and ensures continual improvement through planning and worker participation. The Company considers the hazards and risks associated with its work on an ongoing basis, ensures legal requirements are met, and gives ample opportunity to identify and manage any temporary or significant changes.",
+      "6.1 Objectives": "To achieve continuous improvement in health and safety, The Company plans objectives individually or collectively, documenting and assigning responsibility at management level, with consideration given to diversity aspects such as cultural or language barriers.",
+      "7. Hazard Identification and Assessment of OHS Risks": "The Company, with worker input, actively establishes, implements, and maintains a proactive process for identifying hazards.",
+      "7.1 Legal and Other Requirements": "The Company considers legal requirements to ensure compliance, utilising the WorkSafe NZ website for guidance and information relating to OHS.",
+      "8. Risk Management": "The Company's approach to managing risk once hazards have been identified, working through appropriate controls to reduce risk so far as is reasonably practicable.",
+      "8.1 Hierarchy of Controls": "The Company will try to eliminate a risk where reasonably practicable. Where a risk cannot be eliminated, The Company works through the hierarchy of controls: substituting with a lower-risk activity or substance, isolating people from the hazard, or applying engineering controls. If a risk remains, administrative controls are put in place. Finally, if a risk still remains, suitable personal protective equipment (PPE) is used — PPE is never the first or only control considered.",
+      "9. Incidents and Corrective Actions": "In the event of an incident or non-conformity, all workers must notify The Company of the occurrence, and an investigation is completed to identify the root cause and evaluate current risk management. Incidents must be notified to a supervisor as soon as safe to do so, and documented via a formal report within 24 hours. Corrective actions are determined by management with worker input, recorded, assigned, and closed out. All incidents are preserved until notification has occurred, to determine whether the incident is a notifiable event — if so, the scene is frozen, the notifiable event process followed, and WorkSafe NZ notified.",
+      "9.1 Incident Reporting": "The Company ensures all incidents relating to health and safety are promptly reported and documented, including date, time, location, individuals involved, and a thorough description of the event, for investigation and corrective actions to be assigned.",
+      "10. Plant & Equipment": "The Company ensures all plant and equipment is fit for purpose, meets standard, and is in good working order with all safety mechanisms and guards fitted. Equipment is used only by trained, licensed (if applicable), and competent workers. New plant and equipment is assessed on introduction and added to an equipment and maintenance register, with regular checks undertaken. Unsafe plant or equipment is removed from operation until repaired by a competent person.",
+      "11. Contractors": "The Company follows a Contractor Pre-Qualification Process to ensure engaged contractors and sub-contractors have adequate processes and controls in place, identifying health and safety performance and systems, insurance, training and competencies, operating and emergency procedures, incident management reporting, and plant and equipment. Contractors are periodically monitored through SSSP and Contractor Evaluations, with pre-qualification completed bi-annually.",
+      "12. Emergency Preparedness and Response": "The Company maintains a documented emergency response plan, including rescue plans for high-risk work where applicable, made available to all workers and visitors. The plan is tested at least every 6 months, with an evaluation completed after any emergency or test to review and make necessary changes. Adequate first aid supplies are available at all times, with an appropriate number of workers trained in first aid.",
+      "13. Personal Protective Equipment (PPE)": "The Company ensures workers are supplied with fit-for-purpose PPE, purchased by The Company, fitted to each worker, and replaced when no longer in good condition. Workers must notify their supervisor of any damage or defect and not use PPE until it's replaced. Training on correct use and storage is provided, with issue and replacement dates recorded on each worker's individual PPE register.",
+      "14. Exposure and Health Monitoring": "The Company's risk management process determines whether workers are likely to be exposed to a health hazard or hazardous substance. Where a risk is present, exposure assessment and health monitoring are undertaken at The Company's cost, with results provided to workers and records kept in accordance with the Privacy Act. Health monitoring is only undertaken by an experienced occupational health practitioner.",
+      "15. Hazardous Substances": "The Company identifies any substances classed as hazardous by substance classification codes. These are controlled with adequate resources, training, handling, storage, and equipment. All hazardous substances have Safety Data Sheets (SDS) available, and incompatible substances are segregated when stored.",
+      "16. Training": "The Company ensures all workers are appropriately inducted and trained before undertaking work, with ongoing competence maintained throughout their employment.",
+      "16.1 Induction": "The Company ensures all workers are inducted prior to commencing work, covering: The Company's induction, incident and accident reporting, health and safety responsibilities, the health and safety manual, policies and procedures, hazard ID and risk management processes, a buddy program, PPE issue and training, and emergency procedures. Competency is assessed, and workers must be deemed competent to identify and control a hazard or risk before being signed off.",
+      "16.2 Competence": "The Company determines and takes action to ensure workers are competent based on education, induction, training, and experience, retaining documentation as evidence and reviewing competencies on an ongoing basis, including annual training plans.",
+      "17. Reporting": "The Company reports within the app or on the templates provided. All workers are given training in reporting requirements during induction, with adequate time provided to complete this.",
+      "18. Monitoring & Review": "The Company monitors and reviews its OHSMS on an ongoing basis to ensure it remains effective and continues to improve.",
+      "18.1 Monitoring, Measurement, KPIs, Analysis and Evaluation": "On an annual basis, The Company reviews and evaluates current OHSMS processes and procedures, making applicable changes using the Annual Health & Safety Review form. KPIs are measured from the Annual Objectives Form, with objectives set annually to ensure continuous improvement.",
+      "18.2 Corrective Actions": "The Company ensures all corrective actions are assigned and managed through to close-out, with open actions reviewed regularly and progress tracked.",
+      "18.3 Document, SOP and H.A.R.M Register Review": "The Company is provided updated or additional templates upon annual review, considering legislative changes, industry learnings, incidents, or additional WorkSafe NZ guidance. SOP documentation is reviewed annually or when a new process, business change, or plant/equipment change arises. The Hazard/Risk Register is updated from toolbox talks, meetings, or learnings from incidents and reviews.",
+      "18.4 Assessment of OHS Risks to the OHS Management System": "Annually, The Company assesses OHS risks and risks to the OHSMS itself, considering outdated information, system requirements, insufficient resources, review programmes, management responsibilities, failure to achieve expectations, planning, and OHS performance.",
+      "18.5 Identification of OHS Opportunities and Other Opportunities": "The Company provides opportunities to improve OHS by eliminating hazards early, discussing OHS during planned changes, improving monotonous work, utilising new technologies, and encouraging worker participation — and improves the OHSMS itself by enhancing visibility, the incident investigation process, worker participation, benchmarks, and industry collaboration.",
+      "18.6 Management of Change": "The Company completes a risk assessment to ensure changes to the business don't compromise health and safety performance, identifying potential OHS opportunities. Examples of change include organisation structure, technology, new equipment, new information, products, processes, services, and legal requirements.",
+      "18.7 Management Review": "Management holds regular meetings to review actions from previous meetings, legislative or organisational changes, incidents and corrective actions, objectives, non-compliances, worker participation, audit or review findings, communication with other companies, and resource adequacy. Outcomes are communicated to workers and worker representatives as necessary.",
+      "19. Support": "The Company ensures the resources and external advice needed to maintain and continually improve the OHSMS are available.",
+      "19.1 Resources": "The Company determines and provides the resources needed to establish, implement, and maintain continual improvement of the OHSMS.",
+      "19.2 External Advice": "The Company may seek external advice when information or knowledge is limited, ensuring advice is sourced from a competent provider with evidence to support this on request.",
+      "20. Document Control": "This OHSMS has been developed for The Company by H.A.R.M Limited and is reviewed annually to ensure the document and related templates remain accurate. Any changes required before the annual review are discussed with H.A.R.M Limited. All documentation is retained for a minimum of five years, with health monitoring records kept for 30 years (or 40 years if asbestos-related) after the record is made.",
+    };
+    (async () => {
+      try {
+        const allContent = [
+          ...Object.entries(realProcedureContent).map(([label, content]) => ["procedures", label, content]),
+          ...Object.entries(realSectionContent).map(([label, content]) => ["sections", label, content]),
+        ];
+        await Promise.all(
+          allContent.map(async ([catKey, label, content]) => {
+            const key = templateKey(catKey, label);
+            const existing = await getDoc(doc(db, "documentTemplates", key));
+            if (!existing.exists() || !existing.data()?.content) {
+              await setDoc(doc(db, "documentTemplates", key), { content });
+            }
+          })
+        );
+      } catch (err) {
+        console.error("Content seed failed (likely a Firestore permissions issue):", err);
+      }
+    })();
+  }, []);
+
   // Workflows — real Firestore collection, one doc per workflow template.
   const initialWorkflows = [
     { id: "wf-standard", name: "Standard Onboarding", isDefault: true, steps: defaultOnboardingTemplate },
@@ -2736,7 +2849,7 @@ export default function App() {
               onboardings={onboardings} updateOnboardingsForClient={updateOnboardingsForClient} workflows={workflows}
               pushNotification={pushNotification} goToWorkflows={() => setModule("workflows")} tabRequest={clientTabRequest} />
           )}
-          {module === "systems" && <SystemsView clients={clients} selectedId={selectedClient} setSelectedId={setSelectedClient} documentTemplates={documentTemplates} saveDocumentTemplate={saveDocumentTemplate} />}
+          {module === "systems" && <SystemsView clients={clients} selectedId={selectedClient} setSelectedId={setSelectedClient} documentTemplates={documentTemplates} saveDocumentTemplate={saveDocumentTemplate} systemReviewLog={systemReviewLog} addSystemReviewLogEntry={addSystemReviewLogEntry} />}
           {module === "sales" && <SalesView leads={leads} convertLeadToClient={convertLeadToClient} />}
           {module === "billing" && <BillingOverview clients={clients} resellers={resellers} />}
           {module === "dashboards" && <DashboardsView clients={clients} />}

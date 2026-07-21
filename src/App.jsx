@@ -9,7 +9,7 @@ import { collection, doc, onSnapshot, updateDoc, setDoc, getDocs, getDoc, delete
 import { signOut } from "firebase/auth";
 import { ref as storageRef, getDownloadURL } from "firebase/storage";
 import { db, auth, storage } from "./firebase";
-import { ALWAYS_SECTIONS, CONDITIONAL_SECTIONS, COMPLIANCE_EXTRA_SECTIONS, ALWAYS_PROCEDURES, CONDITIONAL_PROCEDURES, COMPLIANCE_EXTRA_PROCEDURES, ALWAYS_POLICIES, CONDITIONAL_POLICIES } from "./ohsmsLogic";
+import { SECTION_ITEMS, COMPLIANCE_EXTRA_SECTIONS, ALWAYS_PROCEDURES, CONDITIONAL_PROCEDURES, COMPLIANCE_EXTRA_PROCEDURES, ALWAYS_POLICIES, CONDITIONAL_POLICIES } from "./ohsmsLogic";
 
 /* ---------- Design tokens (OSHE brand) ---------- */
 const T = {
@@ -747,7 +747,19 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
                       <div className="col-span-2">
                         <div className="text-xs font-semibold mb-1" style={{ color: T.slate }}>FILES THEY UPLOADED</div>
                         <div className="flex flex-col gap-1">
-                          {client.intake.existingFiles.map((f, i) => <div key={i} className="text-xs" style={{ color: T.ink }}>{f.name}</div>)}
+                          {client.intake.existingFiles.map((f, i) => (
+                            <button key={i} type="button" onClick={async () => {
+                              try {
+                                const url = await getDownloadURL(storageRef(storage, f.path));
+                                window.open(url, "_blank");
+                              } catch (err) {
+                                console.error("Couldn't open file:", err);
+                                alert("Couldn't open that file — it may not have finished uploading, or the link has expired.");
+                              }
+                            }} className="text-xs text-left underline" style={{ color: T.tealDark }}>
+                              {f.name}
+                            </button>
+                          ))}
                         </div>
                       </div>
                     )}
@@ -759,6 +771,16 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
 
           {tab === "contract" && (
             <Card style={{ padding: 20 }}>
+              <div className="mb-4">
+                <div className="text-xs font-semibold" style={{ color: T.slate }}>PLAN</div>
+                <input
+                  defaultValue={client.contract.plan || ""}
+                  onBlur={(e) => updateClient((c) => ({ ...c, contract: { ...c.contract, plan: e.target.value } }))}
+                  placeholder="e.g. Full H&S Retainer, Monthly Compliance Pack..."
+                  className="w-full text-sm px-2.5 py-2 rounded-lg outline-none mt-1"
+                  style={{ border: `1px solid ${T.border}`, color: T.ink }}
+                />
+              </div>
               <div className="grid grid-cols-2 gap-x-8 gap-y-4 text-sm">
                 <div><div className="text-xs font-semibold" style={{ color: T.slate }}>CONTRACT START</div><div style={{ color: T.ink }}>{fmtDate(client.contract.start)}</div></div>
                 <div><div className="text-xs font-semibold" style={{ color: T.slate }}>RENEWAL</div><div style={{ color: T.ink }}>{fmtDate(client.contract.renewal)}</div></div>
@@ -983,13 +1005,28 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
 
 /* ---------- Systems / document builder ---------- */
 const DOCUMENT_CATEGORIES = [
-  { key: "sections", label: "Manual Sections", always: ALWAYS_SECTIONS, conditional: CONDITIONAL_SECTIONS, complianceExtra: COMPLIANCE_EXTRA_SECTIONS },
-  { key: "procedures", label: "Procedures", always: ALWAYS_PROCEDURES, conditional: CONDITIONAL_PROCEDURES, complianceExtra: COMPLIANCE_EXTRA_PROCEDURES },
-  { key: "policies", label: "Policies", always: ALWAYS_POLICIES, conditional: CONDITIONAL_POLICIES, complianceExtra: [] },
+  {
+    key: "sections", label: "Manual Sections",
+    itemList: [...SECTION_ITEMS.map((i) => i.label), ...COMPLIANCE_EXTRA_SECTIONS],
+    alwaysLabels: SECTION_ITEMS.filter((i) => i.always).map((i) => i.label),
+    complianceExtraLabels: COMPLIANCE_EXTRA_SECTIONS,
+  },
+  {
+    key: "procedures", label: "Procedures",
+    itemList: [...ALWAYS_PROCEDURES, ...CONDITIONAL_PROCEDURES.map((c) => c.label), ...COMPLIANCE_EXTRA_PROCEDURES],
+    alwaysLabels: ALWAYS_PROCEDURES,
+    complianceExtraLabels: COMPLIANCE_EXTRA_PROCEDURES,
+  },
+  {
+    key: "policies", label: "Policies",
+    itemList: [...ALWAYS_POLICIES, ...CONDITIONAL_POLICIES.map((c) => c.label)],
+    alwaysLabels: ALWAYS_POLICIES,
+    complianceExtraLabels: [],
+  },
 ];
 
 function categoryItems(category) {
-  return [...category.always, ...category.conditional.map((c) => c.label), ...category.complianceExtra];
+  return category.itemList;
 }
 
 function templateKey(categoryKey, label) {
@@ -1002,7 +1039,7 @@ function templateKey(categoryKey, label) {
 // Sophie/Vanessa to decide manually.
 function defaultChecked(client, category) {
   const packList = client?.intake?.ohsmsPack?.[category.key];
-  return Object.fromEntries(categoryItems(category).map((label) => [label, packList ? packList.includes(label) : category.always.includes(label)]));
+  return Object.fromEntries(categoryItems(category).map((label) => [label, packList ? packList.includes(label) : category.alwaysLabels.includes(label)]));
 }
 
 async function exportReviewLogPdf(client) {
@@ -1243,8 +1280,8 @@ function SystemsView({ clients, selectedId, setSelectedId, documentTemplates, sa
           <div className="w-80 shrink-0 flex flex-col gap-2 overflow-y-auto">
             <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: T.slate }}>{category.label} {included.length}/{items.length} selected</div>
             {items.map((label) => {
-              const isAlways = category.always.includes(label);
-              const isComplianceExtra = category.complianceExtra.includes(label);
+              const isAlways = category.alwaysLabels.includes(label);
+              const isComplianceExtra = category.complianceExtraLabels.includes(label);
               const hasContent = Boolean(documentTemplates[templateKey(categoryKey, label)]);
               return (
                 <button key={label} onClick={() => setChecked((c) => ({ ...c, [label]: !c[label] }))} className="flex items-start gap-3 p-3 rounded-lg text-left transition-colors"
@@ -1273,6 +1310,7 @@ function SystemsView({ clients, selectedId, setSelectedId, documentTemplates, sa
                     await downloadBuildPdf({ client, category, categoryKey, included, documentTemplates });
                   } catch (err) {
                     console.error("PDF download failed:", err);
+                    alert(`Couldn't generate the PDF: ${err.message || err}`);
                   } finally {
                     setDownloading(false);
                   }

@@ -38,7 +38,6 @@ jobs:
           npx firebase-tools deploy --only storage:rules --project oshe-895ad
         env:
           GOOGLE_APPLICATION_CREDENTIALS: /tmp/gcp-key.json
-        continue-on-error: true
 
       - name: Deploy Cloud Functions
         run: |

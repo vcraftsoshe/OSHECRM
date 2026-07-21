@@ -63,7 +63,6 @@ const SECTION_ITEMS = [
   { label: "Fitness for Work", key: "drugAlcohol" },
   { label: "Continual Improvement", key: "continualImprovement" },
 ];
-const COMPLIANCE_EXTRA_SECTIONS = ["Performance Monitoring", "Objectives & KPIs", "Management Review", "Health & Safety Planning", "Worker Consultation (expanded)", "Internal Auditing / Monitoring", "Resource Allocation"];
 const ALWAYS_PROCEDURES = ["Incident Reporting & Investigation Procedure", "Hazard & Risk Management Procedure"];
 const CONDITIONAL_PROCEDURES = [
   { key: "contractors", label: "Contractor Management Procedure" },
@@ -77,7 +76,18 @@ const CONDITIONAL_PROCEDURES = [
   { key: "continualImprovement", label: "Continual Improvement Procedure" },
   { key: "wellbeing", label: "Wellbeing Procedure" },
 ];
-const COMPLIANCE_EXTRA_PROCEDURES = ["Health & Safety Budget Management Procedure", "Health & Safety Issue Resolution Procedure", "Annual Health & Safety Budget Form", "Management Review Form", "Annual Objectives & Action Plan", "Internal Audit Schedule", "Internal Audit Report", "Annual H&S Review", "Annual Management Review Minutes"];
+const COMPLIANCE_EXTRA_PROCEDURES = [
+  "Health & Safety Budget Management Procedure",
+  "Health & Safety Issue Resolution Procedure",
+  "Annual H&S Review",
+  "Performance Monitoring",
+  "Objectives & KPIs",
+  "Management Review",
+  "Health & Safety Planning",
+  "Worker Consultation (expanded)",
+  "Internal Auditing / Monitoring",
+  "Resource Allocation",
+];
 const ALWAYS_POLICIES = ["Health & Safety Policy"];
 const CONDITIONAL_POLICIES = [
   { key: "drugAlcohol", label: "Drug & Alcohol Policy" },
@@ -94,7 +104,6 @@ function computeOhsmsPack(t) {
     if (item.key === "continualImprovement") return t.continualImprovement || complianceForced;
     return Boolean(t[item.key]);
   }).map((item) => item.label);
-  if (complianceForced) sections.push(...COMPLIANCE_EXTRA_SECTIONS);
 
   const procedures = [...ALWAYS_PROCEDURES];
   CONDITIONAL_PROCEDURES.forEach((p) => {

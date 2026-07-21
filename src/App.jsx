@@ -1033,6 +1033,31 @@ function templateKey(categoryKey, label) {
   return `${categoryKey}::${label}`.replace(/\//g, "-");
 }
 
+// Manual section labels carry their real document number as a stable key (e.g. "11. Contractors",
+// "5.1 Participation and Consultation") — but if a client doesn't need some sections, keeping
+// those original numbers leaves gaps (11, 14, 16...) which reads as broken, not intentional.
+// This renumbers for DISPLAY only, based purely on what's actually included and in what order,
+// while correctly keeping subheadings under their renumbered parent (so if section 16 becomes
+// the new "12", its 16.1/16.2 subheadings become 12.1/12.2).
+function renumberSections(labels) {
+  let topCounter = 0;
+  let subCounter = 0;
+  return labels.map((label) => {
+    const subMatch = label.match(/^\d+\.\d+\s+(.*)$/);
+    const topMatch = label.match(/^\d+\.\s+(.*)$/);
+    if (subMatch) {
+      subCounter++;
+      return `${topCounter}.${subCounter} ${subMatch[1]}`;
+    }
+    if (topMatch) {
+      topCounter++;
+      subCounter = 0;
+      return `${topCounter}. ${topMatch[1]}`;
+    }
+    return label;
+  });
+}
+
 // Default ticks: if this client actually has a computed OHSMS pack (came through the real
 // sign-up form), use exactly what their answers produced. Otherwise (legacy/manually-added
 // clients), fall back to just the always-included items ticked, everything else left for
@@ -1306,15 +1331,25 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
     const newPage = () => { page = pdfDoc.addPage([pageWidth, pageHeight]); y = pageHeight - margin; };
     const ensureSpace = (needed) => { if (y - needed < margin) newPage(); };
 
-    included.forEach((label) => {
+    const displayLabels = renumberSections(included);
+    included.forEach((label, idx) => {
       const raw = documentTemplates[templateKey(categoryKey, label)] || "";
       const content = raw.replaceAll("The Company", client.name) || `No template text written yet for "${label}".`;
       const bodyLines = wrapTextLines(content, font, 10, maxWidth);
       ensureSpace(24 + Math.min(bodyLines.length, 3) * 13);
-      page.drawText(label, { x: margin, y, size: 12, font: boldFont, color: teal });
+      page.drawText(displayLabels[idx], { x: margin, y, size: 12, font: boldFont, color: teal });
       y -= 20;
       bodyLines.forEach((line) => { ensureSpace(13); page.drawText(line, { x: margin, y, size: 10, font, color: ink }); y -= 13; });
       y -= 16;
+
+      if (label === "8. Risk Management") {
+        ensureSpace(230);
+        y = drawRiskMatrix({ page, x: margin, y0: y, font, boldFont, rgb });
+      }
+      if (label === "8.1 Hierarchy of Controls") {
+        ensureSpace(170);
+        y = drawHierarchyOfControls({ page, x: margin, y0: y, width: maxWidth, font, boldFont, rgb });
+      }
     });
 
     const pageCount = pdfDoc.getPageCount();
@@ -1605,12 +1640,15 @@ function SystemsView({ clients, selectedId, setSelectedId, documentTemplates, sa
                 {categoryKey !== "sections" && included.length > 0 && (
                   <div className="text-[11px] -mt-2 mb-1" style={{ color: T.slateLight }}>Each of these downloads as its own separate PDF, not one combined document.</div>
                 )}
-                {included.map((label, i) => (
-                  <div key={label} className={categoryKey === "sections" ? "" : "pb-4"} style={categoryKey === "sections" ? {} : { borderBottom: i < included.length - 1 ? `1px dashed ${T.border}` : "none" }}>
-                    <div className="text-sm font-bold" style={{ color: T.tealDark }}>{categoryKey === "sections" ? label : `${i + 1}. ${label}`}</div>
-                    <div className="text-xs mt-1 leading-relaxed whitespace-pre-wrap" style={{ color: T.slate }}>{contentFor(label)}</div>
-                  </div>
-                ))}
+                {(() => {
+                  const displayLabels = categoryKey === "sections" ? renumberSections(included) : included;
+                  return included.map((label, i) => (
+                    <div key={label} className={categoryKey === "sections" ? "" : "pb-4"} style={categoryKey === "sections" ? {} : { borderBottom: i < included.length - 1 ? `1px dashed ${T.border}` : "none" }}>
+                      <div className="text-sm font-bold" style={{ color: T.tealDark }}>{categoryKey === "sections" ? displayLabels[i] : `${i + 1}. ${label}`}</div>
+                      <div className="text-xs mt-1 leading-relaxed whitespace-pre-wrap" style={{ color: T.slate }}>{contentFor(label)}</div>
+                    </div>
+                  ));
+                })()}
               </div>
               {included.length > 0 && (
                 <div className="px-6 py-3 text-[11px]" style={{ borderTop: `1px solid ${T.border}`, color: T.slateLight }}>

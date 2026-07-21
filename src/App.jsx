@@ -1124,6 +1124,139 @@ function wrapTextLines(text, font, size, maxWidth) {
   return lines;
 }
 
+/* ---------- Hardcoded document visuals ---------- */
+// These are built once, per section/procedure, matching the real reference diagrams from
+// OSHE's documents. Each takes the current page/position and returns where drawing left off.
+
+function riskColor(score) {
+  if (score <= 3) return { r: 0.75, g: 0.88, b: 0.62 };
+  if (score <= 6) return { r: 0.24, g: 0.62, b: 0.35 };
+  if (score <= 12) return { r: 0.96, g: 0.75, b: 0.20 };
+  if (score <= 16) return { r: 0.93, g: 0.47, b: 0.18 };
+  return { r: 0.78, g: 0.16, b: 0.16 };
+}
+
+function drawRiskMatrix(ctx) {
+  const { page, x, y0, font, boldFont, rgb } = ctx;
+  let y = y0;
+  const cellW = 62, cellH = 26, labelW = 70;
+  const likelihoods = ["Almost Certain 5", "Likely 4", "Possible 3", "Unlikely 2", "Rare 1"];
+  const likelihoodNums = [5, 4, 3, 2, 1];
+  const consequences = ["1 Insignificant", "2 Minor", "3 Moderate", "4 Major", "5 Catastrophic"];
+  const c2 = (col) => rgb(col.r, col.g, col.b);
+
+  page.drawText("Risk Matrix", { x, y, size: 11, font: boldFont, color: rgb(0.04, 0.68, 0.63) });
+  y -= 18;
+  consequences.forEach((c, i) => {
+    page.drawRectangle({ x: x + labelW + i * cellW, y: y - cellH, width: cellW, height: cellH, color: rgb(0.93, 0.95, 0.94), borderColor: rgb(0.85, 0.85, 0.85), borderWidth: 0.5 });
+    const parts = c.split(" ");
+    page.drawText(parts[0], { x: x + labelW + i * cellW + 4, y: y - 11, size: 7, font: boldFont, color: rgb(0.1, 0.15, 0.15) });
+    page.drawText(parts.slice(1).join(" "), { x: x + labelW + i * cellW + 4, y: y - 21, size: 6.5, font, color: rgb(0.3, 0.35, 0.35) });
+  });
+  y -= cellH;
+  likelihoods.forEach((label, rowIdx) => {
+    page.drawRectangle({ x, y: y - cellH, width: labelW, height: cellH, color: rgb(0.93, 0.95, 0.94), borderColor: rgb(0.85, 0.85, 0.85), borderWidth: 0.5 });
+    page.drawText(label, { x: x + 3, y: y - cellH / 2 - 3, size: 6.5, font: boldFont, color: rgb(0.1, 0.15, 0.15) });
+    for (let colIdx = 0; colIdx < 5; colIdx++) {
+      const score = likelihoodNums[rowIdx] * (colIdx + 1);
+      page.drawRectangle({ x: x + labelW + colIdx * cellW, y: y - cellH, width: cellW, height: cellH, color: c2(riskColor(score)), borderColor: rgb(1, 1, 1), borderWidth: 1 });
+      page.drawText(String(score), { x: x + labelW + colIdx * cellW + cellW / 2 - 4, y: y - cellH / 2 - 3, size: 10, font: boldFont, color: score >= 8 ? rgb(1, 1, 1) : rgb(0.1, 0.15, 0.15) });
+    }
+    y -= cellH;
+  });
+  y -= 8;
+  const bands = [["1-3 Very Low", riskColor(2)], ["4-6 Low", riskColor(5)], ["8-12 Moderate", riskColor(10)], ["15-16 High", riskColor(15)], ["20-25 Critical", riskColor(25)]];
+  bands.forEach(([label, color]) => {
+    page.drawRectangle({ x, y: y - 14, width: 12, height: 12, color: c2(color) });
+    page.drawText(label, { x: x + 16, y: y - 11, size: 8, font, color: rgb(0.2, 0.25, 0.25) });
+    y -= 16;
+  });
+  return y - 10;
+}
+
+function drawHierarchyOfControls(ctx) {
+  const { page, x, y0, width, font, boldFont, rgb } = ctx;
+  let y = y0;
+  page.drawText("Hierarchy of Controls", { x, y, size: 11, font: boldFont, color: rgb(0.04, 0.68, 0.63) });
+  y -= 18;
+  const bands = [
+    ["Elimination", [0.11, 0.55, 0.29], "Most effective"],
+    ["Substitution", [0.55, 0.72, 0.20]],
+    ["Isolation / Engineering Controls", [0.96, 0.75, 0.20]],
+    ["Administrative Controls", [0.93, 0.47, 0.18]],
+    ["Personal Protective Equipment (PPE)", [0.78, 0.16, 0.16], "Least effective — last resort"],
+  ];
+  const bandH = 28;
+  bands.forEach(([label, color, note]) => {
+    page.drawRectangle({ x, y: y - bandH, width, height: bandH - 4, color: rgb(color[0], color[1], color[2]) });
+    page.drawText(label, { x: x + 10, y: y - bandH / 2 - 3, size: 10, font: boldFont, color: rgb(1, 1, 1) });
+    if (note) page.drawText(note, { x: x + width - font.widthOfTextAtSize(note, 8) - 10, y: y - bandH / 2 - 3, size: 8, font, color: rgb(1, 1, 1) });
+    y -= bandH;
+  });
+  return y - 10;
+}
+
+// Flowchart may span onto further pages — returns both the (possibly new) page and the y position.
+function drawFlowchart(ctx) {
+  let { page, pdfDoc, x, y0, width, font, boldFont, rgb, steps, pageWidth, pageHeight, margin } = ctx;
+  let y = y0;
+  const gap = 22;
+  steps.forEach((step, i) => {
+    const lines = wrapTextLines(step.text, font, 9, width - 16);
+    const thisBoxH = Math.max(30, lines.length * 11 + 12);
+    if (y - thisBoxH < margin) {
+      page = pdfDoc.addPage([pageWidth, pageHeight]);
+      y = pageHeight - margin;
+    }
+    page.drawRectangle({ x, y: y - thisBoxH, width, height: thisBoxH, color: rgb(0.93, 0.95, 0.94), borderColor: rgb(0.7, 0.75, 0.75), borderWidth: 1 });
+    lines.forEach((line, li) => page.drawText(line, { x: x + 8, y: y - 14 - li * 11, size: 9, font: boldFont, color: rgb(0.1, 0.15, 0.15) }));
+    y -= thisBoxH;
+    if (i < steps.length - 1) {
+      page.drawLine({ start: { x: x + width / 2, y }, end: { x: x + width / 2, y: y - gap + 6 }, thickness: 1.5, color: rgb(0.4, 0.45, 0.45) });
+      page.drawLine({ start: { x: x + width / 2 - 4, y: y - gap + 10 }, end: { x: x + width / 2, y: y - gap + 4 }, thickness: 1.5, color: rgb(0.4, 0.45, 0.45) });
+      page.drawLine({ start: { x: x + width / 2 + 4, y: y - gap + 10 }, end: { x: x + width / 2, y: y - gap + 4 }, thickness: 1.5, color: rgb(0.4, 0.45, 0.45) });
+      if (step.branchNote) page.drawText(step.branchNote, { x: x + width / 2 + 10, y: y - gap / 2, size: 7, font, color: rgb(0.4, 0.45, 0.45) });
+      y -= gap;
+    }
+  });
+  return { page, y: y - 10 };
+}
+
+// Simple hazard indicator diamonds — a visual flag of which hazard categories apply, not a
+// reproduction of the legally-standardised GHS pictograms themselves.
+function drawHazardIndicators(ctx) {
+  const { page, x, y0, font, boldFont, rgb } = ctx;
+  let y = y0;
+  page.drawText("Hazard Categories Present", { x, y, size: 11, font: boldFont, color: rgb(0.04, 0.68, 0.63) });
+  y -= 20;
+  const size = 40, gapX = 10;
+  const colorMap = { Flammable: [0.93, 0.47, 0.18], Toxic: [0.55, 0.2, 0.6], Corrosive: [0.78, 0.16, 0.16], Oxidiser: [0.96, 0.75, 0.2], Environment: [0.11, 0.55, 0.29] };
+  let cx = x;
+  ["Flammable", "Toxic", "Corrosive", "Oxidiser", "Environment"].forEach((label) => {
+    const c = colorMap[label];
+    const color = rgb(c[0], c[1], c[2]);
+    const cy = y - size / 2;
+    page.drawLine({ start: { x: cx + size / 2, y }, end: { x: cx + size, y: cy }, thickness: 1.5, color });
+    page.drawLine({ start: { x: cx + size, y: cy }, end: { x: cx + size / 2, y: y - size }, thickness: 1.5, color });
+    page.drawLine({ start: { x: cx + size / 2, y: y - size }, end: { x: cx, y: cy }, thickness: 1.5, color });
+    page.drawLine({ start: { x: cx, y: cy }, end: { x: cx + size / 2, y }, thickness: 1.5, color });
+    const labelWidth = font.widthOfTextAtSize(label, 7);
+    page.drawText(label, { x: cx + size / 2 - labelWidth / 2, y: y - size - 12, size: 7, font, color: rgb(0.3, 0.35, 0.35) });
+    cx += size + gapX;
+  });
+  return y - size - 24;
+}
+
+const INCIDENT_FLOWCHART_STEPS = [
+  { text: "Injury, incident, illness or near miss occurred" },
+  { text: "Has someone been injured, or is an emergency service needed?", branchNote: "Yes -> call 111, make the site safe" },
+  { text: "Is this a notifiable event to WorkSafe?", branchNote: "Yes -> freeze the scene, follow the Notifiable Event Process" },
+  { text: "Complete the incident report as soon as possible" },
+  { text: "Manager completes the investigation — reviews the event, risks, hazards, and processes" },
+  { text: "Corrective actions assigned and recorded, with worker involvement" },
+  { text: "Investigation and actions discussed at the next management meeting, and communicated to workers" },
+];
+
 // Downloads a real PDF of what's currently ticked. Manual sections flow continuously (a
 // section only forces a new page if there genuinely isn't room left); Procedures and
 // Policies each start on their own fresh page, since they're separate standalone documents
@@ -1146,17 +1279,27 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
     const logoImage = await loadClientLogoImage(client, pdfDoc);
 
     let page = pdfDoc.addPage([pageWidth, pageHeight]);
-    const bandHeight = 140;
+    const bandHeight = 170;
     page.drawRectangle({ x: 0, y: pageHeight - bandHeight, width: pageWidth, height: bandHeight, color: charcoal });
     if (logoImage) {
-      const maxLogoH = 50, maxLogoW = 140;
+      const maxLogoH = 100, maxLogoW = 220;
       const scale = Math.min(maxLogoH / logoImage.height, maxLogoW / logoImage.width, 1);
       const w = logoImage.width * scale, h = logoImage.height * scale;
       page.drawImage(logoImage, { x: pageWidth - margin - w, y: pageHeight - bandHeight / 2 - h / 2, width: w, height: h });
     }
-    page.drawText(category.label.toUpperCase(), { x: margin, y: pageHeight - 55, size: 10, font: boldFont, color: teal });
+    page.drawText("HEALTH AND SAFETY MANUAL", { x: margin, y: pageHeight - 55, size: 10, font: boldFont, color: teal });
     page.drawText(client.name, { x: margin, y: pageHeight - 85, size: 20, font: boldFont, color: rgb(1, 1, 1) });
     page.drawText("Prepared by OSHE Limited", { x: margin, y: pageHeight - 108, size: 9, font, color: rgb(0.72, 0.78, 0.78) });
+
+    // Prepared for / Date / Review Date / Signature — bottom-left of the cover page.
+    let coverY = 190;
+    page.drawText(`Prepared for: ${client.name}`, { x: margin, y: coverY, size: 11, font: boldFont, color: ink });
+    coverY -= 22;
+    page.drawText(`Date: ${fmtDate(today())}`, { x: margin, y: coverY, size: 10, font, color: slate });
+    coverY -= 18;
+    page.drawText(`Review Date: ${fmtDate(client.ohsmsDue)}`, { x: margin, y: coverY, size: 10, font, color: slate });
+    coverY -= 30;
+    page.drawText("Signature: ___________________________________", { x: margin, y: coverY, size: 10, font, color: slate });
 
     page = pdfDoc.addPage([pageWidth, pageHeight]);
     let y = pageHeight - margin;
@@ -1226,6 +1369,27 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
       page.drawText(line, { x: margin, y, size: 10, font, color: ink });
       y -= 13;
     });
+
+    // Hardcoded visuals for the procedures that have real reference diagrams behind them.
+    if (label === "Hazard & Risk Management Procedure") {
+      y -= 16;
+      ensureSpace(230);
+      y = drawRiskMatrix({ page, x: margin, y0: y, font, boldFont, rgb });
+      ensureSpace(170);
+      y = drawHierarchyOfControls({ page, x: margin, y0: y, width: maxWidth, font, boldFont, rgb });
+    }
+    if (label === "Incident Reporting & Investigation Procedure") {
+      y -= 16;
+      ensureSpace(60);
+      const result = drawFlowchart({ page, pdfDoc, x: margin, y0: y, width: maxWidth, font, boldFont, rgb, steps: INCIDENT_FLOWCHART_STEPS, pageWidth, pageHeight, margin });
+      page = result.page;
+      y = result.y;
+    }
+    if (label === "Hazardous Substances Procedure") {
+      y -= 16;
+      ensureSpace(90);
+      y = drawHazardIndicators({ page, x: margin, y0: y, font, boldFont, rgb });
+    }
 
     const pageCount = pdfDoc.getPageCount();
     for (let p = 0; p < pageCount; p++) {
@@ -2593,11 +2757,16 @@ export default function App() {
       "19.2 External Advice": "The Company may seek external advice when information or knowledge is limited, ensuring advice is sourced from a competent provider with evidence to support this on request.",
       "20. Document Control": "This OHSMS has been developed for The Company by H.A.R.M Limited and is reviewed annually to ensure the document and related templates remain accurate. Any changes required before the annual review are discussed with H.A.R.M Limited. All documentation is retained for a minimum of five years, with health monitoring records kept for 30 years (or 40 years if asbestos-related) after the record is made.",
     };
+
+    const realPolicyContent = {
+      "Health & Safety Policy": "The Company is committed to ensuring, so far as is reasonably practicable, that its obligations under the Health and Safety at Work Act 2015, applicable Regulations, Approved Codes of Practice, Guidelines, and other relevant standards are met — and to the health, safety and wellness of workers and anyone else affected by The Company's operations. The Company is dedicated to a work environment where health, safety and wellness is of equal importance to all other business operations, and commits to:\n\nEnsuring legislative requirements are met; gaining and maintaining knowledge of work health and safety matters; understanding the business, its operations, and associated hazards and risks; ensuring resources are used to eliminate or minimise risk; having processes for receiving, communicating and considering information on incidents, hazards, and risks; responding in a timely manner to health and safety information; implementing processes and complying with duties; providing a safe and healthy work environment; preventing work-related injury, ill health, and adverse effects to mental wellbeing; providing PPE and training on its use; meeting and exceeding legislative obligations; providing information, supervision, training and instruction; continually improving the Health and Safety Management System; managing contractors so they don't pose a risk to workers or themselves; monitoring exposure to hazardous substances; identifying hazards, controlling risks, and reviewing controls; providing workplace facilities and first aid; maintaining an emergency plan; providing safe plant, structures and systems of work; and supporting early return to work.\n\nWorkers are expected to take reasonable care for their own health and safety and that of others, comply with reasonable instructions and cooperate with policies and procedures, wear PPE provided, report incidents, hazards or risks, and participate in health and safety within The Company.\n\nManagement leads health and safety by example, promotes a positive health and safety culture, enables and encourages worker communication and participation, ensures processes are communicated and followed, ensures workers are competent for their work, and ensures policies, procedures and objectives remain compatible with The Company's direction, work practices, goals and targets.",
+    };
     (async () => {
       try {
         const allContent = [
           ...Object.entries(realProcedureContent).map(([label, content]) => ["procedures", label, content]),
           ...Object.entries(realSectionContent).map(([label, content]) => ["sections", label, content]),
+          ...Object.entries(realPolicyContent).map(([label, content]) => ["policies", label, content]),
         ];
         await Promise.all(
           allContent.map(async ([catKey, label, content]) => {

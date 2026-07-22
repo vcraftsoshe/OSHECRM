@@ -35,7 +35,7 @@ jobs:
       - name: Deploy Storage rules
         run: |
           echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}' > /tmp/gcp-key.json
-          npx firebase-tools deploy --only storage:rules --project oshe-895ad
+          npx firebase-tools deploy --only storage --project oshe-895ad
         env:
           GOOGLE_APPLICATION_CREDENTIALS: /tmp/gcp-key.json
 

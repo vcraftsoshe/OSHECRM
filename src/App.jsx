@@ -1133,19 +1133,23 @@ async function loadClientLogoImage(client, pdfDoc) {
 }
 
 function wrapTextLines(text, font, size, maxWidth) {
-  const words = text.split(" ");
   const lines = [];
-  let line = "";
-  for (const word of words) {
-    const test = line ? `${line} ${word}` : word;
-    if (font.widthOfTextAtSize(test, size) > maxWidth && line) {
-      lines.push(line);
-      line = word;
-    } else {
-      line = test;
-    }
-  }
-  if (line) lines.push(line);
+  const paragraphs = text.split("\n");
+  paragraphs.forEach((para) => {
+    if (para.trim() === "") { lines.push(""); return; }
+    const words = para.split(" ");
+    let line = "";
+    words.forEach((word) => {
+      const test = line ? `${line} ${word}` : word;
+      if (font.widthOfTextAtSize(test, size) > maxWidth && line) {
+        lines.push(line);
+        line = word;
+      } else {
+        line = test;
+      }
+    });
+    if (line) lines.push(line);
+  });
   return lines;
 }
 

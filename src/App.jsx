@@ -1338,157 +1338,6 @@ function drawPDCACycle(ctx) {
   return y - 2 * (boxH + 10) - 10;
 }
 
-// Real org hierarchy from the Manual's own SmartArt data — section 5.1.
-function drawOrgHierarchy(ctx) {
-  const { page, x, y0, width, font, boldFont, rgb } = ctx;
-  let y = y0;
-  const boxH = 26, gap = 18;
-  const centerX = x + width / 2;
-
-  const drawBox = (label, cy, w) => {
-    page.drawRectangle({ x: centerX - w / 2, y: cy - boxH, width: w, height: boxH, color: rgb(0.04, 0.68, 0.63), borderColor: rgb(0.04, 0.5, 0.47), borderWidth: 1 });
-    const tw = font.widthOfTextAtSize(label, 9);
-    page.drawText(label, { x: centerX - tw / 2, y: cy - boxH / 2 - 3, size: 9, font: boldFont, color: rgb(1, 1, 1) });
-  };
-  const drawArrowDown = (cy) => {
-    page.drawLine({ start: { x: centerX, y: cy }, end: { x: centerX, y: cy - gap + 4 }, thickness: 1.5, color: rgb(0.4, 0.45, 0.45) });
-  };
-
-  drawBox("The Company (PCBU)", y, 220);
-  y -= boxH; drawArrowDown(y); y -= gap;
-  drawBox("Director", y, 180);
-  y -= boxH; drawArrowDown(y); y -= gap;
-  drawBox("Officer/s", y, 180);
-  y -= boxH; drawArrowDown(y); y -= gap;
-  drawBox("Management / Supervisors", y, 220);
-  y -= boxH; drawArrowDown(y); y -= gap;
-  drawBox("Supervisors / Workers", y, 220);
-  y -= boxH - 4;
-
-  y -= 20;
-  const roles = ["Employees (Workers)", "Contractors (Workers)", "Subcontractors (Workers)"];
-  const roleW = width / 3 - 8;
-  roles.forEach((role, i) => {
-    const bx = x + i * (roleW + 12);
-    page.drawRectangle({ x: bx, y: y - boxH, width: roleW, height: boxH, color: rgb(0.93, 0.95, 0.94), borderColor: rgb(0.7, 0.75, 0.75), borderWidth: 1 });
-    wrapTextLines(role, font, 8, roleW - 10).forEach((line, li) => {
-      page.drawText(line, { x: bx + 6, y: y - 12 - li * 10, size: 8, font: boldFont, color: rgb(0.1, 0.15, 0.15) });
-    });
-  });
-  return y - boxH - 14;
-}
-
-// The Manual's own compact PDCA + Continuous Improvement diagram — section 6.1 (simpler than
-// the more detailed one in the Hazard & Risk Management Procedure).
-function drawObjectivesPDCA(ctx) {
-  const { page, x, y0, width, font, boldFont, rgb } = ctx;
-  let y = y0;
-  const boxW = width / 2 - 6, boxH = 50;
-  const cells = [
-    { label: "ACT", color: [0.78, 0.16, 0.16] },
-    { label: "PLAN", color: [0.04, 0.68, 0.63] },
-    { label: "CHECK", color: [0.95, 0.65, 0.15] },
-    { label: "DO", color: [0.11, 0.55, 0.29] },
-  ];
-  cells.forEach((c, i) => {
-    const col = i % 2, row = Math.floor(i / 2);
-    const bx = x + col * (boxW + 12);
-    const by = y - row * (boxH + 10);
-    page.drawRectangle({ x: bx, y: by - boxH, width: boxW, height: boxH, color: rgb(c.color[0], c.color[1], c.color[2]) });
-    const tw = font.widthOfTextAtSize(c.label, 13);
-    page.drawText(c.label, { x: bx + boxW / 2 - tw / 2, y: by - boxH / 2 - 5, size: 13, font: boldFont, color: rgb(1, 1, 1) });
-  });
-  const midY = y - boxH - 5;
-  page.drawText("Continuous Improvement", { x: x, y: midY, size: 9, font: boldFont, color: rgb(0.1, 0.15, 0.15) });
-  return y - 2 * (boxH + 10) - 10;
-}
-
-// The real hazard-categorisation grid from the Manual — section 7, matches the same content
-// in the Hazard & Risk Management Procedure's own cover page.
-function drawHazardCategoryGrid(ctx) {
-  const { page, x, y0, width, font, boldFont, rgb } = ctx;
-  let y = y0;
-  const categories = [
-    { title: "Activities (routine and non-routine)", items: ["Infrastructure, equipment, materials, substances, physical conditions", "Product design, development, testing, production, assembly, construction, service, maintenance, disposal", "Human factors", "How the work is usually done"] },
-    { title: "Emergency Situations", items: ["Potential natural disasters", "High risk work e.g. working at height, confined space, digger roll-over"] },
-    { title: "People", items: ["Workers and contractors", "Visitors and other persons", "Those in the vicinity of the workplace", "Workers at a location under another company's control, or mobile workers"] },
-    { title: "Other Issues", items: ["Design of the workplace or machinery", "Situations caused by the Company in the workplace", "Situations in the vicinity caused by other companies"] },
-    { title: "Company Changes", items: ["Proposed changes to the Company", "Changes in knowledge/information about hazards", "Past incidents and their causes", "Social factors including workload, leadership, and culture"] },
-  ];
-  const cols = 2;
-  const colW = width / cols - 8;
-  page.drawText("What to consider when identifying hazards", { x, y, size: 10, font: boldFont, color: rgb(0.04, 0.68, 0.63) });
-  y -= 18;
-  let colHeights = [y, y];
-  categories.forEach((cat, i) => {
-    const col = i % cols;
-    const bx = x + col * (colW + 16);
-    let cy = colHeights[col];
-    page.drawRectangle({ x: bx, y: cy - 16, width: colW, height: 16, color: rgb(0.09, 0.17, 0.18) });
-    page.drawText(cat.title, { x: bx + 4, y: cy - 12, size: 8.5, font: boldFont, color: rgb(1, 1, 1) });
-    cy -= 20;
-    cat.items.forEach((item) => {
-      wrapTextLines(`- ${item}`, font, 7, colW - 8).forEach((line) => {
-        page.drawText(line, { x: bx + 4, y: cy, size: 7, font, color: rgb(0.3, 0.35, 0.35) });
-        cy -= 9;
-      });
-    });
-    colHeights[col] = cy - 8;
-  });
-  return Math.min(...colHeights) - 6;
-}
-
-// The real Legislation → Company Rules flow from the Manual — section 7.1.
-function drawLegislationFlow(ctx) {
-  const { page, x, y0, width, font, boldFont, rgb } = ctx;
-  let y = y0;
-  const items = ["HSAW Act 2015", "Regulations", "Codes of Practice", "Standards", "Guidelines", "Industry Standards/Guidance"];
-  const boxW = width / 3 - 10, boxH = 24;
-  page.drawText("Legislation", { x, y, size: 10, font: boldFont, color: rgb(0.04, 0.68, 0.63) });
-  y -= 18;
-  items.forEach((item, i) => {
-    const col = i % 3, row = Math.floor(i / 3);
-    const bx = x + col * (boxW + 15);
-    const by = y - row * (boxH + 8);
-    page.drawRectangle({ x: bx, y: by - boxH, width: boxW, height: boxH, color: rgb(0.93, 0.95, 0.94), borderColor: rgb(0.7, 0.75, 0.75), borderWidth: 1 });
-    wrapTextLines(item, font, 7.5, boxW - 8).forEach((line, li) => {
-      page.drawText(line, { x: bx + 4, y: by - 10 - li * 9, size: 7.5, font: boldFont, color: rgb(0.1, 0.15, 0.15) });
-    });
-  });
-  const rows = Math.ceil(items.length / 3);
-  y -= rows * (boxH + 8) + 10;
-  page.drawLine({ start: { x: x + width / 2, y: y + 8 }, end: { x: x + width / 2, y: y - 4 }, thickness: 1.5, color: rgb(0.4, 0.45, 0.45) });
-  y -= 8;
-  page.drawRectangle({ x: x + width / 2 - 90, y: y - 24, width: 180, height: 24, color: rgb(0.04, 0.68, 0.63) });
-  const tw = font.widthOfTextAtSize("Company Rules & Requirements", 8);
-  page.drawText("Company Rules & Requirements", { x: x + width / 2 - Math.min(tw, 170) / 2, y: y - 15, size: 8, font: boldFont, color: rgb(1, 1, 1) });
-  return y - 34;
-}
-
-function drawHierarchyOfControls(ctx) {
-  const { page, x, y0, width, font, boldFont, rgb, showTitle = true } = ctx;
-  let y = y0;
-  if (showTitle) {
-    page.drawText("Hierarchy of Controls", { x, y, size: 11, font: boldFont, color: rgb(0.04, 0.68, 0.63) });
-    y -= 18;
-  }
-  const bands = [
-    ["Elimination", [0.11, 0.55, 0.29], "Most effective"],
-    ["Substitution", [0.55, 0.72, 0.20]],
-    ["Isolation / Engineering Controls", [0.96, 0.75, 0.20]],
-    ["Administrative Controls", [0.93, 0.47, 0.18]],
-    ["Personal Protective Equipment (PPE)", [0.78, 0.16, 0.16], "Least effective — last resort"],
-  ];
-  const bandH = 28;
-  bands.forEach(([label, color, note]) => {
-    page.drawRectangle({ x, y: y - bandH, width, height: bandH - 4, color: rgb(color[0], color[1], color[2]) });
-    page.drawText(label, { x: x + 10, y: y - bandH / 2 - 3, size: 10, font: boldFont, color: rgb(1, 1, 1) });
-    if (note) page.drawText(note, { x: x + width - font.widthOfTextAtSize(note, 8) - 10, y: y - bandH / 2 - 3, size: 8, font, color: rgb(1, 1, 1) });
-    y -= bandH;
-  });
-  return y - 10;
-}
-
 // Flowchart may span onto further pages — returns both the (possibly new) page and the y position.
 function drawFlowchart(ctx) {
   let { page, pdfDoc, x, y0, width, font, boldFont, rgb, steps, pageWidth, pageHeight, margin } = ctx;
@@ -1728,23 +1577,17 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
       if (label === "5.1 Organisational Roles, Responsibilities, Accountabilities & Authorities") {
         ensureSpace(220);
         const orgImage = await loadStaticDiagramImage(pdfDoc, "org-hierarchy.png");
-        y = orgImage
-          ? drawDiagramImage({ page, image: orgImage, x: margin, y0: y, maxWidth })
-          : drawOrgHierarchy({ page, x: margin, y0: y, width: maxWidth, font, boldFont, rgb });
+        if (orgImage) y = drawDiagramImage({ page, image: orgImage, x: margin, y0: y, maxWidth });
       }
       if (label === "6.1 Objectives") {
         ensureSpace(140);
         const pdcaImage = await loadStaticDiagramImage(pdfDoc, "planning-pdca.png");
-        y = pdcaImage
-          ? drawDiagramImage({ page, image: pdcaImage, x: margin, y0: y, maxWidth })
-          : drawObjectivesPDCA({ page, x: margin, y0: y, width: maxWidth, font, boldFont, rgb });
+        if (pdcaImage) y = drawDiagramImage({ page, image: pdcaImage, x: margin, y0: y, maxWidth });
       }
       if (label === "7. Hazard Identification and Assessment of OHS Risks") {
         ensureSpace(220);
         const hazardImage = await loadStaticDiagramImage(pdfDoc, "hazard-categories.png");
-        y = hazardImage
-          ? drawDiagramImage({ page, image: hazardImage, x: margin, y0: y, maxWidth })
-          : drawHazardCategoryGrid({ page, x: margin, y0: y, width: maxWidth, font, boldFont, rgb });
+        if (hazardImage) y = drawDiagramImage({ page, image: hazardImage, x: margin, y0: y, maxWidth });
         y -= 16; ensureSpace(60);
         const result = drawFlowchart({ page, pdfDoc, x: margin, y0: y, width: maxWidth, font, boldFont, rgb, steps: HAZARD_ID_FLOWCHART_STEPS, pageWidth, pageHeight, margin });
         page = result.page; y = result.y;
@@ -1752,9 +1595,7 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
       if (label === "7.1 Legal and Other Requirements") {
         ensureSpace(140);
         const legislationImage = await loadStaticDiagramImage(pdfDoc, "legislation-flow.png");
-        y = legislationImage
-          ? drawDiagramImage({ page, image: legislationImage, x: margin, y0: y, maxWidth })
-          : drawLegislationFlow({ page, x: margin, y0: y, width: maxWidth, font, boldFont, rgb });
+        if (legislationImage) y = drawDiagramImage({ page, image: legislationImage, x: margin, y0: y, maxWidth });
       }
       if (label === "8. Risk Management") {
         ensureSpace(230);
@@ -1763,9 +1604,7 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
       if (label === "8.1 Hierarchy of Controls") {
         ensureSpace(170);
         const hocImage = await loadStaticDiagramImage(pdfDoc, "hierarchy-of-controls.png");
-        y = hocImage
-          ? drawDiagramImage({ page, image: hocImage, x: margin, y0: y, maxWidth })
-          : drawHierarchyOfControls({ page, x: margin, y0: y, width: maxWidth, font, boldFont, rgb, showTitle: false });
+        if (hocImage) y = drawDiagramImage({ page, image: hocImage, x: margin, y0: y, maxWidth });
       }
       if (label === "9. Incidents and Corrective Actions") {
         ensureSpace(220);
@@ -1855,9 +1694,7 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
       y = drawPDCACycle({ page, x: margin, y0: y, width: maxWidth, font, boldFont, rgb });
       ensureSpace(170);
       const hocImage2 = await loadStaticDiagramImage(pdfDoc, "hierarchy-of-controls.png");
-      y = hocImage2
-        ? drawDiagramImage({ page, image: hocImage2, x: margin, y0: y, maxWidth })
-        : drawHierarchyOfControls({ page, x: margin, y0: y, width: maxWidth, font, boldFont, rgb });
+      if (hocImage2) y = drawDiagramImage({ page, image: hocImage2, x: margin, y0: y, maxWidth });
       y -= 16;
       ensureSpace(60);
       result = drawFlowchart({ page, pdfDoc, x: margin, y0: y, width: maxWidth, font, boldFont, rgb, steps: RISK_MANAGEMENT_FLOWCHART_STEPS, pageWidth, pageHeight, margin });

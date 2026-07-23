@@ -1187,39 +1187,107 @@ function drawDiagramImage({ page, image, x, y0, maxWidth, maxHeight = 320 }) {
   return y0 - h - 14;
 }
 
-// The Health & Safety Policy quadrant diagram has the client's name baked into the artwork
-// itself, in the center circle ("(PCBU) / The Company"). Since that has to change per client,
-// the bundled asset (policy-quadrant.png) has that exact spot pre-painted blank — matching the
-// surrounding gradient — and we draw the real "(PCBU)" label + client name over it here, at
-// render time. All pixel coordinates below are measured against the original 937x463 source PNG.
-async function drawPolicyQuadrant({ pdfDoc, page, x, y0, maxWidth, boldFont, rgb, clientName, maxHeight = 340 }) {
-  const image = await loadStaticDiagramImage(pdfDoc, "policy-quadrant.png");
-  if (!image) return null; // caller decides what to fall back to
-  const scale = Math.min(maxWidth / image.width, maxHeight / image.height, 1);
-  const w = image.width * scale, h = image.height * scale;
-  page.drawImage(image, { x, y: y0 - h, width: w, height: h });
-
-  const toPageX = (px) => x + px * scale;
-  const toPageY = (py) => y0 - py * scale;
-  const blankBoxWidthPx = 80; // width of the painted-out placeholder area, for shrink-to-fit
-
-  const fitSize = (text, startPx) => {
-    let size = Math.max(5, startPx * scale);
-    const maxWidthPt = blankBoxWidthPx * scale;
-    while (size > 4 && boldFont.widthOfTextAtSize(text, size) > maxWidthPt) size -= 0.5;
-    return size;
-  };
-  const drawCentered = (text, cxPx, cyPx, startPx) => {
-    const size = fitSize(text, startPx);
-    const tw = boldFont.widthOfTextAtSize(text, size);
-    page.drawText(text, { x: toPageX(cxPx) - tw / 2, y: toPageY(cyPx) - size / 3, size, font: boldFont, color: rgb(1, 1, 1) });
-  };
-
-  drawCentered("(PCBU)", 412, 246, 15);
-  drawCentered(clientName, 412, 280, 15);
-
-  return y0 - h - 14;
+// The Health & Safety Policy quadrant content — real wording from the reference Policy
+// document. Client name is interpolated at render time via a template function.
+const DEEP_GREEN = [0.06, 0.20, 0.16];
+function getPolicyQuadrants(clientName) {
+  return [
+    { label: `(PCBU) ${clientName}`, color: DEEP_GREEN, items: [
+      "Provide a safe and healthy work environment",
+      "Prevent work related injury, ill health and adverse effects to mental wellbeing",
+      "Provide Personal Protective Equipment and applicable training on its use",
+      "Meet and exceed our legislative obligations",
+      "Provide information, supervision, training and instruction to workers",
+      "Continually improve our Health and Safety Management System",
+      "Manage contractors to ensure they do not pose a risk to our workers or themselves",
+      "Actively monitor exposure to substances hazardous to health",
+      "Identify hazards, control risks and review controls",
+      "Provide workplace facilities and first aid",
+      "Prepare, implement, and maintain a plan for emergencies",
+      "Provide and maintain safe plant, structures, and systems of work",
+    ] },
+    { label: "Officers", color: DEEP_GREEN, items: [
+      `Ensure that ${clientName} meets legislative requirements`,
+      "Gain and maintain knowledge of work health and safety matters",
+      "Understand the nature of the business, its operation and the hazards and risks associated with the operation",
+      `Ensure ${clientName} has and uses resources to ensure risks to health and safety are eliminated or minimised`,
+      `Ensure ${clientName} has processes for receiving, communicating and considering information regarding incidents, hazards, and risks`,
+      `Ensure ${clientName} responds in a timely manner to any information received in relation to health and safety`,
+      `Ensure ${clientName} implements processes and complies with any duties`,
+    ] },
+    { label: "Supervisors", color: DEEP_GREEN, items: [
+      "Support the Officer in meeting his/her duties",
+      "Lead Health and Safety by example",
+      "Promote a positive Health and Safety culture",
+      "Enable and encourage workers to communicate and participate in Health and Safety",
+      "Ensure that processes and procedures are communicated and followed",
+      "Ensure workers are competent for the work being undertaken",
+      `Ensure that all policies, procedures, and objectives are in place and compatible with ${clientName}'s direction, work practices, goals, and targets`,
+      "Support early return to work",
+    ] },
+    { label: "Workers", color: DEEP_GREEN, items: [
+      "Take reasonable care for his/her own Health and Safety",
+      "Take reasonable care that his/her acts or omissions do not adversely affect the health and safety of other persons",
+      `Comply with any reasonable instruction from ${clientName}`,
+      `Cooperate with any reasonable policy or procedure from ${clientName}`,
+      "Wear all Personal Protective Equipment provided",
+      "Report any incidents, hazards or risks",
+      `Participate in Health and Safety within ${clientName}`,
+    ] },
+  ];
 }
+
+function getPolicyIntro(clientName) {
+  return `${clientName} is committed to ensuring so far as is reasonably practicable the obligations under the Health and Safety at Work Act (2015), applicable Regulations, Approved Codes of Practice, Guidelines, and other relevant standards are met. ${clientName} will also ensure as far as is reasonably practicable the health, safety and wellness of workers and any other person(s) that may be affected from the risks created by the operations of ${clientName}. ${clientName} is dedicated to providing a work environment where health, safety and wellness is of equal importance to all other business operations and the culture within ${clientName} reflects this by making a commitment to:`;
+}
+
+function drawCenteredText(page, text, centerX, y, size, font, color) {
+  const w = font.widthOfTextAtSize(text, size);
+  page.drawText(text, { x: centerX - w / 2, y, size, font, color });
+}
+
+// Draws the 4-box Health & Safety Policy grid (PCBU / Officers / Supervisors / Workers),
+// all boxes the same height (sized to the tallest list). Returns the bottom y.
+function drawPolicyGrid({ page, x, y0, maxWidth, font, boldFont, rgb, clientName }) {
+  const quadrants = getPolicyQuadrants(clientName);
+  const colGap = 14, rowGap = 10;
+  const colW = (maxWidth - colGap) / 2;
+  const headerH = 20, cellPad = 8;
+
+  const cellContentHeight = (items) => {
+    let h = 0;
+    items.forEach((item) => {
+      h += wrapTextLines("•  " + item, font, 7.5, colW - 2 * cellPad).length * 9.5 + 3;
+    });
+    return h;
+  };
+  const maxContentH = Math.max(...quadrants.map((q) => cellContentHeight(q.items)));
+  const cellH = headerH + maxContentH + cellPad * 2;
+
+  const drawCell = (cx, yTop, item) => {
+    page.drawRectangle({ x: cx, y: yTop - headerH, width: colW, height: headerH, color: rgb(item.color[0], item.color[1], item.color[2]) });
+    page.drawText(item.label, { x: cx + cellPad, y: yTop - headerH + 6, size: 9.5, font: boldFont, color: rgb(1, 1, 1) });
+    let cy = yTop - headerH - cellPad - 7;
+    item.items.forEach((line) => {
+      wrapTextLines("•  " + line, font, 7.5, colW - 2 * cellPad).forEach((wl) => {
+        page.drawText(wl, { x: cx + cellPad, y: cy, size: 7.5, font, color: rgb(0.2, 0.25, 0.25) });
+        cy -= 9.5;
+      });
+      cy -= 3;
+    });
+    page.drawRectangle({ x: cx, y: yTop - cellH, width: colW, height: cellH, borderColor: rgb(0.75, 0.8, 0.8), borderWidth: 1 });
+  };
+
+  drawCell(x, y0, quadrants[0]);
+  drawCell(x + colW + colGap, y0, quadrants[1]);
+  const row2Y = y0 - cellH - rowGap;
+  drawCell(x, row2Y, quadrants[2]);
+  drawCell(x + colW + colGap, row2Y, quadrants[3]);
+
+  return row2Y - cellH;
+}
+
+
 
 function wrapTextLines(text, font, size, maxWidth) {
   const lines = [];
@@ -1470,7 +1538,7 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
   const ink = rgb(0.08, 0.14, 0.13);
   const slate = rgb(0.36, 0.45, 0.45);
   const teal = rgb(0.04, 0.68, 0.63);
-  const charcoal = rgb(0.10, 0.17, 0.18);
+  const charcoal = rgb(0.06, 0.20, 0.16);
   const pageWidth = 595, pageHeight = 842, margin = 50;
   const maxWidth = pageWidth - margin * 2;
 
@@ -1510,57 +1578,74 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
     const ensureSpace = (needed) => { if (y - needed < margin) newPage(); };
 
     const displayLabels = renumberSections(included);
+
+    // Map of section label -> diagram image (filename + max render height). Measuring the
+    // image's scaled height up front lets us reserve space for heading + body + diagram as one
+    // unit, so a section never gets split with its heading on one page and diagram on the next.
+    const SECTION_DIAGRAMS = {
+      "5.1 Organisational Roles, Responsibilities, Accountabilities & Authorities": { file: "org-hierarchy.png", maxHeight: 220 },
+      "6.1 Objectives": { file: "planning-pdca.png", maxHeight: 120, center: true },
+      "7. Hazard Identification and Assessment of OHS Risks": { file: "hazard-categories.png", maxHeight: 220 },
+      "7.1 Legal and Other Requirements": { file: "legislation-flow.png", maxHeight: 140, gapBefore: 6 },
+      "8.1 Hierarchy of Controls": { file: "hierarchy-of-controls.png", maxHeight: 145 },
+      "9. Incidents and Corrective Actions": { file: "incident-corrective-cycle.png", maxHeight: 110, center: true },
+    };
+    function scaledImageHeight(image, forWidth, maxHeight) {
+      const scale = Math.min(forWidth / image.width, maxHeight / image.height, 1);
+      return image.height * scale;
+    }
+
     for (let idx = 0; idx < included.length; idx++) {
       const label = included[idx];
+
+      if (label === "4. Health & Safety Policy") {
+        const raw = documentTemplates[templateKey(categoryKey, label)] || "";
+        const content = raw.replaceAll("The Company", client.name) || `No template text written yet for "${label}".`;
+        const landscapeWidth = pageHeight, landscapeHeight = pageWidth, lMargin = 40;
+        const landscapePage = pdfDoc.addPage([landscapeWidth, landscapeHeight]);
+        let ly = landscapeHeight - lMargin;
+        landscapePage.drawText(displayLabels[idx], { x: lMargin, y: ly, size: 13, font: boldFont, color: teal });
+        ly -= 18;
+        wrapTextLines(content, font, 9, landscapeWidth - lMargin * 2).forEach((line) => {
+          landscapePage.drawText(line, { x: lMargin, y: ly, size: 9, font, color: ink });
+          ly -= 12;
+        });
+        ly -= 14;
+        drawPolicyGrid({ page: landscapePage, x: lMargin, y0: ly, maxWidth: landscapeWidth - lMargin * 2, font, boldFont, rgb, clientName: client.name });
+        newPage(); // force fresh portrait page so section 5+ don't land back on the pre-section-4 page
+        continue;
+      }
+
       const raw = documentTemplates[templateKey(categoryKey, label)] || "";
       const content = raw.replaceAll("The Company", client.name) || `No template text written yet for "${label}".`;
       const bodyLines = wrapTextLines(content, font, 10, maxWidth);
-      ensureSpace(24 + Math.min(bodyLines.length, 3) * 13);
-      page.drawText(displayLabels[idx], { x: margin, y, size: 12, font: boldFont, color: teal });
-      y -= 20;
-      bodyLines.forEach((line) => { ensureSpace(13); page.drawText(line, { x: margin, y, size: 10, font, color: ink }); y -= 13; });
-      y -= 16;
 
-      if (label === "4. Health & Safety Policy") {
-        ensureSpace(240);
-        const newY = await drawPolicyQuadrant({ pdfDoc, page, x: margin, y0: y, maxWidth, boldFont, rgb, clientName: client.name });
-        if (newY !== null) y = newY;
+      // Pre-load this section's diagram (if any) so we can measure it before committing to a page.
+      const diagramSpec = SECTION_DIAGRAMS[label];
+      let diagramImage = null, diagramHeight = 0;
+      if (diagramSpec) {
+        diagramImage = await loadStaticDiagramImage(pdfDoc, diagramSpec.file);
+        if (diagramImage) diagramHeight = scaledImageHeight(diagramImage, maxWidth, diagramSpec.maxHeight) + 14;
       }
-      if (label === "5.1 Organisational Roles, Responsibilities, Accountabilities & Authorities") {
-        ensureSpace(220);
-        const orgImage = await loadStaticDiagramImage(pdfDoc, "org-hierarchy.png");
-        if (orgImage) y = drawDiagramImage({ page, image: orgImage, x: margin, y0: y, maxWidth });
-      }
-      if (label === "6.1 Objectives") {
-        ensureSpace(140);
-        const pdcaImage = await loadStaticDiagramImage(pdfDoc, "planning-pdca.png");
-        if (pdcaImage) y = drawDiagramImage({ page, image: pdcaImage, x: margin, y0: y, maxWidth });
-      }
-      if (label === "7. Hazard Identification and Assessment of OHS Risks") {
-        ensureSpace(220);
-        const hazardImage = await loadStaticDiagramImage(pdfDoc, "hazard-categories.png");
-        if (hazardImage) y = drawDiagramImage({ page, image: hazardImage, x: margin, y0: y, maxWidth });
-      }
-      if (label === "7.1 Legal and Other Requirements") {
-        ensureSpace(140);
-        const legislationImage = await loadStaticDiagramImage(pdfDoc, "legislation-flow.png");
-        if (legislationImage) y = drawDiagramImage({ page, image: legislationImage, x: margin, y0: y, maxWidth });
-      }
-      if (label === "8. Risk Management") {
-        ensureSpace(230);
-        const riskMatrixImage = await loadStaticDiagramImage(pdfDoc, "risk-matrix.png");
-        if (riskMatrixImage) y = drawDiagramImage({ page, image: riskMatrixImage, x: margin, y0: y, maxWidth });
-      }
-      if (label === "8.1 Hierarchy of Controls") {
-        ensureSpace(170);
-        const hocImage = await loadStaticDiagramImage(pdfDoc, "hierarchy-of-controls.png");
-        if (hocImage) y = drawDiagramImage({ page, image: hocImage, x: margin, y0: y, maxWidth });
-      }
-      if (label === "9. Incidents and Corrective Actions") {
-        ensureSpace(220);
-        const incidentCycleImage = await loadStaticDiagramImage(pdfDoc, "incident-corrective-cycle.png");
-        if (incidentCycleImage) {
-          y = drawDiagramImage({ page, image: incidentCycleImage, x: margin, y0: y, maxWidth });
+
+      const headingHeight = 20;
+      const bodyHeight = bodyLines.length * 13;
+      const gapBefore = diagramSpec?.gapBefore ?? 16;
+      const totalNeeded = headingHeight + bodyHeight + gapBefore + diagramHeight;
+      ensureSpace(Math.min(totalNeeded, pageHeight - margin * 2)); // cap so oversized sections don't loop forever
+
+      page.drawText(displayLabels[idx], { x: margin, y, size: 12, font: boldFont, color: teal });
+      y -= headingHeight;
+      bodyLines.forEach((line) => { ensureSpace(13); page.drawText(line, { x: margin, y, size: 10, font, color: ink }); y -= 13; });
+      y -= gapBefore;
+
+      if (diagramImage) {
+        if (diagramSpec.center) {
+          const scale = Math.min(maxWidth / diagramImage.width, diagramSpec.maxHeight / diagramImage.height, 1);
+          const drawnW = diagramImage.width * scale;
+          y = drawDiagramImage({ page, image: diagramImage, x: margin + (maxWidth - drawnW) / 2, y0: y, maxWidth: drawnW, maxHeight: diagramSpec.maxHeight });
+        } else {
+          y = drawDiagramImage({ page, image: diagramImage, x: margin, y0: y, maxWidth, maxHeight: diagramSpec.maxHeight });
         }
       }
     }
@@ -1589,6 +1674,46 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
   // download each one as its own real PDF file, not bundled into anything.
   for (let idx = 0; idx < included.length; idx++) {
     const label = included[idx];
+
+    if (label === "Health & Safety Policy") {
+      const pdfDoc = await PDFDocument.create();
+      const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+      const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+      const lw = pageHeight, lh = pageWidth, lMargin = 40; // landscape: swap portrait dims
+      const page = pdfDoc.addPage([lw, lh]);
+      const lMaxWidth = lw - lMargin * 2;
+
+      const bandHeight = 70;
+      page.drawRectangle({ x: 0, y: lh - bandHeight, width: lw, height: bandHeight, color: charcoal });
+      const titleSize = 17;
+      drawCenteredText(page, "Health & Safety Policy", lw / 2, lh - bandHeight / 2 - titleSize / 3, titleSize, boldFont, rgb(1, 1, 1));
+
+      let y = lh - bandHeight - 22;
+      const introLines = wrapTextLines(getPolicyIntro(client.name), font, 8, lMaxWidth * 0.85);
+      introLines.forEach((line) => { drawCenteredText(page, line, lw / 2, y, 8, font, ink); y -= 10.5; });
+      y -= 12;
+
+      const bottomY = drawPolicyGrid({ page, x: lMargin, y0: y, maxWidth: lMaxWidth, font, boldFont, rgb, clientName: client.name });
+
+      let sy = bottomY - 30;
+      const rightColX = lw - lMargin - 200;
+      page.drawText("Director Name: _______________________________", { x: lMargin, y: sy, size: 9, font, color: rgb(0.2, 0.25, 0.25) });
+      page.drawText(`Date: ${fmtDate(today())}`, { x: rightColX, y: sy, size: 9, font, color: rgb(0.2, 0.25, 0.25) });
+      sy -= 22;
+      page.drawText("Signed: _______________________________", { x: lMargin, y: sy, size: 9, font, color: rgb(0.2, 0.25, 0.25) });
+      page.drawText(`Review Date: ${fmtDate(addDays(today(), 365))}`, { x: rightColX, y: sy, size: 9, font, color: rgb(0.2, 0.25, 0.25) });
+
+      const bytes = await pdfDoc.save();
+      const blob = new Blob([bytes], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${client.name.replace(/\s+/g, "_")}-Health_Safety_Policy.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+      continue;
+    }
+
     const pdfDoc = await PDFDocument.create();
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
     const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
@@ -1619,12 +1744,6 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
     });
 
     // Hardcoded visuals for the procedures/policies that have real reference diagrams behind them.
-    if (label === "Health & Safety Policy") {
-      y -= 16;
-      ensureSpace(240);
-      const newY = await drawPolicyQuadrant({ pdfDoc, page, x: margin, y0: y, maxWidth, boldFont, rgb, clientName: client.name });
-      if (newY !== null) y = newY;
-    }
     if (label === "Hazard & Risk Management Procedure") {
       y -= 16;
       ensureSpace(60);

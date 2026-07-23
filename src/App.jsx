@@ -1586,9 +1586,20 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
     coverY -= 30;
     page.drawText("Signature: ___________________________________", { x: margin, y: coverY, size: 10, font, color: slate });
 
+    // Small header repeated on every content page (not the cover, which has its own big
+    // branded header): a thin rule, the manual name on the left, client name on the right.
+    const headerHeight = 34, topGap = headerHeight + 20;
+    const drawContentHeader = (pg, w, h, m) => {
+      pg.drawLine({ start: { x: m, y: h - headerHeight + 8 }, end: { x: w - m, y: h - headerHeight + 8 }, thickness: 0.75, color: rgb(0.85, 0.85, 0.85) });
+      pg.drawText("HEALTH AND SAFETY MANUAL", { x: m, y: h - 22, size: 8, font: boldFont, color: teal });
+      const nw = boldFont.widthOfTextAtSize(client.name, 8);
+      pg.drawText(client.name, { x: w - m - nw, y: h - 22, size: 8, font: boldFont, color: slate });
+    };
+
     page = pdfDoc.addPage([pageWidth, pageHeight]);
-    let y = pageHeight - margin;
-    const newPage = () => { page = pdfDoc.addPage([pageWidth, pageHeight]); y = pageHeight - margin; };
+    drawContentHeader(page, pageWidth, pageHeight, margin);
+    let y = pageHeight - topGap;
+    const newPage = () => { page = pdfDoc.addPage([pageWidth, pageHeight]); drawContentHeader(page, pageWidth, pageHeight, margin); y = pageHeight - topGap; };
     const ensureSpace = (needed) => { if (y - needed < margin) newPage(); };
 
     const displayLabels = renumberSections(included);
@@ -1617,7 +1628,8 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
         const content = raw.replaceAll("The Company", client.name) || `No template text written yet for "${label}".`;
         const landscapeWidth = pageHeight, landscapeHeight = pageWidth, lMargin = 40;
         const landscapePage = pdfDoc.addPage([landscapeWidth, landscapeHeight]);
-        let ly = landscapeHeight - lMargin;
+        drawContentHeader(landscapePage, landscapeWidth, landscapeHeight, lMargin);
+        let ly = landscapeHeight - topGap;
         landscapePage.drawText(displayLabels[idx], { x: lMargin, y: ly, size: 13, font: boldFont, color: teal });
         ly -= 18;
         wrapTextLines(content, font, 9, landscapeWidth - lMargin * 2).forEach((line) => {
@@ -1646,7 +1658,7 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
       const bodyHeight = bodyLines.length * 13;
       const gapBefore = diagramSpec?.gapBefore ?? 16;
       const totalNeeded = headingHeight + bodyHeight + gapBefore + diagramHeight;
-      ensureSpace(Math.min(totalNeeded, pageHeight - margin * 2)); // cap so oversized sections don't loop forever
+      ensureSpace(Math.min(totalNeeded, pageHeight - topGap - margin)); // cap so oversized sections don't loop forever
 
       page.drawText(displayLabels[idx], { x: margin, y, size: 12, font: boldFont, color: teal });
       y -= headingHeight;
@@ -1663,6 +1675,42 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
         }
       }
     }
+
+    // Document Review History — always appended at the very end of the Manual, regardless of
+    // what's ticked. Combines the global template revision log (shared across every client) with
+    // this specific client's issue date, sorted chronologically. Dates shown as Month YYYY.
+    const GLOBAL_DOCUMENT_LOG = [
+      { date: "2026-07", details: "Manual created and issued by H.A.R.M Limited" },
+    ];
+    function fmtMonthYear(dateStr) {
+      const d = new Date(dateStr.length === 7 ? `${dateStr}-01` : dateStr);
+      return d.toLocaleDateString("en-NZ", { month: "short", year: "numeric" });
+    }
+    const logEntries = [
+      ...GLOBAL_DOCUMENT_LOG,
+      { date: today(), details: `Manual issued for ${client.name}` },
+    ].sort((a, b) => a.date.localeCompare(b.date));
+
+    ensureSpace(40 + logEntries.length * 22);
+    page.drawText("Document Review History", { x: margin, y, size: 12, font: boldFont, color: teal });
+    y -= 24;
+
+    const dateColW = 90, rowH = 22;
+    const tableTop = y;
+    page.drawRectangle({ x: margin, y: tableTop - rowH, width: dateColW, height: rowH, color: rgb(0.93, 0.95, 0.94) });
+    page.drawRectangle({ x: margin + dateColW, y: tableTop - rowH, width: maxWidth - dateColW, height: rowH, color: rgb(0.93, 0.95, 0.94) });
+    page.drawText("Date", { x: margin + 8, y: tableTop - rowH + 7, size: 9, font: boldFont, color: ink });
+    page.drawText("Details", { x: margin + dateColW + 8, y: tableTop - rowH + 7, size: 9, font: boldFont, color: ink });
+    y -= rowH;
+
+    logEntries.forEach((entry) => {
+      ensureSpace(rowH);
+      page.drawRectangle({ x: margin, y: y - rowH, width: maxWidth, height: rowH, borderColor: rgb(0.85, 0.85, 0.85), borderWidth: 0.5 });
+      page.drawLine({ start: { x: margin + dateColW, y: y }, end: { x: margin + dateColW, y: y - rowH }, thickness: 0.5, color: rgb(0.85, 0.85, 0.85) });
+      page.drawText(fmtMonthYear(entry.date), { x: margin + 8, y: y - rowH + 7, size: 9, font, color: ink });
+      page.drawText(entry.details, { x: margin + dateColW + 8, y: y - rowH + 7, size: 9, font, color: ink });
+      y -= rowH;
+    });
 
     const pageCount = pdfDoc.getPageCount();
     for (let p = 0; p < pageCount; p++) {

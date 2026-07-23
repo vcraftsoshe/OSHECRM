@@ -1246,54 +1246,6 @@ function wrapTextLines(text, font, size, maxWidth) {
 // These are built once, per section/procedure, matching the real reference diagrams from
 // OSHE's documents. Each takes the current page/position and returns where drawing left off.
 
-function riskColor(score) {
-  if (score <= 3) return { r: 0.75, g: 0.88, b: 0.62 };
-  if (score <= 6) return { r: 0.24, g: 0.62, b: 0.35 };
-  if (score <= 12) return { r: 0.96, g: 0.75, b: 0.20 };
-  if (score <= 16) return { r: 0.93, g: 0.47, b: 0.18 };
-  return { r: 0.78, g: 0.16, b: 0.16 };
-}
-
-function drawRiskMatrix(ctx) {
-  const { page, x, y0, font, boldFont, rgb, showTitle = true } = ctx;
-  let y = y0;
-  const cellW = 62, cellH = 26, labelW = 70;
-  const likelihoods = ["Almost Certain 5", "Likely 4", "Possible 3", "Unlikely 2", "Rare 1"];
-  const likelihoodNums = [5, 4, 3, 2, 1];
-  const consequences = ["1 Insignificant", "2 Minor", "3 Moderate", "4 Major", "5 Catastrophic"];
-  const c2 = (col) => rgb(col.r, col.g, col.b);
-
-  if (showTitle) {
-    page.drawText("Risk Matrix", { x, y, size: 11, font: boldFont, color: rgb(0.04, 0.68, 0.63) });
-    y -= 18;
-  }
-  consequences.forEach((c, i) => {
-    page.drawRectangle({ x: x + labelW + i * cellW, y: y - cellH, width: cellW, height: cellH, color: rgb(0.93, 0.95, 0.94), borderColor: rgb(0.85, 0.85, 0.85), borderWidth: 0.5 });
-    const parts = c.split(" ");
-    page.drawText(parts[0], { x: x + labelW + i * cellW + 4, y: y - 11, size: 7, font: boldFont, color: rgb(0.1, 0.15, 0.15) });
-    page.drawText(parts.slice(1).join(" "), { x: x + labelW + i * cellW + 4, y: y - 21, size: 6.5, font, color: rgb(0.3, 0.35, 0.35) });
-  });
-  y -= cellH;
-  likelihoods.forEach((label, rowIdx) => {
-    page.drawRectangle({ x, y: y - cellH, width: labelW, height: cellH, color: rgb(0.93, 0.95, 0.94), borderColor: rgb(0.85, 0.85, 0.85), borderWidth: 0.5 });
-    page.drawText(label, { x: x + 3, y: y - cellH / 2 - 3, size: 6.5, font: boldFont, color: rgb(0.1, 0.15, 0.15) });
-    for (let colIdx = 0; colIdx < 5; colIdx++) {
-      const score = likelihoodNums[rowIdx] * (colIdx + 1);
-      page.drawRectangle({ x: x + labelW + colIdx * cellW, y: y - cellH, width: cellW, height: cellH, color: c2(riskColor(score)), borderColor: rgb(1, 1, 1), borderWidth: 1 });
-      page.drawText(String(score), { x: x + labelW + colIdx * cellW + cellW / 2 - 4, y: y - cellH / 2 - 3, size: 10, font: boldFont, color: score >= 8 ? rgb(1, 1, 1) : rgb(0.1, 0.15, 0.15) });
-    }
-    y -= cellH;
-  });
-  y -= 8;
-  const bands = [["1-3 Very Low", riskColor(2)], ["4-6 Low", riskColor(5)], ["8-12 Moderate", riskColor(10)], ["15-16 High", riskColor(15)], ["20-25 Critical", riskColor(25)]];
-  bands.forEach(([label, color]) => {
-    page.drawRectangle({ x, y: y - 14, width: 12, height: 12, color: c2(color) });
-    page.drawText(label, { x: x + 16, y: y - 11, size: 8, font, color: rgb(0.2, 0.25, 0.25) });
-    y -= 16;
-  });
-  return y - 10;
-}
-
 // The real "Managing Risks and Hazards" PDCA cycle from the Hazard & Risk Management
 // Procedure — sits right before the Hierarchy of Controls in the source document.
 function drawPDCACycle(ctx) {
@@ -1588,9 +1540,6 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
         ensureSpace(220);
         const hazardImage = await loadStaticDiagramImage(pdfDoc, "hazard-categories.png");
         if (hazardImage) y = drawDiagramImage({ page, image: hazardImage, x: margin, y0: y, maxWidth });
-        y -= 16; ensureSpace(60);
-        const result = drawFlowchart({ page, pdfDoc, x: margin, y0: y, width: maxWidth, font, boldFont, rgb, steps: HAZARD_ID_FLOWCHART_STEPS, pageWidth, pageHeight, margin });
-        page = result.page; y = result.y;
       }
       if (label === "7.1 Legal and Other Requirements") {
         ensureSpace(140);
@@ -1599,7 +1548,8 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
       }
       if (label === "8. Risk Management") {
         ensureSpace(230);
-        y = drawRiskMatrix({ page, x: margin, y0: y, font, boldFont, rgb, showTitle: false });
+        const riskMatrixImage = await loadStaticDiagramImage(pdfDoc, "risk-matrix.png");
+        if (riskMatrixImage) y = drawDiagramImage({ page, image: riskMatrixImage, x: margin, y0: y, maxWidth });
       }
       if (label === "8.1 Hierarchy of Controls") {
         ensureSpace(170);
@@ -1612,11 +1562,6 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
         if (incidentCycleImage) {
           y = drawDiagramImage({ page, image: incidentCycleImage, x: margin, y0: y, maxWidth });
         }
-      }
-      if (label === "9.1 Incident Reporting") {
-        y -= 16; ensureSpace(60);
-        const result = drawFlowchart({ page, pdfDoc, x: margin, y0: y, width: maxWidth, font, boldFont, rgb, steps: NOTIFIABLE_EVENT_FLOWCHART_STEPS, pageWidth, pageHeight, margin });
-        page = result.page; y = result.y;
       }
     }
 
@@ -1688,7 +1633,8 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
       y = result.y;
       y -= 16;
       ensureSpace(230);
-      y = drawRiskMatrix({ page, x: margin, y0: y, font, boldFont, rgb });
+      const riskMatrixImage2 = await loadStaticDiagramImage(pdfDoc, "risk-matrix.png");
+      if (riskMatrixImage2) y = drawDiagramImage({ page, image: riskMatrixImage2, x: margin, y0: y, maxWidth });
       y -= 16;
       ensureSpace(300);
       y = drawPDCACycle({ page, x: margin, y0: y, width: maxWidth, font, boldFont, rgb });

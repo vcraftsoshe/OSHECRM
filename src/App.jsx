@@ -515,6 +515,16 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
     }));
     setNoteDraft({ text: "", tags: [] });
   };
+  // Whenever the OHSMS issue date is set (manually or via "Mark issued today"), automatically
+  // create or update a yearly reminder assigned to Jo for the next annual review — so nobody has
+  // to remember to add it by hand. Uses a fixed id so re-issuing updates the same reminder rather
+  // than piling up duplicates.
+  const withOhsmsReminder = (c, dueDate) => {
+    const reminder = { id: "ohsms-annual-review", text: "OHSMS annual review due", date: dueDate, recurring: "yearly", done: false, assignee: "Jo" };
+    const idx = c.reminders.findIndex((r) => r.id === "ohsms-annual-review");
+    const reminders = idx >= 0 ? c.reminders.map((r, i) => (i === idx ? reminder : r)) : [...c.reminders, reminder];
+    return { ...c, reminders };
+  };
   const addReminder = () => {
     if (!newReminder.text.trim() || !newReminder.date) return;
     updateClient((c) => ({ ...c, reminders: [...c.reminders, { id: Date.now(), ...newReminder, done: false }] }));
@@ -685,9 +695,9 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
                   <div className="text-sm mt-1" style={{ color: urgency.color }}>{urgency.label}</div>
                   <div className="flex items-center gap-2 mt-3 pt-3" style={{ borderTop: `1px solid ${T.border}` }}>
                     <span className="text-[11px]" style={{ color: T.slateLight }}>Last issued</span>
-                    <input type="date" value={client.ohsmsLastIssued || ""} onChange={(e) => updateClient((c) => ({ ...c, ohsmsLastIssued: e.target.value, ohsmsDue: addDays(e.target.value, 365) }))}
+                    <input type="date" value={client.ohsmsLastIssued || ""} onChange={(e) => updateClient((c) => withOhsmsReminder({ ...c, ohsmsLastIssued: e.target.value, ohsmsDue: addDays(e.target.value, 365) }, addDays(e.target.value, 365)))}
                       className="text-xs px-1.5 py-1 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
-                    <button onClick={() => updateClient((c) => ({ ...c, ohsmsLastIssued: today(), ohsmsDue: addDays(today(), 365) }))}
+                    <button onClick={() => updateClient((c) => withOhsmsReminder({ ...c, ohsmsLastIssued: today(), ohsmsDue: addDays(today(), 365) }, addDays(today(), 365)))}
                       className="text-[11px] font-semibold px-2 py-1 rounded-lg" style={{ background: T.paperAlt, color: T.tealDark }}>
                       Mark issued today
                     </button>
@@ -1552,23 +1562,27 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
     let page = pdfDoc.addPage([pageWidth, pageHeight]);
     const bandHeight = 170;
     page.drawRectangle({ x: 0, y: pageHeight - bandHeight, width: pageWidth, height: bandHeight, color: charcoal });
-    if (logoImage) {
-      const maxLogoH = 100, maxLogoW = 220;
-      const scale = Math.min(maxLogoH / logoImage.height, maxLogoW / logoImage.width, 1);
-      const w = logoImage.width * scale, h = logoImage.height * scale;
-      page.drawImage(logoImage, { x: pageWidth - margin - w, y: pageHeight - bandHeight / 2 - h / 2, width: w, height: h });
-    }
     page.drawText("HEALTH AND SAFETY MANUAL", { x: margin, y: pageHeight - 55, size: 10, font: boldFont, color: teal });
     page.drawText(client.name, { x: margin, y: pageHeight - 85, size: 20, font: boldFont, color: rgb(1, 1, 1) });
-    page.drawText("Prepared by OSHE Limited", { x: margin, y: pageHeight - 108, size: 9, font, color: rgb(0.72, 0.78, 0.78) });
+
+    // Large standalone logo, top-left, just under the header band.
+    if (logoImage) {
+      const bigMaxH = 160, bigMaxW = 260;
+      const scale = Math.min(bigMaxH / logoImage.height, bigMaxW / logoImage.width, 1);
+      const w = logoImage.width * scale, h = logoImage.height * scale;
+      const logoTop = pageHeight - bandHeight - 30;
+      page.drawImage(logoImage, { x: margin, y: logoTop - h, width: w, height: h });
+    }
 
     // Prepared for / Date / Review Date / Signature — bottom-left of the cover page.
-    let coverY = 190;
+    // Review Date is always exactly 1 year after the issue Date shown right above it.
+    const issueDate = today();
+    let coverY = 160;
     page.drawText(`Prepared for: ${client.name}`, { x: margin, y: coverY, size: 11, font: boldFont, color: ink });
     coverY -= 22;
-    page.drawText(`Date: ${fmtDate(today())}`, { x: margin, y: coverY, size: 10, font, color: slate });
+    page.drawText(`Date: ${fmtDate(issueDate)}`, { x: margin, y: coverY, size: 10, font, color: slate });
     coverY -= 18;
-    page.drawText(`Review Date: ${fmtDate(client.ohsmsDue)}`, { x: margin, y: coverY, size: 10, font, color: slate });
+    page.drawText(`Review Date: ${fmtDate(addDays(issueDate, 365))}`, { x: margin, y: coverY, size: 10, font, color: slate });
     coverY -= 30;
     page.drawText("Signature: ___________________________________", { x: margin, y: coverY, size: 10, font, color: slate });
 

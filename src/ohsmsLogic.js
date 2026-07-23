@@ -93,6 +93,7 @@ export const CONDITIONAL_POLICIES = [
   { key: "wellbeing", label: "Wellbeing Policy" },
   { key: "vehicles", label: "Driver Statement Policy" },
   { key: "environmental", label: "Environmental Policy" },
+  { key: "fatigueStress", label: "Fatigue & Stress Management Policy" },
 ];
 
 export function computeOhsmsPack(t) {

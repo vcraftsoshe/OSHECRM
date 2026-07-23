@@ -516,11 +516,12 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
     setNoteDraft({ text: "", tags: [] });
   };
   // Whenever the OHSMS issue date is set (manually or via "Mark issued today"), automatically
-  // create or update a yearly reminder assigned to Jo for the next annual review — so nobody has
-  // to remember to add it by hand. Uses a fixed id so re-issuing updates the same reminder rather
-  // than piling up duplicates.
+  // create or update a yearly reminder assigned to Jo for the upcoming annual review — so nobody
+  // has to remember to add it by hand. Fires 1 month before the review is due, matching the
+  // "Redo reminder" card's stated behavior. Uses a fixed id so re-issuing updates the same
+  // reminder rather than piling up duplicates.
   const withOhsmsReminder = (c, dueDate) => {
-    const reminder = { id: "ohsms-annual-review", text: "OHSMS annual review due", date: dueDate, recurring: "yearly", done: false, assignee: "Jo" };
+    const reminder = { id: "ohsms-annual-review", text: "OHSMS annual review due", date: addDays(dueDate, -30), recurring: "yearly", done: false, assignee: "Jo" };
     const idx = c.reminders.findIndex((r) => r.id === "ohsms-annual-review");
     const reminders = idx >= 0 ? c.reminders.map((r, i) => (i === idx ? reminder : r)) : [...c.reminders, reminder];
     return { ...c, reminders };
@@ -1771,6 +1772,59 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
       const a = document.createElement("a");
       a.href = url;
       a.download = `${client.name.replace(/\s+/g, "_")}-Health_Safety_Policy.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+      continue;
+    }
+
+    const POLICIES_WITH_SIGNOFF = ["Wellbeing Policy", "Driver Statement Policy", "Environmental Policy", "Fatigue & Stress Management Policy"];
+    if (POLICIES_WITH_SIGNOFF.includes(label)) {
+      const pdfDoc = await PDFDocument.create();
+      const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+      const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+      const logoImage = await loadClientLogoImage(client, pdfDoc);
+
+      let page = pdfDoc.addPage([pageWidth, pageHeight]);
+      const bandHeight = 100;
+      const drawHeader = (pg) => {
+        pg.drawRectangle({ x: 0, y: pageHeight - bandHeight, width: pageWidth, height: bandHeight, color: charcoal });
+        if (logoImage) {
+          const maxLogoH = 36, maxLogoW = 110;
+          const scale = Math.min(maxLogoH / logoImage.height, maxLogoW / logoImage.width, 1);
+          const w = logoImage.width * scale, h = logoImage.height * scale;
+          pg.drawImage(logoImage, { x: pageWidth - margin - w, y: pageHeight - bandHeight / 2 - h / 2, width: w, height: h });
+        }
+        pg.drawText(category.label.toUpperCase(), { x: margin, y: pageHeight - 38, size: 9, font: boldFont, color: teal });
+        pg.drawText(label, { x: margin, y: pageHeight - 62, size: 15, font: boldFont, color: rgb(1, 1, 1) });
+      };
+      drawHeader(page);
+      let y = pageHeight - bandHeight - 30;
+      const newPage = () => { page = pdfDoc.addPage([pageWidth, pageHeight]); drawHeader(page); y = pageHeight - bandHeight - 30; };
+      const ensureSpace = (needed) => { if (y - needed < margin) newPage(); };
+
+      const raw = documentTemplates[templateKey(categoryKey, label)] || "";
+      const content = raw.replaceAll("The Company", client.name) || `No template text written yet for "${label}".`;
+      wrapTextLines(content, font, 10, maxWidth).forEach((line) => {
+        ensureSpace(13);
+        page.drawText(line, { x: margin, y, size: 10, font, color: ink });
+        y -= 13;
+      });
+
+      ensureSpace(70);
+      let sy = y - 30;
+      const rightColX = pageWidth - margin - 200;
+      page.drawText("Director Name: _______________________________", { x: margin, y: sy, size: 9, font, color: rgb(0.2, 0.25, 0.25) });
+      page.drawText(`Date: ${fmtDate(today())}`, { x: rightColX, y: sy, size: 9, font, color: rgb(0.2, 0.25, 0.25) });
+      sy -= 22;
+      page.drawText("Signed: _______________________________", { x: margin, y: sy, size: 9, font, color: rgb(0.2, 0.25, 0.25) });
+      page.drawText(`Review Date: ${fmtDate(addDays(today(), 365))}`, { x: rightColX, y: sy, size: 9, font, color: rgb(0.2, 0.25, 0.25) });
+
+      const bytes = await pdfDoc.save();
+      const blob = new Blob([bytes], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${client.name.replace(/\s+/g, "_")}-${label.replace(/\s+/g, "_")}.pdf`;
       a.click();
       URL.revokeObjectURL(url);
       continue;
@@ -3244,6 +3298,10 @@ export default function App() {
 
     const realPolicyContent = {
       "Health & Safety Policy": "The Company is committed to ensuring, so far as is reasonably practicable, that its obligations under the Health and Safety at Work Act 2015, applicable Regulations, Approved Codes of Practice, Guidelines, and other relevant standards are met — and to the health, safety and wellness of workers and anyone else affected by The Company's operations. The Company is dedicated to a work environment where health, safety and wellness is of equal importance to all other business operations, and commits to:\n\nEnsuring legislative requirements are met; gaining and maintaining knowledge of work health and safety matters; understanding the business, its operations, and associated hazards and risks; ensuring resources are used to eliminate or minimise risk; having processes for receiving, communicating and considering information on incidents, hazards, and risks; responding in a timely manner to health and safety information; implementing processes and complying with duties; providing a safe and healthy work environment; preventing work-related injury, ill health, and adverse effects to mental wellbeing; providing PPE and training on its use; meeting and exceeding legislative obligations; providing information, supervision, training and instruction; continually improving the Health and Safety Management System; managing contractors so they don't pose a risk to workers or themselves; monitoring exposure to hazardous substances; identifying hazards, controlling risks, and reviewing controls; providing workplace facilities and first aid; maintaining an emergency plan; providing safe plant, structures and systems of work; and supporting early return to work.\n\nWorkers are expected to take reasonable care for their own health and safety and that of others, comply with reasonable instructions and cooperate with policies and procedures, wear PPE provided, report incidents, hazards or risks, and participate in health and safety within The Company.\n\nManagement leads health and safety by example, promotes a positive health and safety culture, enables and encourages worker communication and participation, ensures processes are communicated and followed, ensures workers are competent for their work, and ensures policies, procedures and objectives remain compatible with The Company's direction, work practices, goals and targets.",
+      "Wellbeing Policy": "Purpose: The purpose of this policy is to affirm The Company's commitment to providing a safe, positive, and mentally healthy workplace. This policy outlines our expectations, responsibilities, and principles for supporting mental wellbeing.\n\nScope: This policy applies to all employees, contractors, and any other persons who enter or work within The Company's workplaces.\n\nPolicy Statement: The Company recognises that mental wellbeing is a fundamental component of workplace health and safety. We acknowledge that anyone can experience mental distress or challenges at any stage of their lives. We are committed to building a work culture that promotes wellbeing, prevents harm, and provides appropriate support when needed.\n\nPrinciples: The Company's approach to mental wellbeing is based on the following principles — Respect and Dignity: all workers will be treated fairly, respectfully, and without discrimination. Openness and Support: we encourage open conversations about mental wellbeing, free from stigma. Confidentiality: personal health information will be respected and shared only with consent, or when necessary for safety. Early Support: workers will be encouraged to access support early, through internal processes or external providers such as Mates in Construction, 1737, Lifeline or a GP. Shared Responsibility: both the employer and employees contribute to creating and sustaining a mentally healthy workplace. Continuous Improvement: The Company will review and support wellbeing initiatives, such as Mental Health Awareness Week, and integrate learnings into our workplace practices.\n\nEmployer Commitments: The Company will provide a work environment that supports positive mental wellbeing; ensure managers and supervisors have the knowledge to identify and respond appropriately to mental health concerns; not tolerate bullying, harassment, or discrimination in any form; promote access to wellbeing resources and support services, including Mates in Construction; consider flexible work arrangements where reasonably practicable and appropriate; and integrate mental wellbeing considerations into health and safety planning, leadership, and decision-making.\n\nEmployee Responsibilities: Employees are expected to treat colleagues with respect and civility; contribute to a supportive, inclusive, and safe workplace culture; speak up if they experience or observe behaviour that undermines wellbeing; take reasonable steps to manage their own wellbeing at work and seek support when required; and support workmates to access help when they are struggling.",
+      "Driver Statement Policy": "The Company promotes a safe driving culture by encouraging sensible and safe use of vehicles. This policy aims to outline clear responsibilities of all workers, to achieve a safer working environment.\n\nIt is the driver's responsibility to: always leave the vehicle clean and tidy; always wear their seatbelt; complete a vehicle checklist prior to using the vehicle each day; ensure the fuel gauge is above half at the end of shift, fuelling up on the way back to the yard if under half; ensure work procedures are followed while loading and unloading trucks; report any damage caused to a company vehicle immediately to their manager, followed by an incident report completed prior to the end of shift; never use a cellular phone while driving unless using a handsfree device; never exceed the legal speed limit; never admit responsibility or fault in the event of an accident — always speak to a manager first; never drive while under the influence of drugs or alcohol, including prescription drugs that may impair judgement or cause drowsiness; never smoke or use a vaping device while in any company vehicle; never drive a vehicle they are not legally qualified to drive; notify their manager of speeding tickets, crashes and breaches of traffic regulations; notify management within half an hour of any damage or incident occurring; and complete a full incident report for plant damage or incidents by the end of the shift.\n\nThe Company will: keep training and maintenance records on file; ensure regular breaks are scheduled and log-book requirements are followed; maintain all company vehicles in a safe, clean and roadworthy condition to ensure the maximum safety of drivers, occupants and other road users; and ensure WOFs and COFs are current.",
+      "Environmental Policy": "The Company is committed to achieving the principles of environmental sustainability. We recognise our moral and legal responsibility to ensure our operations do not place the local community or environment at risk of harm.\n\nThe Company achieves this by: complying with, and exceeding where practicable, all applicable legislation, regulations and codes of practice; integrating sustainability considerations into all business decisions; minimising toxic emissions through the selection and use of our fleet; promoting environmental awareness among our workers and encouraging them to work in an environmentally responsible manner; reducing waste through innovative work practices and recycling; minimising waste by evaluating operations and ensuring they are as efficient as possible; and reviewing and continually improving our environmental sustainability performance.\n\nTo ensure the success of this policy, senior management will: ensure the environmental policy is implemented; comply with all relevant environmental legislation and adhere to regulatory standards; establish measurable objectives and targets aimed at eliminating waste, pollution and environmental harm; act in a socially responsible manner in regard to the management of our people, communities and resources; encourage consultation and co-operation between management, workers and stakeholders on matters affecting the environment; and provide adequate resources to meet these environmental commitments.\n\nAll workers are required to: follow all environmental policies and procedures; recognise and report hazards which may affect the environment; and act in a socially responsible manner at all times while encouraging an environmentally friendly workplace.",
+      "Fatigue & Stress Management Policy": "The Company recognises that workers who are impaired by stress and fatigue are a risk to themselves and those around them. This policy aims to improve overall safety and wellbeing, to achieve a safe working environment.\n\nThe Company achieves this by: shifts not exceeding 14 hours including travel (home to home); workers not exceeding an average of 60 working hours per week; no work period exceeding 4.5 hours without a rest break; ensuring rest breaks are in accordance with the Employment Relations Amendment Act 2018; ensuring rest breaks are set and agreed prior to works commencing; considering an additional 10-minute break between work periods when extreme conditions present; investigating incidents where fatigue may have been involved; providing adequate facilities and drinking water; and limiting periods of excessive mental or physical demands by managing workloads.\n\nAll workers are required to: turn up in a state fit for work, having done everything possible to get a good sleep and rest; inform their manager or supervisor if a task is beyond their capabilities; recognise the signs and symptoms of fatigue — including feeling constantly tired, having little energy, feeling sluggish, excessive yawning or falling asleep at work, reduced vigilance, bad moods, forgetfulness, inability to concentrate, poor communication, poor decision-making, reduced hand-eye coordination and slower reaction times, as well as less obvious symptoms such as drowsiness, headaches, dizziness, blurred vision or impaired visual perception and a need for extended sleep on days off; communicate with their manager or supervisor if they start showing signs and symptoms of fatigue, and make managers and supervisors aware of other workers who may be fatigued; and report fatigue-related incidents.\n\nNon-compliance with this policy may result in disciplinary action. This policy applies to all workers, including contractors and subcontractors under The Company's operational control. The Company's Officer(s) are accountable for ensuring this policy is implemented. The policy shall be reviewed annually and updated as required.",
     };
     (async () => {
       try {

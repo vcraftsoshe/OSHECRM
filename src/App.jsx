@@ -11,6 +11,35 @@ import { ref as storageRef, getDownloadURL, uploadBytes } from "firebase/storage
 import { db, auth, storage } from "./firebase";
 import { SECTION_ITEMS, ALWAYS_PROCEDURES, CONDITIONAL_PROCEDURES, COMPLIANCE_EXTRA_PROCEDURES, ALWAYS_POLICIES, CONDITIONAL_POLICIES } from "./ohsmsLogic";
 
+/* ---------- Resilient dynamic import ----------
+   Vite splits `await import("pdf-lib")` into its own hashed chunk file
+   (e.g. index-t6SStVor.js). Firebase Hosting swaps out ALL files on every
+   deploy, so a browser tab left open across a deploy will try to fetch a
+   chunk filename that no longer exists -> "Failed to fetch dynamically
+   imported module". Instead of surfacing that as a broken PDF export, we
+   force a one-time hard reload so the tab picks up the current build. */
+async function importWithReloadOnStaleChunk(loader) {
+  try {
+    return await loader();
+  } catch (err) {
+    const msg = String(err && err.message);
+    const isStaleChunk =
+      /Failed to fetch dynamically imported module/i.test(msg) ||
+      /error loading dynamically imported module/i.test(msg) ||
+      /Importing a module script failed/i.test(msg);
+    if (isStaleChunk) {
+      const key = "oshe_stale_chunk_reload";
+      if (!sessionStorage.getItem(key)) {
+        sessionStorage.setItem(key, "1");
+        window.location.reload();
+        // Reload is in-flight; keep this call pending so nothing downstream runs.
+        return new Promise(() => {});
+      }
+    }
+    throw err;
+  }
+}
+
 /* ---------- Design tokens (OSHE brand) ---------- */
 const T = {
   charcoal: "#1A2C2E", charcoalLight: "#24393C", charcoalSoft: "#2E4548",
@@ -1068,7 +1097,7 @@ function defaultChecked(client, category) {
 }
 
 async function exportReviewLogPdf(entries) {
-  const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib");
+  const { PDFDocument, StandardFonts, rgb } = await importWithReloadOnStaleChunk(() => import("pdf-lib"));
   const pdfDoc = await PDFDocument.create();
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
   const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
@@ -1575,7 +1604,7 @@ const RISK_MANAGEMENT_FLOWCHART_STEPS = [
 // Policies each start on their own fresh page, since they're separate standalone documents
 // just bundled together for convenience, not one flowing manual.
 async function downloadBuildPdf({ client, category, categoryKey, included, documentTemplates }) {
-  const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib");
+  const { PDFDocument, StandardFonts, rgb } = await importWithReloadOnStaleChunk(() => import("pdf-lib"));
   const isFlowing = categoryKey === "sections";
   const ink = rgb(0.08, 0.14, 0.13);
   const slate = rgb(0.36, 0.45, 0.45);

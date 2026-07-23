@@ -1161,6 +1161,66 @@ async function loadClientLogoImage(client, pdfDoc) {
   }
 }
 
+// Loads a real reference-diagram image bundled at /public/diagrams/<name> and embeds it
+// into the PDF being built. Returns null (silently) if the file isn't there yet, so callers
+// can fall back to a hand-drawn version rather than breaking the export.
+async function loadStaticDiagramImage(pdfDoc, filename) {
+  try {
+    const resp = await fetch(`/diagrams/${filename}`);
+    if (!resp.ok) return null;
+    const bytes = await resp.arrayBuffer();
+    if (filename.toLowerCase().endsWith(".jpg") || filename.toLowerCase().endsWith(".jpeg")) {
+      return await pdfDoc.embedJpg(bytes);
+    }
+    return await pdfDoc.embedPng(bytes);
+  } catch (err) {
+    console.error(`Couldn't load diagram image /diagrams/${filename}:`, err);
+    return null;
+  }
+}
+
+// Draws an embedded diagram image scaled to fit maxWidth, returning the y position below it.
+function drawDiagramImage({ page, image, x, y0, maxWidth, maxHeight = 320 }) {
+  const scale = Math.min(maxWidth / image.width, maxHeight / image.height, 1);
+  const w = image.width * scale, h = image.height * scale;
+  page.drawImage(image, { x, y: y0 - h, width: w, height: h });
+  return y0 - h - 14;
+}
+
+// The Health & Safety Policy quadrant diagram has the client's name baked into the artwork
+// itself, in the center circle ("(PCBU) / The Company"). Since that has to change per client,
+// the bundled asset (policy-quadrant.png) has that exact spot pre-painted blank — matching the
+// surrounding gradient — and we draw the real "(PCBU)" label + client name over it here, at
+// render time. All pixel coordinates below are measured against the original 937x463 source PNG.
+async function drawPolicyQuadrant({ pdfDoc, page, x, y0, maxWidth, boldFont, rgb, clientName, maxHeight = 340 }) {
+  const image = await loadStaticDiagramImage(pdfDoc, "policy-quadrant.png");
+  if (!image) return null; // caller decides what to fall back to
+  const scale = Math.min(maxWidth / image.width, maxHeight / image.height, 1);
+  const w = image.width * scale, h = image.height * scale;
+  page.drawImage(image, { x, y: y0 - h, width: w, height: h });
+
+  const toPageX = (px) => x + px * scale;
+  const toPageY = (py) => y0 - py * scale;
+  const blankBoxWidthPx = 80; // width of the painted-out placeholder area, for shrink-to-fit
+
+  const fitSize = (text, startPx) => {
+    let size = Math.max(5, startPx * scale);
+    const maxWidthPt = blankBoxWidthPx * scale;
+    while (size > 4 && boldFont.widthOfTextAtSize(text, size) > maxWidthPt) size -= 0.5;
+    return size;
+  };
+  const drawCentered = (text, cxPx, cyPx, startPx) => {
+    const size = fitSize(text, startPx);
+    const tw = boldFont.widthOfTextAtSize(text, size);
+    page.drawText(text, { x: toPageX(cxPx) - tw / 2, y: toPageY(cyPx) - size / 3, size, font: boldFont, color: rgb(1, 1, 1) });
+  };
+
+  drawCentered("(PCBU)", 412, 246, 15);
+  drawCentered(clientName, 412, 280, 15);
+
+  return y0 - h - 14;
+}
+
 function wrapTextLines(text, font, size, maxWidth) {
   const lines = [];
   const paragraphs = text.split("\n");
@@ -1649,7 +1709,8 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
     const ensureSpace = (needed) => { if (y - needed < margin) newPage(); };
 
     const displayLabels = renumberSections(included);
-    included.forEach((label, idx) => {
+    for (let idx = 0; idx < included.length; idx++) {
+      const label = included[idx];
       const raw = documentTemplates[templateKey(categoryKey, label)] || "";
       const content = raw.replaceAll("The Company", client.name) || `No template text written yet for "${label}".`;
       const bodyLines = wrapTextLines(content, font, 10, maxWidth);
@@ -1659,24 +1720,41 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
       bodyLines.forEach((line) => { ensureSpace(13); page.drawText(line, { x: margin, y, size: 10, font, color: ink }); y -= 13; });
       y -= 16;
 
+      if (label === "4. Health & Safety Policy") {
+        ensureSpace(240);
+        const newY = await drawPolicyQuadrant({ pdfDoc, page, x: margin, y0: y, maxWidth, boldFont, rgb, clientName: client.name });
+        if (newY !== null) y = newY;
+      }
       if (label === "5.1 Organisational Roles, Responsibilities, Accountabilities & Authorities") {
         ensureSpace(220);
-        y = drawOrgHierarchy({ page, x: margin, y0: y, width: maxWidth, font, boldFont, rgb });
+        const orgImage = await loadStaticDiagramImage(pdfDoc, "org-hierarchy.png");
+        y = orgImage
+          ? drawDiagramImage({ page, image: orgImage, x: margin, y0: y, maxWidth })
+          : drawOrgHierarchy({ page, x: margin, y0: y, width: maxWidth, font, boldFont, rgb });
       }
       if (label === "6.1 Objectives") {
         ensureSpace(140);
-        y = drawObjectivesPDCA({ page, x: margin, y0: y, width: maxWidth, font, boldFont, rgb });
+        const pdcaImage = await loadStaticDiagramImage(pdfDoc, "planning-pdca.png");
+        y = pdcaImage
+          ? drawDiagramImage({ page, image: pdcaImage, x: margin, y0: y, maxWidth })
+          : drawObjectivesPDCA({ page, x: margin, y0: y, width: maxWidth, font, boldFont, rgb });
       }
       if (label === "7. Hazard Identification and Assessment of OHS Risks") {
         ensureSpace(220);
-        y = drawHazardCategoryGrid({ page, x: margin, y0: y, width: maxWidth, font, boldFont, rgb });
+        const hazardImage = await loadStaticDiagramImage(pdfDoc, "hazard-categories.png");
+        y = hazardImage
+          ? drawDiagramImage({ page, image: hazardImage, x: margin, y0: y, maxWidth })
+          : drawHazardCategoryGrid({ page, x: margin, y0: y, width: maxWidth, font, boldFont, rgb });
         y -= 16; ensureSpace(60);
         const result = drawFlowchart({ page, pdfDoc, x: margin, y0: y, width: maxWidth, font, boldFont, rgb, steps: HAZARD_ID_FLOWCHART_STEPS, pageWidth, pageHeight, margin });
         page = result.page; y = result.y;
       }
       if (label === "7.1 Legal and Other Requirements") {
         ensureSpace(140);
-        y = drawLegislationFlow({ page, x: margin, y0: y, width: maxWidth, font, boldFont, rgb });
+        const legislationImage = await loadStaticDiagramImage(pdfDoc, "legislation-flow.png");
+        y = legislationImage
+          ? drawDiagramImage({ page, image: legislationImage, x: margin, y0: y, maxWidth })
+          : drawLegislationFlow({ page, x: margin, y0: y, width: maxWidth, font, boldFont, rgb });
       }
       if (label === "8. Risk Management") {
         ensureSpace(230);
@@ -1684,14 +1762,24 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
       }
       if (label === "8.1 Hierarchy of Controls") {
         ensureSpace(170);
-        y = drawHierarchyOfControls({ page, x: margin, y0: y, width: maxWidth, font, boldFont, rgb, showTitle: false });
+        const hocImage = await loadStaticDiagramImage(pdfDoc, "hierarchy-of-controls.png");
+        y = hocImage
+          ? drawDiagramImage({ page, image: hocImage, x: margin, y0: y, maxWidth })
+          : drawHierarchyOfControls({ page, x: margin, y0: y, width: maxWidth, font, boldFont, rgb, showTitle: false });
+      }
+      if (label === "9. Incidents and Corrective Actions") {
+        ensureSpace(220);
+        const incidentCycleImage = await loadStaticDiagramImage(pdfDoc, "incident-corrective-cycle.png");
+        if (incidentCycleImage) {
+          y = drawDiagramImage({ page, image: incidentCycleImage, x: margin, y0: y, maxWidth });
+        }
       }
       if (label === "9.1 Incident Reporting") {
         y -= 16; ensureSpace(60);
         const result = drawFlowchart({ page, pdfDoc, x: margin, y0: y, width: maxWidth, font, boldFont, rgb, steps: NOTIFIABLE_EVENT_FLOWCHART_STEPS, pageWidth, pageHeight, margin });
         page = result.page; y = result.y;
       }
-    });
+    }
 
     const pageCount = pdfDoc.getPageCount();
     for (let p = 0; p < pageCount; p++) {
@@ -1746,7 +1834,13 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
       y -= 13;
     });
 
-    // Hardcoded visuals for the procedures that have real reference diagrams behind them.
+    // Hardcoded visuals for the procedures/policies that have real reference diagrams behind them.
+    if (label === "Health & Safety Policy") {
+      y -= 16;
+      ensureSpace(240);
+      const newY = await drawPolicyQuadrant({ pdfDoc, page, x: margin, y0: y, maxWidth, boldFont, rgb, clientName: client.name });
+      if (newY !== null) y = newY;
+    }
     if (label === "Hazard & Risk Management Procedure") {
       y -= 16;
       ensureSpace(60);
@@ -1760,7 +1854,10 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
       ensureSpace(300);
       y = drawPDCACycle({ page, x: margin, y0: y, width: maxWidth, font, boldFont, rgb });
       ensureSpace(170);
-      y = drawHierarchyOfControls({ page, x: margin, y0: y, width: maxWidth, font, boldFont, rgb });
+      const hocImage2 = await loadStaticDiagramImage(pdfDoc, "hierarchy-of-controls.png");
+      y = hocImage2
+        ? drawDiagramImage({ page, image: hocImage2, x: margin, y0: y, maxWidth })
+        : drawHierarchyOfControls({ page, x: margin, y0: y, width: maxWidth, font, boldFont, rgb });
       y -= 16;
       ensureSpace(60);
       result = drawFlowchart({ page, pdfDoc, x: margin, y0: y, width: maxWidth, font, boldFont, rgb, steps: RISK_MANAGEMENT_FLOWCHART_STEPS, pageWidth, pageHeight, margin });

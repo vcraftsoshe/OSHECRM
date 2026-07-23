@@ -1166,7 +1166,7 @@ function riskColor(score) {
 }
 
 function drawRiskMatrix(ctx) {
-  const { page, x, y0, font, boldFont, rgb } = ctx;
+  const { page, x, y0, font, boldFont, rgb, showTitle = true } = ctx;
   let y = y0;
   const cellW = 62, cellH = 26, labelW = 70;
   const likelihoods = ["Almost Certain 5", "Likely 4", "Possible 3", "Unlikely 2", "Rare 1"];
@@ -1174,8 +1174,10 @@ function drawRiskMatrix(ctx) {
   const consequences = ["1 Insignificant", "2 Minor", "3 Moderate", "4 Major", "5 Catastrophic"];
   const c2 = (col) => rgb(col.r, col.g, col.b);
 
-  page.drawText("Risk Matrix", { x, y, size: 11, font: boldFont, color: rgb(0.04, 0.68, 0.63) });
-  y -= 18;
+  if (showTitle) {
+    page.drawText("Risk Matrix", { x, y, size: 11, font: boldFont, color: rgb(0.04, 0.68, 0.63) });
+    y -= 18;
+  }
   consequences.forEach((c, i) => {
     page.drawRectangle({ x: x + labelW + i * cellW, y: y - cellH, width: cellW, height: cellH, color: rgb(0.93, 0.95, 0.94), borderColor: rgb(0.85, 0.85, 0.85), borderWidth: 0.5 });
     const parts = c.split(" ");
@@ -1203,11 +1205,184 @@ function drawRiskMatrix(ctx) {
   return y - 10;
 }
 
-function drawHierarchyOfControls(ctx) {
+// The real "Managing Risks and Hazards" PDCA cycle from the Hazard & Risk Management
+// Procedure — sits right before the Hierarchy of Controls in the source document.
+function drawPDCACycle(ctx) {
   const { page, x, y0, width, font, boldFont, rgb } = ctx;
   let y = y0;
-  page.drawText("Hierarchy of Controls", { x, y, size: 11, font: boldFont, color: rgb(0.04, 0.68, 0.63) });
+  page.drawText("Managing Risks and Hazards", { x, y, size: 11, font: boldFont, color: rgb(0.04, 0.68, 0.63) });
+  y -= 20;
+
+  const quadrants = [
+    { title: "PLAN", subtitle: "Assess risk and identify control measures", color: [0.04, 0.68, 0.63],
+      items: ["Identify hazards that could give rise to work-related risks", "Assess and prioritise which risks to deal with", "Eliminate or minimise risks so far as reasonably practicable", "Engage workers and reps in identifying and assessing risk"] },
+    { title: "DO", subtitle: "Implement control measures", color: [0.11, 0.55, 0.29],
+      items: ["Implement control measures that effectively eliminate or minimise risk", "Prioritise controls protecting multiple at-risk workers at once", "PPE should not be the first or only control considered"] },
+    { title: "CHECK", subtitle: "Monitor performance of control measures", color: [0.95, 0.65, 0.15],
+      items: ["Give workers a way to report incidents, near misses, and concerns", "Monitor workplace conditions and worker health", "Engage workers and reps on monitoring decisions"] },
+    { title: "ACT", subtitle: "Take action on lessons learnt", color: [0.78, 0.16, 0.16],
+      items: ["Regularly review effectiveness of control measures", "Review incidents/near misses with workers to check controls work", "Use review and investigation findings to continuously improve"] },
+  ];
+
+  const boxW = width / 2 - 6, boxH = 130;
+  quadrants.forEach((q, i) => {
+    const col = i % 2, row = Math.floor(i / 2);
+    const bx = x + col * (boxW + 12);
+    const by = y - row * (boxH + 10);
+    page.drawRectangle({ x: bx, y: by - boxH, width: boxW, height: boxH, borderColor: rgb(q.color[0], q.color[1], q.color[2]), borderWidth: 1.5, color: rgb(0.98, 0.98, 0.98) });
+    page.drawRectangle({ x: bx, y: by - 22, width: boxW, height: 22, color: rgb(q.color[0], q.color[1], q.color[2]) });
+    page.drawText(q.title, { x: bx + 8, y: by - 16, size: 11, font: boldFont, color: rgb(1, 1, 1) });
+    let ly = by - 34;
+    wrapTextLines(q.subtitle, font, 8, boxW - 16).forEach((line) => {
+      page.drawText(line, { x: bx + 8, y: ly, size: 8, font: boldFont, color: rgb(0.1, 0.15, 0.15) });
+      ly -= 10;
+    });
+    ly -= 4;
+    q.items.forEach((item) => {
+      wrapTextLines(`- ${item}`, font, 6.5, boxW - 16).forEach((line) => {
+        page.drawText(line, { x: bx + 8, y: ly, size: 6.5, font, color: rgb(0.3, 0.35, 0.35) });
+        ly -= 8;
+      });
+    });
+  });
+
+  return y - 2 * (boxH + 10) - 10;
+}
+
+// Real org hierarchy from the Manual's own SmartArt data — section 5.1.
+function drawOrgHierarchy(ctx) {
+  const { page, x, y0, width, font, boldFont, rgb } = ctx;
+  let y = y0;
+  const boxH = 26, gap = 18;
+  const centerX = x + width / 2;
+
+  const drawBox = (label, cy, w) => {
+    page.drawRectangle({ x: centerX - w / 2, y: cy - boxH, width: w, height: boxH, color: rgb(0.04, 0.68, 0.63), borderColor: rgb(0.04, 0.5, 0.47), borderWidth: 1 });
+    const tw = font.widthOfTextAtSize(label, 9);
+    page.drawText(label, { x: centerX - tw / 2, y: cy - boxH / 2 - 3, size: 9, font: boldFont, color: rgb(1, 1, 1) });
+  };
+  const drawArrowDown = (cy) => {
+    page.drawLine({ start: { x: centerX, y: cy }, end: { x: centerX, y: cy - gap + 4 }, thickness: 1.5, color: rgb(0.4, 0.45, 0.45) });
+  };
+
+  drawBox("The Company (PCBU)", y, 220);
+  y -= boxH; drawArrowDown(y); y -= gap;
+  drawBox("Director", y, 180);
+  y -= boxH; drawArrowDown(y); y -= gap;
+  drawBox("Officer/s", y, 180);
+  y -= boxH; drawArrowDown(y); y -= gap;
+  drawBox("Management / Supervisors", y, 220);
+  y -= boxH; drawArrowDown(y); y -= gap;
+  drawBox("Supervisors / Workers", y, 220);
+  y -= boxH - 4;
+
+  y -= 20;
+  const roles = ["Employees (Workers)", "Contractors (Workers)", "Subcontractors (Workers)"];
+  const roleW = width / 3 - 8;
+  roles.forEach((role, i) => {
+    const bx = x + i * (roleW + 12);
+    page.drawRectangle({ x: bx, y: y - boxH, width: roleW, height: boxH, color: rgb(0.93, 0.95, 0.94), borderColor: rgb(0.7, 0.75, 0.75), borderWidth: 1 });
+    wrapTextLines(role, font, 8, roleW - 10).forEach((line, li) => {
+      page.drawText(line, { x: bx + 6, y: y - 12 - li * 10, size: 8, font: boldFont, color: rgb(0.1, 0.15, 0.15) });
+    });
+  });
+  return y - boxH - 14;
+}
+
+// The Manual's own compact PDCA + Continuous Improvement diagram — section 6.1 (simpler than
+// the more detailed one in the Hazard & Risk Management Procedure).
+function drawObjectivesPDCA(ctx) {
+  const { page, x, y0, width, font, boldFont, rgb } = ctx;
+  let y = y0;
+  const boxW = width / 2 - 6, boxH = 50;
+  const cells = [
+    { label: "ACT", color: [0.78, 0.16, 0.16] },
+    { label: "PLAN", color: [0.04, 0.68, 0.63] },
+    { label: "CHECK", color: [0.95, 0.65, 0.15] },
+    { label: "DO", color: [0.11, 0.55, 0.29] },
+  ];
+  cells.forEach((c, i) => {
+    const col = i % 2, row = Math.floor(i / 2);
+    const bx = x + col * (boxW + 12);
+    const by = y - row * (boxH + 10);
+    page.drawRectangle({ x: bx, y: by - boxH, width: boxW, height: boxH, color: rgb(c.color[0], c.color[1], c.color[2]) });
+    const tw = font.widthOfTextAtSize(c.label, 13);
+    page.drawText(c.label, { x: bx + boxW / 2 - tw / 2, y: by - boxH / 2 - 5, size: 13, font: boldFont, color: rgb(1, 1, 1) });
+  });
+  const midY = y - boxH - 5;
+  page.drawText("Continuous Improvement", { x: x, y: midY, size: 9, font: boldFont, color: rgb(0.1, 0.15, 0.15) });
+  return y - 2 * (boxH + 10) - 10;
+}
+
+// The real hazard-categorisation grid from the Manual — section 7, matches the same content
+// in the Hazard & Risk Management Procedure's own cover page.
+function drawHazardCategoryGrid(ctx) {
+  const { page, x, y0, width, font, boldFont, rgb } = ctx;
+  let y = y0;
+  const categories = [
+    { title: "Activities (routine and non-routine)", items: ["Infrastructure, equipment, materials, substances, physical conditions", "Product design, development, testing, production, assembly, construction, service, maintenance, disposal", "Human factors", "How the work is usually done"] },
+    { title: "Emergency Situations", items: ["Potential natural disasters", "High risk work e.g. working at height, confined space, digger roll-over"] },
+    { title: "People", items: ["Workers and contractors", "Visitors and other persons", "Those in the vicinity of the workplace", "Workers at a location under another company's control, or mobile workers"] },
+    { title: "Other Issues", items: ["Design of the workplace or machinery", "Situations caused by the Company in the workplace", "Situations in the vicinity caused by other companies"] },
+    { title: "Company Changes", items: ["Proposed changes to the Company", "Changes in knowledge/information about hazards", "Past incidents and their causes", "Social factors including workload, leadership, and culture"] },
+  ];
+  const cols = 2;
+  const colW = width / cols - 8;
+  page.drawText("What to consider when identifying hazards", { x, y, size: 10, font: boldFont, color: rgb(0.04, 0.68, 0.63) });
   y -= 18;
+  let colHeights = [y, y];
+  categories.forEach((cat, i) => {
+    const col = i % cols;
+    const bx = x + col * (colW + 16);
+    let cy = colHeights[col];
+    page.drawRectangle({ x: bx, y: cy - 16, width: colW, height: 16, color: rgb(0.09, 0.17, 0.18) });
+    page.drawText(cat.title, { x: bx + 4, y: cy - 12, size: 8.5, font: boldFont, color: rgb(1, 1, 1) });
+    cy -= 20;
+    cat.items.forEach((item) => {
+      wrapTextLines(`- ${item}`, font, 7, colW - 8).forEach((line) => {
+        page.drawText(line, { x: bx + 4, y: cy, size: 7, font, color: rgb(0.3, 0.35, 0.35) });
+        cy -= 9;
+      });
+    });
+    colHeights[col] = cy - 8;
+  });
+  return Math.min(...colHeights) - 6;
+}
+
+// The real Legislation → Company Rules flow from the Manual — section 7.1.
+function drawLegislationFlow(ctx) {
+  const { page, x, y0, width, font, boldFont, rgb } = ctx;
+  let y = y0;
+  const items = ["HSAW Act 2015", "Regulations", "Codes of Practice", "Standards", "Guidelines", "Industry Standards/Guidance"];
+  const boxW = width / 3 - 10, boxH = 24;
+  page.drawText("Legislation", { x, y, size: 10, font: boldFont, color: rgb(0.04, 0.68, 0.63) });
+  y -= 18;
+  items.forEach((item, i) => {
+    const col = i % 3, row = Math.floor(i / 3);
+    const bx = x + col * (boxW + 15);
+    const by = y - row * (boxH + 8);
+    page.drawRectangle({ x: bx, y: by - boxH, width: boxW, height: boxH, color: rgb(0.93, 0.95, 0.94), borderColor: rgb(0.7, 0.75, 0.75), borderWidth: 1 });
+    wrapTextLines(item, font, 7.5, boxW - 8).forEach((line, li) => {
+      page.drawText(line, { x: bx + 4, y: by - 10 - li * 9, size: 7.5, font: boldFont, color: rgb(0.1, 0.15, 0.15) });
+    });
+  });
+  const rows = Math.ceil(items.length / 3);
+  y -= rows * (boxH + 8) + 10;
+  page.drawLine({ start: { x: x + width / 2, y: y + 8 }, end: { x: x + width / 2, y: y - 4 }, thickness: 1.5, color: rgb(0.4, 0.45, 0.45) });
+  y -= 8;
+  page.drawRectangle({ x: x + width / 2 - 90, y: y - 24, width: 180, height: 24, color: rgb(0.04, 0.68, 0.63) });
+  const tw = font.widthOfTextAtSize("Company Rules & Requirements", 8);
+  page.drawText("Company Rules & Requirements", { x: x + width / 2 - Math.min(tw, 170) / 2, y: y - 15, size: 8, font: boldFont, color: rgb(1, 1, 1) });
+  return y - 34;
+}
+
+function drawHierarchyOfControls(ctx) {
+  const { page, x, y0, width, font, boldFont, rgb, showTitle = true } = ctx;
+  let y = y0;
+  if (showTitle) {
+    page.drawText("Hierarchy of Controls", { x, y, size: 11, font: boldFont, color: rgb(0.04, 0.68, 0.63) });
+    y -= 18;
+  }
   const bands = [
     ["Elimination", [0.11, 0.55, 0.29], "Most effective"],
     ["Substitution", [0.55, 0.72, 0.20]],
@@ -1251,39 +1426,148 @@ function drawFlowchart(ctx) {
   return { page, y: y - 10 };
 }
 
-// Simple hazard indicator diamonds — a visual flag of which hazard categories apply, not a
-// reproduction of the legally-standardised GHS pictograms themselves.
+// Real GHS-style categories and meanings, from the actual Hazardous Substances Symbols &
+// Meaning reference document. Colour-coded diamond outlines rather than the real pictogram
+// artwork (skull-and-crossbones etc. are standardised symbols that can't be hand-drawn
+// accurately) — but the names and meanings are the genuine real content.
+const HAZARD_CATEGORIES = [
+  { name: "Acute Toxicity", color: [0.85, 0.1, 0.1], meaning: "Can cause death via skin contact, inhalation, or ingestion" },
+  { name: "Toxic Gas", color: [0.85, 0.1, 0.1], meaning: "Gas form of acute toxicity hazard" },
+  { name: "Acute Health Hazard", color: [0.1, 0.1, 0.1], meaning: "Skin/eye irritation, respiratory irritation, drowsiness" },
+  { name: "Chronic Health Hazard", color: [0.1, 0.1, 0.1], meaning: "May cause cancer, affect fertility, or cause allergies with repeated exposure" },
+  { name: "Flammable", color: [0.85, 0.1, 0.1], meaning: "Catches fire easily (gases, liquids, or solids)" },
+  { name: "Spontaneously Combustible", color: [0.85, 0.1, 0.1], meaning: "Can catch fire without an ignition source" },
+  { name: "Dangerous When Wet", color: [0.1, 0.5, 0.75], meaning: "Releases flammable gas on contact with water" },
+  { name: "Organic Peroxides", color: [0.85, 0.1, 0.1], meaning: "May contribute to fire, explosion, or chemical decomposition" },
+  { name: "Oxidisers", color: [0.95, 0.75, 0.15], meaning: "Can cause or intensify fire and explosion" },
+  { name: "Gases Under Pressure", color: [0.1, 0.1, 0.1], meaning: "May explode when heated; may cause cryogenic burns" },
+  { name: "Corrosives", color: [0.1, 0.1, 0.1], meaning: "Can cause severe skin burns and eye damage" },
+  { name: "Environmental Hazard", color: [0.1, 0.1, 0.1], meaning: "Toxic to the environment" },
+];
+
 function drawHazardIndicators(ctx) {
-  const { page, x, y0, font, boldFont, rgb } = ctx;
+  const { page, x, y0, font, boldFont, rgb, maxWidth } = ctx;
   let y = y0;
-  page.drawText("Hazard Categories Present", { x, y, size: 11, font: boldFont, color: rgb(0.04, 0.68, 0.63) });
-  y -= 20;
-  const size = 40, gapX = 10;
-  const colorMap = { Flammable: [0.93, 0.47, 0.18], Toxic: [0.55, 0.2, 0.6], Corrosive: [0.78, 0.16, 0.16], Oxidiser: [0.96, 0.75, 0.2], Environment: [0.11, 0.55, 0.29] };
-  let cx = x;
-  ["Flammable", "Toxic", "Corrosive", "Oxidiser", "Environment"].forEach((label) => {
-    const c = colorMap[label];
-    const color = rgb(c[0], c[1], c[2]);
-    const cy = y - size / 2;
-    page.drawLine({ start: { x: cx + size / 2, y }, end: { x: cx + size, y: cy }, thickness: 1.5, color });
-    page.drawLine({ start: { x: cx + size, y: cy }, end: { x: cx + size / 2, y: y - size }, thickness: 1.5, color });
-    page.drawLine({ start: { x: cx + size / 2, y: y - size }, end: { x: cx, y: cy }, thickness: 1.5, color });
-    page.drawLine({ start: { x: cx, y: cy }, end: { x: cx + size / 2, y }, thickness: 1.5, color });
-    const labelWidth = font.widthOfTextAtSize(label, 7);
-    page.drawText(label, { x: cx + size / 2 - labelWidth / 2, y: y - size - 12, size: 7, font, color: rgb(0.3, 0.35, 0.35) });
-    cx += size + gapX;
+  const cols = 3;
+  const cellW = maxWidth / cols;
+  const cellH = 90;
+  const diamondSize = 34;
+
+  page.drawText("Hazardous Substance Symbols & Meanings", { x, y, size: 11, font: boldFont, color: rgb(0.04, 0.68, 0.63) });
+  y -= 24;
+
+  HAZARD_CATEGORIES.forEach((cat, i) => {
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    const cx = x + col * cellW;
+    const cy = y - row * cellH;
+    const color = rgb(cat.color[0], cat.color[1], cat.color[2]);
+    const dcx = cx + diamondSize / 2 + 4;
+    const dcy = cy - diamondSize / 2 - 4;
+    page.drawLine({ start: { x: dcx, y: dcy + diamondSize / 2 }, end: { x: dcx + diamondSize / 2, y: dcy }, thickness: 2, color });
+    page.drawLine({ start: { x: dcx + diamondSize / 2, y: dcy }, end: { x: dcx, y: dcy - diamondSize / 2 }, thickness: 2, color });
+    page.drawLine({ start: { x: dcx, y: dcy - diamondSize / 2 }, end: { x: dcx - diamondSize / 2, y: dcy }, thickness: 2, color });
+    page.drawLine({ start: { x: dcx - diamondSize / 2, y: dcy }, end: { x: dcx, y: dcy + diamondSize / 2 }, thickness: 2, color });
+
+    page.drawText(cat.name, { x: cx + diamondSize + 10, y: cy - 10, size: 9, font: boldFont, color: rgb(0.1, 0.15, 0.15) });
+    wrapTextLines(cat.meaning, font, 7, cellW - diamondSize - 16).forEach((line, li) => {
+      page.drawText(line, { x: cx + diamondSize + 10, y: cy - 22 - li * 9, size: 7, font, color: rgb(0.35, 0.4, 0.4) });
+    });
   });
-  return y - size - 24;
+
+  const rows = Math.ceil(HAZARD_CATEGORIES.length / cols);
+  return y - rows * cellH - 10;
 }
 
+// From the real Hazard & Risk Management Procedure's Appendix A.
+const HAZARD_ID_FLOWCHART_STEPS = [
+  { text: "Get worker participation (toolbox meeting)" },
+  { text: "Walk around the work area and identify hazards" },
+  { text: "Consider: what could cause harm? e.g. tools, slips and trips, electricity, weather" },
+  { text: "Consider: what emergencies may happen? e.g. fire, earthquake, digger roll-over, gas leak" },
+  { text: "Consider: how will the work be done? e.g. ladder use, working at height, manual handling" },
+  { text: "Consider: who will be present? e.g. other contractors, public, visitors, children", branchNote: "Not yet recorded -> continue to Risk Management Process" },
+  { text: "Record the identified hazard in the H.A.R.M Register" },
+];
+
+// The real Notifiable Event Process (Appendix B).
+const NOTIFIABLE_EVENT_FLOWCHART_STEPS = [
+  { text: "Incident deemed to be notifiable to WorkSafe (e.g. death, serious injury, hospital admission, near miss)" },
+  { text: "Freeze the scene and take photos if safe to do so — do not unfreeze until instructed by WorkSafe or Police" },
+  { text: "Call WorkSafe on 0800 030 040 and follow their instructions" },
+  { text: "Notify other PCBUs where applicable" },
+  { text: "Is an inspector coming to site?", branchNote: "Yes -> manager escorts inspector and completes any immediate corrective actions on request" },
+  { text: "Hold the scene until verbal or email advice has been given to unfreeze it" },
+  { text: "Employee involved completes the Incident Report Form" },
+  { text: "Manager completes the Accident Investigation Form and the WorkSafe Notifiable Event notification (online or hardcopy)" },
+  { text: "Findings and actions toolboxed with staff, discussed at the management meeting, and communicated to other PCBUs where applicable" },
+];
+
 const INCIDENT_FLOWCHART_STEPS = [
-  { text: "Injury, incident, illness or near miss occurred" },
-  { text: "Has someone been injured, or is an emergency service needed?", branchNote: "Yes -> call 111, make the site safe" },
-  { text: "Is this a notifiable event to WorkSafe?", branchNote: "Yes -> freeze the scene, follow the Notifiable Event Process" },
-  { text: "Complete the incident report as soon as possible" },
-  { text: "Manager completes the investigation — reviews the event, risks, hazards, and processes" },
-  { text: "Corrective actions assigned and recorded, with worker involvement" },
-  { text: "Investigation and actions discussed at the next management meeting, and communicated to workers" },
+  { text: "Injury, incident, work-related illness, or near miss occurred" },
+  { text: "Has someone been injured?", branchNote: "Yes -> do you require emergency services? If yes, call 111 for Fire/Police/Ambulance" },
+  { text: "If safe to do so, make the site safe before proceeding to apply first aid" },
+  { text: "Is this a notifiable event to WorkSafe?", branchNote: "Yes -> freeze the scene and follow the Notifiable Event Process" },
+  { text: "Notify to direct report as soon as safe to do so" },
+  { text: "Unfreeze the scene / take photos if necessary to add to the investigation — manager to notify other PCBUs where applicable" },
+  { text: "Complete the incident report as soon as possible post-event" },
+  { text: "Manager completes the investigation report — reviewing the event, risks, hazards, processes & procedures" },
+  { text: "Corrective actions assigned and recorded, with involvement of the worker(s) involved" },
+  { text: "Investigation and corrective actions discussed at the next management meeting, findings communicated to workers and other PCBUs where applicable" },
+];
+
+const CONTRACTOR_FLOWCHART_STEPS = [
+  { text: "Determine what work is required" },
+  { text: "Do we need the services of a contractor?", branchNote: "No -> end here" },
+  { text: "Provide contractor with Pre-Qualification Questionnaire" },
+  { text: "Manager reviews the returned questionnaire and supplied evidence", branchNote: "Evidence incomplete -> request further evidence and review again" },
+  { text: "Contractor approved, selected, and terms of contract negotiated" },
+  { text: "Communication, cooperation, and coordination between businesses completed and understood" },
+  { text: "Contractor monitored" },
+  { text: "Is the contract fixed term?", branchNote: "No -> periodically review the contractor" },
+  { text: "Complete Post Contract Review" },
+];
+
+const INDUCTION_FLOWCHART_STEPS = [
+  { text: "Worker employed" },
+  { text: "Before any work commences, complete Company induction" },
+  { text: "Issue worker with required PPE and provide training on safe use and storage — update the PPE Register" },
+  { text: "Assess training needs and record existing training in the register" },
+  { text: "Provide worker with training in relevant SOPs for their work tasks" },
+  { text: "Assign an experienced worker to supervise for a minimum of 3 months" },
+  { text: "Train worker on processes, procedures, and SOPs, and record it" },
+  { text: "Assess competency of the worker" },
+  { text: "Monitor the worker periodically to ensure processes, procedures, and SOPs continue to be followed" },
+  { text: "Review training needs and record in the training register" },
+];
+
+const NOTIFIABLE_WORK_FLOWCHART_STEPS = [
+  { text: "Will your job involve hazardous work?", branchNote: "No -> end here, nothing further required" },
+  { text: "You must provide WorkSafe with 24 hours' notice of work that is particularly hazardous (e.g. logging, falls of 5m+, scaffolding, heavy lifting, deep excavation, explosives, compressed air work)" },
+  { text: "Complete the Particular Hazardous Work notification form (online at forms.worksafe.govt.nz, or by email)" },
+  { text: "Commence works" },
+];
+
+const PLANT_EQUIPMENT_FLOWCHART_STEPS = [
+  { text: "Purchasing new plant or equipment?", branchNote: "No -> skip to regular checks below" },
+  { text: "Ensure adequate considerations are made prior to purchase (e.g. ergonomics, worker input, environmental factors, costs, exposures)" },
+  { text: "Complete a thorough check of the plant/equipment on arrival, prior to commencing any works" },
+  { text: "Plant or equipment to be risk assessed" },
+  { text: "Add to the Plant/Equipment Register and H.A.R.M Register" },
+  { text: "Asset released for operation" },
+  { text: "Complete regular checks of plant or equipment as specified in the register" },
+  { text: "Is the plant or equipment fit for the work?", branchNote: "No -> organise maintenance, then fix before use" },
+  { text: "Use the plant or equipment" },
+];
+
+const RISK_MANAGEMENT_FLOWCHART_STEPS = [
+  { text: "Hazard identified" },
+  { text: "Complete a risk assessment to identify the initial risk rating, using the Risk Matrix" },
+  { text: "Is the risk acceptable?", branchNote: "No -> consider controls: elimination, substitution, isolation, engineering, administration, or PPE" },
+  { text: "Record the controls, then repeat the risk assessment to get the residual risk rating", branchNote: "Still not acceptable -> reconsider further controls" },
+  { text: "Record the hazard, controls, and risk rating in the H.A.R.M Register" },
+  { text: "Communicate the hazard, risks, and controls to workers" },
+  { text: "Review controls regularly to ensure they remain effective" },
 ];
 
 // Downloads a real PDF of what's currently ticked. Manual sections flow continuously (a
@@ -1346,13 +1630,37 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
       bodyLines.forEach((line) => { ensureSpace(13); page.drawText(line, { x: margin, y, size: 10, font, color: ink }); y -= 13; });
       y -= 16;
 
+      if (label === "5.1 Organisational Roles, Responsibilities, Accountabilities & Authorities") {
+        ensureSpace(220);
+        y = drawOrgHierarchy({ page, x: margin, y0: y, width: maxWidth, font, boldFont, rgb });
+      }
+      if (label === "6.1 Objectives") {
+        ensureSpace(140);
+        y = drawObjectivesPDCA({ page, x: margin, y0: y, width: maxWidth, font, boldFont, rgb });
+      }
+      if (label === "7. Hazard Identification and Assessment of OHS Risks") {
+        ensureSpace(220);
+        y = drawHazardCategoryGrid({ page, x: margin, y0: y, width: maxWidth, font, boldFont, rgb });
+        y -= 16; ensureSpace(60);
+        const result = drawFlowchart({ page, pdfDoc, x: margin, y0: y, width: maxWidth, font, boldFont, rgb, steps: HAZARD_ID_FLOWCHART_STEPS, pageWidth, pageHeight, margin });
+        page = result.page; y = result.y;
+      }
+      if (label === "7.1 Legal and Other Requirements") {
+        ensureSpace(140);
+        y = drawLegislationFlow({ page, x: margin, y0: y, width: maxWidth, font, boldFont, rgb });
+      }
       if (label === "8. Risk Management") {
         ensureSpace(230);
-        y = drawRiskMatrix({ page, x: margin, y0: y, font, boldFont, rgb });
+        y = drawRiskMatrix({ page, x: margin, y0: y, font, boldFont, rgb, showTitle: false });
       }
       if (label === "8.1 Hierarchy of Controls") {
         ensureSpace(170);
-        y = drawHierarchyOfControls({ page, x: margin, y0: y, width: maxWidth, font, boldFont, rgb });
+        y = drawHierarchyOfControls({ page, x: margin, y0: y, width: maxWidth, font, boldFont, rgb, showTitle: false });
+      }
+      if (label === "9.1 Incident Reporting") {
+        y -= 16; ensureSpace(60);
+        const result = drawFlowchart({ page, pdfDoc, x: margin, y0: y, width: maxWidth, font, boldFont, rgb, steps: NOTIFIABLE_EVENT_FLOWCHART_STEPS, pageWidth, pageHeight, margin });
+        page = result.page; y = result.y;
       }
     });
 
@@ -1412,22 +1720,66 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
     // Hardcoded visuals for the procedures that have real reference diagrams behind them.
     if (label === "Hazard & Risk Management Procedure") {
       y -= 16;
+      ensureSpace(60);
+      let result = drawFlowchart({ page, pdfDoc, x: margin, y0: y, width: maxWidth, font, boldFont, rgb, steps: HAZARD_ID_FLOWCHART_STEPS, pageWidth, pageHeight, margin });
+      page = result.page;
+      y = result.y;
+      y -= 16;
       ensureSpace(230);
       y = drawRiskMatrix({ page, x: margin, y0: y, font, boldFont, rgb });
+      y -= 16;
+      ensureSpace(300);
+      y = drawPDCACycle({ page, x: margin, y0: y, width: maxWidth, font, boldFont, rgb });
       ensureSpace(170);
       y = drawHierarchyOfControls({ page, x: margin, y0: y, width: maxWidth, font, boldFont, rgb });
+      y -= 16;
+      ensureSpace(60);
+      result = drawFlowchart({ page, pdfDoc, x: margin, y0: y, width: maxWidth, font, boldFont, rgb, steps: RISK_MANAGEMENT_FLOWCHART_STEPS, pageWidth, pageHeight, margin });
+      page = result.page;
+      y = result.y;
+      y -= 16;
+      ensureSpace(60);
+      result = drawFlowchart({ page, pdfDoc, x: margin, y0: y, width: maxWidth, font, boldFont, rgb, steps: NOTIFIABLE_WORK_FLOWCHART_STEPS, pageWidth, pageHeight, margin });
+      page = result.page;
+      y = result.y;
     }
     if (label === "Incident Reporting & Investigation Procedure") {
       y -= 16;
       ensureSpace(60);
-      const result = drawFlowchart({ page, pdfDoc, x: margin, y0: y, width: maxWidth, font, boldFont, rgb, steps: INCIDENT_FLOWCHART_STEPS, pageWidth, pageHeight, margin });
+      let result = drawFlowchart({ page, pdfDoc, x: margin, y0: y, width: maxWidth, font, boldFont, rgb, steps: INCIDENT_FLOWCHART_STEPS, pageWidth, pageHeight, margin });
+      page = result.page;
+      y = result.y;
+      y -= 16;
+      ensureSpace(60);
+      result = drawFlowchart({ page, pdfDoc, x: margin, y0: y, width: maxWidth, font, boldFont, rgb, steps: NOTIFIABLE_EVENT_FLOWCHART_STEPS, pageWidth, pageHeight, margin });
+      page = result.page;
+      y = result.y;
+    }
+    if (label === "Contractor Management Procedure") {
+      y -= 16;
+      ensureSpace(60);
+      const result = drawFlowchart({ page, pdfDoc, x: margin, y0: y, width: maxWidth, font, boldFont, rgb, steps: CONTRACTOR_FLOWCHART_STEPS, pageWidth, pageHeight, margin });
+      page = result.page;
+      y = result.y;
+    }
+    if (label === "Plant & Equipment Procedure") {
+      y -= 16;
+      ensureSpace(60);
+      const result = drawFlowchart({ page, pdfDoc, x: margin, y0: y, width: maxWidth, font, boldFont, rgb, steps: PLANT_EQUIPMENT_FLOWCHART_STEPS, pageWidth, pageHeight, margin });
+      page = result.page;
+      y = result.y;
+    }
+    if (label === "Induction & Training Procedure") {
+      y -= 16;
+      ensureSpace(60);
+      const result = drawFlowchart({ page, pdfDoc, x: margin, y0: y, width: maxWidth, font, boldFont, rgb, steps: INDUCTION_FLOWCHART_STEPS, pageWidth, pageHeight, margin });
       page = result.page;
       y = result.y;
     }
     if (label === "Hazardous Substances Procedure") {
       y -= 16;
       ensureSpace(90);
-      y = drawHazardIndicators({ page, x: margin, y0: y, font, boldFont, rgb });
+      y = drawHazardIndicators({ page, x: margin, y0: y, font, boldFont, rgb, maxWidth });
     }
 
     const pageCount = pdfDoc.getPageCount();

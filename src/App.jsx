@@ -3798,6 +3798,7 @@ function ReportsView({ clients }) {
   const [loaded, setLoaded] = useState(false);
   const [newSectionTitle, setNewSectionTitle] = useState("");
   const [downloading, setDownloading] = useState(false);
+  const [csvChecklistOpen, setCsvChecklistOpen] = useState(false);
 
   useEffect(() => {
     if (!client) return;
@@ -3863,7 +3864,7 @@ function ReportsView({ clients }) {
   const monthLabel = monthYearLabel(monthYear);
 
   return (
-    <div className="flex flex-col gap-4 h-full min-h-0">
+    <div className="flex flex-col gap-4 h-full min-h-0 overflow-y-auto">
       <Card style={{ padding: "14px 16px" }}>
         <div className="flex flex-wrap items-end gap-4">
           <div>
@@ -3898,30 +3899,37 @@ function ReportsView({ clients }) {
       </Card>
 
       {sections.length > 0 && (
-        <Card style={{ padding: "14px 16px" }}>
-          <div className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: T.slate }}>CSVs needed for {monthLabel}</div>
-          <div className="flex flex-col gap-1.5">
-            {sections.map((s) => {
-              const guide = guideForSection(s.title);
-              const has = s.csvHeaders?.length > 0;
-              return (
-                <div key={s.id} className="flex items-start gap-2 text-xs py-1" style={{ borderBottom: `1px solid ${T.border}` }}>
-                  {has ? <CheckCircle2 size={14} color={T.tealDark} className="shrink-0 mt-0.5" /> : <Circle size={14} color={T.slateLight} className="shrink-0 mt-0.5" />}
-                  <div>
-                    <span className="font-semibold" style={{ color: T.ink }}>{s.title} for {monthLabel}</span>
-                    {has ? (
-                      <span style={{ color: T.slateLight }}> — uploaded, {s.csvData.length} row{s.csvData.length === 1 ? "" : "s"}</span>
-                    ) : (
-                      <span style={{ color: T.coral }}> — needed</span>
-                    )}
-                    <div style={{ color: T.slateLight }}>
-                      {guide ? `Suggested columns: ${guide.join(", ")}` : "Any CSV works — the first row is treated as column headers."}
+        <Card style={{ padding: "10px 16px" }}>
+          <button onClick={() => setCsvChecklistOpen((o) => !o)} className="w-full flex items-center justify-between text-left">
+            <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: T.slate }}>
+              CSVs needed for {monthLabel} ({sections.filter((s) => s.csvHeaders?.length > 0).length}/{sections.length} uploaded)
+            </span>
+            <ChevronDown size={14} color={T.slateLight} style={{ transform: csvChecklistOpen ? "rotate(180deg)" : "none" }} />
+          </button>
+          {csvChecklistOpen && (
+            <div className="flex flex-col gap-1.5 mt-2">
+              {sections.map((s) => {
+                const guide = guideForSection(s.title);
+                const has = s.csvHeaders?.length > 0;
+                return (
+                  <div key={s.id} className="flex items-start gap-2 text-xs py-1" style={{ borderBottom: `1px solid ${T.border}` }}>
+                    {has ? <CheckCircle2 size={14} color={T.tealDark} className="shrink-0 mt-0.5" /> : <Circle size={14} color={T.slateLight} className="shrink-0 mt-0.5" />}
+                    <div>
+                      <span className="font-semibold" style={{ color: T.ink }}>{s.title} for {monthLabel}</span>
+                      {has ? (
+                        <span style={{ color: T.slateLight }}> — uploaded, {s.csvData.length} row{s.csvData.length === 1 ? "" : "s"}</span>
+                      ) : (
+                        <span style={{ color: T.coral }}> — needed</span>
+                      )}
+                      <div style={{ color: T.slateLight }}>
+                        {guide ? `Suggested columns: ${guide.join(", ")}` : "Any CSV works — the first row is treated as column headers."}
+                      </div>
                     </div>
                   </div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          )}
         </Card>
       )}
 
@@ -3943,7 +3951,7 @@ function ReportsView({ clients }) {
       {!loaded ? (
         <div className="text-sm" style={{ color: T.slateLight }}>Loading…</div>
       ) : (
-        <div className="flex-1 overflow-y-auto flex flex-col gap-4">
+        <div className="flex flex-col gap-4">
           {sections.length === 0 && (
             <Card style={{ padding: 20 }}>
               <div className="text-sm" style={{ color: T.slate }}>

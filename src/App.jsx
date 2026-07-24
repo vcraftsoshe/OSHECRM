@@ -3467,40 +3467,382 @@ function reportKey(clientId, monthYear) { return `${clientId}__${monthYear}`; }
 
 function currentMonthYear() { return new Date().toISOString().slice(0, 7); }
 
+function monthYearLabel(monthYear) { return new Date(monthYear + "-02").toLocaleDateString("en-NZ", { month: "long", year: "numeric" }); }
+
+function truncateToWidth(text, font, size, width) {
+  if (font.widthOfTextAtSize(text, size) <= width) return text;
+  let t = text;
+  while (t.length > 1 && font.widthOfTextAtSize(t + "…", size) > width) t = t.slice(0, -1);
+  return t + "…";
+}
+
+// Suggested CSV column shapes for the section titles that come out of the two built-in
+// REPORT_TEMPLATES presets, keyed lowercase so custom-cased titles still match. Anything not
+// in here (custom sections) just gets a generic "any CSV works" note — first row is always
+// treated as headers regardless.
+const SECTION_CSV_GUIDE = {
+  "toolbox talks": ["Date", "Facilitator", "Topic"],
+  "permits": ["Permit Type", "Date/Time", "Site", "Applicant / Company", "Description of Works"],
+  "site reviews & observations": ["Date", "Site", "Reviewer", "Observation", "Action Taken"],
+  "incidents & near misses": ["Date/Time", "Location", "Type", "Outcome", "Notifiable"],
+  "incidents and near misses": ["Date", "Event Description", "Type", "Outcome"],
+  "task analyses": ["Site", "Date", "Task Type", "Hazards Identified", "Created By"],
+  "sign-in & visitor log": ["Date", "Site", "Sign-Ins", "Inductions"],
+  "corrective actions": ["Action", "Assigned To", "Linked Report", "Status"],
+  "hui and health & safety meetings": ["Meeting Type", "Service / Ropu", "Date", "Venue", "Next Meeting"],
+  "trends and observations": ["Theme", "Description"],
+  "recommended actions": ["Priority", "Recommendation", "Detail"],
+};
+function guideForSection(title) { return SECTION_CSV_GUIDE[(title || "").trim().toLowerCase()] || null; }
+
+// --- Chart helpers, used only by downloadMonthlyReportPdf ---
+const CHART_COLORS_RGB = [
+  [0.04, 0.68, 0.63], [0.06, 0.20, 0.16], [0.85, 0.62, 0.20], [0.55, 0.55, 0.58],
+  [0.36, 0.78, 0.72], [0.78, 0.38, 0.38], [0.50, 0.40, 0.70], [0.32, 0.55, 0.80],
+];
+// Group csvData by categoryColumn's values. If valueColumn is given, sums that column's
+// numbers per category (for CSVs that are already pre-aggregated, e.g. one row per
+// facilitator with a "Talks" count) — otherwise just counts rows per category (for raw
+// registers, e.g. one row per incident, grouped by "Type").
+function computeChartData(csvData, headers, categoryColumn, valueColumn) {
+  const catIdx = headers.indexOf(categoryColumn);
+  if (catIdx === -1) return [];
+  const valIdx = valueColumn ? headers.indexOf(valueColumn) : -1;
+  const totals = {};
+  csvData.forEach((row) => {
+    const cat = (row[catIdx] || "").toString().trim() || "(blank)";
+    let amount = 1;
+    if (valIdx !== -1) {
+      const n = parseFloat(String(row[valIdx] || "").replace(/[^0-9.-]/g, ""));
+      amount = isNaN(n) ? 0 : n;
+    }
+    totals[cat] = (totals[cat] || 0) + amount;
+  });
+  return Object.entries(totals).map(([label, count]) => ({ label, count })).sort((a, b) => b.count - a.count);
+}
+// pdf-lib's drawSvgPath flips the path's Y axis internally (SVG is y-down, pdf-lib is
+// y-up) — negating y here and always anchoring at (0,0) cancels that flip out, so path
+// points can just be normal absolute PDF (y-up) coordinates like every other drawing call.
+function svgPathFromPoints(points, close) {
+  return points.map(([x, y], i) => `${i === 0 ? "M" : "L"} ${x},${-y}`).join(" ") + (close ? " Z" : "");
+}
+function pieSlicePoints(cx, cy, r, angleStart, angleEnd) {
+  const steps = Math.max(2, Math.ceil((angleEnd - angleStart) / (Math.PI / 24)));
+  const points = [[cx, cy]];
+  for (let i = 0; i <= steps; i++) {
+    const a = angleStart + (angleEnd - angleStart) * (i / steps);
+    points.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]);
+  }
+  return points;
+}
+
+// Builds the branded monthly report PDF: an Executive Summary strip of big highlight
+// numbers (one per section, auto-computed from that section's CSV row count unless a
+// manual override was entered), then each section as a real table from its CSV data
+// followed by its comment/narrative — matching the shape of the real OSHE monthly reports
+// (numbers-grid header, charcoal section bars, table + narrative pairing per section).
+async function downloadMonthlyReportPdf({ client, monthYear, sections, highlights, focusNextMonth, createdBy }) {
+  const { PDFDocument, StandardFonts, rgb } = await importWithReloadOnStaleChunk(() => import("pdf-lib"));
+  const ink = rgb(0.08, 0.14, 0.13);
+  const slate = rgb(0.36, 0.45, 0.45);
+  const teal = rgb(0.04, 0.68, 0.63);
+  const charcoal = rgb(0.06, 0.20, 0.16);
+  const pageWidth = 595, pageHeight = 842, margin = 50;
+  const maxWidth = pageWidth - margin * 2;
+  const bandHeight = 74;
+  const chartColors = CHART_COLORS_RGB.map(([r, g, b]) => rgb(r, g, b));
+
+  const pdfDoc = await PDFDocument.create();
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const logoImage = await loadClientLogoImage(client, pdfDoc);
+  const monthLabel = monthYearLabel(monthYear);
+
+  let page = pdfDoc.addPage([pageWidth, pageHeight]);
+  const drawHeader = (pg) => {
+    pg.drawRectangle({ x: 0, y: pageHeight - bandHeight, width: pageWidth, height: bandHeight, color: charcoal });
+    if (logoImage) {
+      const maxLogoH = 30, maxLogoW = 100;
+      const scale = Math.min(maxLogoH / logoImage.height, maxLogoW / logoImage.width, 1);
+      const w = logoImage.width * scale, h = logoImage.height * scale;
+      pg.drawImage(logoImage, { x: pageWidth - margin - w, y: pageHeight - bandHeight / 2 - h / 2, width: w, height: h });
+    }
+    pg.drawText("HEALTH & SAFETY MONTHLY REPORT", { x: margin, y: pageHeight - 30, size: 9, font: boldFont, color: teal });
+    pg.drawText(`${client.name} — ${monthLabel}`, { x: margin, y: pageHeight - 52, size: 16, font: boldFont, color: rgb(1, 1, 1) });
+  };
+  drawHeader(page);
+  let y = pageHeight - bandHeight - 30;
+  const newPage = () => { page = pdfDoc.addPage([pageWidth, pageHeight]); drawHeader(page); y = pageHeight - bandHeight - 30; };
+  const ensureSpace = (needed) => { if (y - needed < margin + 20) newPage(); };
+
+  // --- Executive Summary: a grid of big numbers, one per section that has one (auto row
+  // count, or a manual override for sections where row count isn't the right metric). ---
+  const highlightItems = sections.map((s) => {
+    const num = (s.highlightNumber || "").trim() || (s.csvData?.length ? String(s.csvData.length) : null);
+    if (num == null) return null;
+    return { num, label: (s.highlightLabel || "").trim() || s.title };
+  }).filter(Boolean);
+
+  if (highlightItems.length > 0) {
+    const perRow = Math.min(5, highlightItems.length);
+    const cardW = maxWidth / perRow;
+    const rows = Math.ceil(highlightItems.length / perRow);
+    ensureSpace(46 + rows * 64);
+    page.drawText("EXECUTIVE SUMMARY", { x: margin, y, size: 12, font: boldFont, color: teal });
+    y -= 10;
+    page.drawLine({ start: { x: margin, y }, end: { x: pageWidth - margin, y }, thickness: 1, color: rgb(0.85, 0.85, 0.85) });
+    y -= 30;
+    const rowTop = y;
+    highlightItems.forEach((h, i) => {
+      const col = i % perRow, row = Math.floor(i / perRow);
+      const cx = margin + col * cardW, cardY = rowTop - row * 64;
+      const numSize = 22;
+      const numW = boldFont.widthOfTextAtSize(h.num, numSize);
+      page.drawText(h.num, { x: cx + (cardW - numW) / 2, y: cardY, size: numSize, font: boldFont, color: teal });
+      wrapTextLines(h.label, font, 8, cardW - 10).slice(0, 2).forEach((line, li) => {
+        const lw = font.widthOfTextAtSize(line, 8);
+        page.drawText(line, { x: cx + (cardW - lw) / 2, y: cardY - 16 - li * 10, size: 8, font, color: slate });
+      });
+    });
+    y = rowTop - rows * 64 - 10;
+  }
+
+  // --- Highlights / Focus for Next Month: two boxes side by side, bullet-aware text
+  // (a line starting with "• " renders as a bullet), matching the real reports' two-column
+  // Highlights/Focus Areas layout. Either box is skipped if it has no content. ---
+  const drawBulletLines = (pg, text, x, startY, width, size) => {
+    let yy = startY;
+    text.split("\n").forEach((seg) => {
+      if (seg.trim() === "") return;
+      const isBullet = seg.trim().startsWith("• ");
+      const clean = isBullet ? seg.trim().slice(2) : seg;
+      const effWidth = isBullet ? width - 12 : width;
+      wrapTextLines(clean, font, size, effWidth).forEach((line, i) => {
+        if (isBullet && i === 0) { pg.drawText("•", { x, y: yy, size, font, color: ink }); pg.drawText(line, { x: x + 12, y: yy, size, font, color: ink }); }
+        else if (isBullet) pg.drawText(line, { x: x + 12, y: yy, size, font, color: ink });
+        else pg.drawText(line, { x, y: yy, size, font, color: ink });
+        yy -= size + 4;
+      });
+    });
+    return yy;
+  };
+  const hasHighlights = (highlights || "").trim().length > 0;
+  const hasFocus = (focusNextMonth || "").trim().length > 0;
+  if (hasHighlights || hasFocus) {
+    const colGap = 20, boxW = hasHighlights && hasFocus ? (maxWidth - colGap) / 2 : maxWidth;
+    // Measure both boxes' content height up front so they can share one boundary/ensureSpace
+    // check — otherwise one box could start a fresh page while the other stays behind.
+    const measureH = (text) => {
+      let lines = 0;
+      (text || "").split("\n").forEach((seg) => {
+        if (seg.trim() === "") return;
+        const isBullet = seg.trim().startsWith("• ");
+        const clean = isBullet ? seg.trim().slice(2) : seg;
+        lines += wrapTextLines(clean, font, 9.5, boxW - 24 - (isBullet ? 12 : 0)).length;
+      });
+      return 34 + lines * 13.5;
+    };
+    const blockH = Math.max(hasHighlights ? measureH(highlights) : 0, hasFocus ? measureH(focusNextMonth) : 0);
+    ensureSpace(blockH + 10);
+    const boxTop = y;
+    if (hasHighlights) {
+      page.drawRectangle({ x: margin, y: boxTop - blockH, width: boxW, height: blockH, color: rgb(0.96, 0.98, 0.97) });
+      page.drawText("HIGHLIGHTS", { x: margin + 12, y: boxTop - 20, size: 10, font: boldFont, color: teal });
+      drawBulletLines(page, highlights.trim(), margin + 12, boxTop - 38, boxW - 24, 9.5);
+    }
+    if (hasFocus) {
+      const fx = hasHighlights ? margin + boxW + colGap : margin;
+      page.drawRectangle({ x: fx, y: boxTop - blockH, width: boxW, height: blockH, color: rgb(0.96, 0.98, 0.97) });
+      page.drawText(`FOCUS FOR NEXT MONTH`, { x: fx + 12, y: boxTop - 20, size: 10, font: boldFont, color: teal });
+      drawBulletLines(page, focusNextMonth.trim(), fx + 12, boxTop - 38, boxW - 24, 9.5);
+    }
+    y = boxTop - blockH - 20;
+  }
+
+  // --- Each section: charcoal heading bar, table from its CSV (if any), then narrative. ---
+  sections.forEach((s) => {
+    ensureSpace(22 + 14);
+    page.drawRectangle({ x: margin, y: y - 22, width: maxWidth, height: 22, color: charcoal });
+    page.drawText(s.title.toUpperCase(), { x: margin + 8, y: y - 16, size: 10, font: boldFont, color: rgb(1, 1, 1) });
+    y -= 22 + 14;
+
+    const showTable = s.showTable !== false;
+    if (s.csvHeaders?.length > 0 && showTable) {
+      const colCount = s.csvHeaders.length;
+      const colW = maxWidth / colCount;
+      const rowH = 18;
+      ensureSpace(rowH);
+      page.drawRectangle({ x: margin, y: y - rowH, width: maxWidth, height: rowH, color: rgb(0.93, 0.96, 0.95) });
+      s.csvHeaders.forEach((h, ci) => {
+        page.drawText(truncateToWidth(h, boldFont, 8, colW - 8), { x: margin + ci * colW + 4, y: y - rowH + 6, size: 8, font: boldFont, color: teal });
+      });
+      y -= rowH;
+      s.csvData.forEach((row, ri) => {
+        ensureSpace(rowH);
+        if (ri % 2 === 1) page.drawRectangle({ x: margin, y: y - rowH, width: maxWidth, height: rowH, color: rgb(0.97, 0.98, 0.98) });
+        row.slice(0, colCount).forEach((cell, ci) => {
+          page.drawText(truncateToWidth(String(cell || ""), font, 8, colW - 8), { x: margin + ci * colW + 4, y: y - rowH + 6, size: 8, font, color: ink });
+        });
+        page.drawLine({ start: { x: margin, y: y - rowH }, end: { x: margin + maxWidth, y: y - rowH }, thickness: 0.5, color: rgb(0.9, 0.9, 0.9) });
+        y -= rowH;
+      });
+      y -= 10;
+    }
+
+    if (s.chartType && s.chartType !== "none" && s.chartColumn && s.csvHeaders?.length > 0) {
+      const counts = computeChartData(s.csvData, s.csvHeaders, s.chartColumn, s.chartValueColumn);
+      if (counts.length > 0) {
+        if (s.chartType === "bar") {
+          const capped = counts.slice(0, 8);
+          const barH = 14, gap = 8, labelW = 150;
+          const barAreaW = maxWidth - labelW - 40;
+          const maxCount = Math.max(...capped.map((d) => d.count), 1);
+          ensureSpace(capped.length * (barH + gap) + 10);
+          capped.forEach((d, i) => {
+            const w = Math.max(2, (d.count / maxCount) * barAreaW);
+            page.drawText(truncateToWidth(d.label, font, 8, labelW - 6), { x: margin, y: y - barH + 4, size: 8, font, color: ink });
+            page.drawRectangle({ x: margin + labelW, y: y - barH, width: w, height: barH - 3, color: chartColors[i % chartColors.length] });
+            page.drawText(String(d.count), { x: margin + labelW + w + 6, y: y - barH + 4, size: 8, font: boldFont, color: ink });
+            y -= barH + gap;
+          });
+          y -= 6;
+        } else if (s.chartType === "pie") {
+          const r = 55;
+          const capped = counts.slice(0, 7);
+          const other = counts.slice(7).reduce((sum, d) => sum + d.count, 0);
+          const wedges = other > 0 ? [...capped, { label: "Other", count: other }] : capped;
+          const total = wedges.reduce((sum, d) => sum + d.count, 0) || 1;
+          ensureSpace(r * 2 + 20);
+          const cx = margin + r + 10, cyCenter = y - r - 5;
+          let angle = -Math.PI / 2;
+          wedges.forEach((d, i) => {
+            const sweep = (d.count / total) * Math.PI * 2;
+            page.drawSvgPath(svgPathFromPoints(pieSlicePoints(cx, cyCenter, r, angle, angle + sweep), true), { color: chartColors[i % chartColors.length], x: 0, y: 0, borderWidth: 0 });
+            angle += sweep;
+          });
+          let ly = y - 6;
+          const legendX = margin + r * 2 + 40;
+          wedges.forEach((d, i) => {
+            const pct = Math.round((d.count / total) * 100);
+            page.drawRectangle({ x: legendX, y: ly - 8, width: 8, height: 8, color: chartColors[i % chartColors.length] });
+            page.drawText(truncateToWidth(`${d.label} — ${d.count} (${pct}%)`, font, 8, maxWidth - (legendX - margin) - 10), { x: legendX + 14, y: ly - 8, size: 8, font, color: ink });
+            ly -= 14;
+          });
+          y = Math.min(cyCenter - r, ly) - 14;
+        }
+      }
+    }
+
+    if (s.comment?.trim()) {
+      wrapTextLines(s.comment.trim(), font, 9.5, maxWidth).forEach((line) => {
+        ensureSpace(13);
+        page.drawText(line, { x: margin, y, size: 9.5, font, color: ink });
+        y -= 13;
+      });
+      y -= 6;
+    }
+
+    if (!(s.csvHeaders?.length > 0) && !s.comment?.trim()) {
+      page.drawText("No data or notes added yet for this section.", { x: margin, y, size: 9, font, color: slate });
+      y -= 16;
+    }
+
+    y -= 20;
+  });
+
+  // --- Sign-off: left is OSHE's side, filled in automatically (who built it, generation
+  // date); right is the client's side, left blank for them to sign. ---
+  ensureSpace(110);
+  y -= 10;
+  page.drawLine({ start: { x: margin, y }, end: { x: pageWidth - margin, y }, thickness: 0.75, color: rgb(0.85, 0.85, 0.85) });
+  y -= 26;
+  const colGap = 30, colW2 = (maxWidth - colGap) / 2;
+  const createdX = margin, reviewedX = margin + colW2 + colGap;
+  page.drawText("Created by", { x: createdX, y, size: 9, font: boldFont, color: ink });
+  page.drawText(`Name  ${createdBy || ""}`, { x: createdX, y: y - 20, size: 8, font, color: slate });
+  page.drawText("Title  Health & Safety Consultant", { x: createdX, y: y - 36, size: 8, font, color: slate });
+  page.drawText(`Date  ${fmtDate(today())}`, { x: createdX, y: y - 52, size: 8, font, color: slate });
+
+  page.drawText("Reviewed by", { x: reviewedX, y, size: 9, font: boldFont, color: ink });
+  page.drawText("Name  _______________________________", { x: reviewedX, y: y - 20, size: 8, font, color: slate });
+  page.drawText("Title  _______________________________", { x: reviewedX, y: y - 36, size: 8, font, color: slate });
+  page.drawText("Date  _______________________________", { x: reviewedX, y: y - 52, size: 8, font, color: slate });
+
+  const pageCount = pdfDoc.getPageCount();
+  for (let p = 0; p < pageCount; p++) {
+    const pg = pdfDoc.getPage(p);
+    pg.drawText(`Prepared by OSHE Limited for ${client.name} — ${monthLabel}`, { x: margin, y: 24, size: 8, font, color: slate });
+    const pageText = `Page ${p + 1} of ${pageCount}`;
+    const pw = font.widthOfTextAtSize(pageText, 8);
+    pg.drawText(pageText, { x: pageWidth - margin - pw, y: 24, size: 8, font, color: slate });
+  }
+
+  const bytes = await pdfDoc.save();
+  const blob = new Blob([bytes], { type: "application/pdf" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${client.name.replace(/\s+/g, "_")}-Monthly_Report-${monthYear}.pdf`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 function ReportsView({ clients }) {
   const [selectedId, setSelectedId] = useState(clients[0]?.id || "");
   const client = clients.find((c) => c.id === selectedId) || clients[0];
   const [monthYear, setMonthYear] = useState(currentMonthYear());
   const [sections, setSections] = useState([]);
+  const [highlights, setHighlights] = useState("");
+  const [focusNextMonth, setFocusNextMonth] = useState("");
+  const [createdBy, setCreatedBy] = useState(TEAM[0]);
   const [loaded, setLoaded] = useState(false);
   const [newSectionTitle, setNewSectionTitle] = useState("");
+  const [downloading, setDownloading] = useState(false);
 
   useEffect(() => {
     if (!client) return;
     setLoaded(false);
     const key = reportKey(client.id, monthYear);
     getDoc(doc(db, "monthlyReports", key))
-      .then((snap) => setSections(snap.exists() ? snap.data().sections || [] : []))
+      .then((snap) => {
+        const data = snap.exists() ? snap.data() : {};
+        setSections(data.sections || []);
+        setHighlights(data.highlights || "");
+        setFocusNextMonth(data.focusNextMonth || "");
+        setCreatedBy(data.createdBy || TEAM[0]);
+      })
       .catch((err) => console.error("Couldn't load monthly report:", err))
       .finally(() => setLoaded(true));
   }, [client?.id, monthYear]);
 
-  const save = (nextSections) => {
-    setSections(nextSections);
+  // Generic persist: pass whichever of {sections, highlights, focusNextMonth, createdBy}
+  // changed, the rest come from current state, and the whole doc gets written together so
+  // nothing races.
+  const persist = (patch) => {
+    const nextSections = patch.sections !== undefined ? patch.sections : sections;
+    const nextHighlights = patch.highlights !== undefined ? patch.highlights : highlights;
+    const nextFocus = patch.focusNextMonth !== undefined ? patch.focusNextMonth : focusNextMonth;
+    const nextCreatedBy = patch.createdBy !== undefined ? patch.createdBy : createdBy;
+    if (patch.sections !== undefined) setSections(nextSections);
+    if (patch.highlights !== undefined) setHighlights(nextHighlights);
+    if (patch.focusNextMonth !== undefined) setFocusNextMonth(nextFocus);
+    if (patch.createdBy !== undefined) setCreatedBy(nextCreatedBy);
     if (!client) return;
     setDoc(doc(db, "monthlyReports", reportKey(client.id, monthYear)), {
-      clientId: client.id, clientName: client.name, monthYear, sections: nextSections, updatedAt: today(),
+      clientId: client.id, clientName: client.name, monthYear,
+      sections: nextSections, highlights: nextHighlights, focusNextMonth: nextFocus, createdBy: nextCreatedBy, updatedAt: today(),
     });
   };
+  const save = (nextSections) => persist({ sections: nextSections });
 
   const applyTemplate = (templateName) => {
     const titles = REPORT_TEMPLATES[templateName] || [];
-    save(titles.map((title) => ({ id: "sec" + Date.now() + Math.random().toString(36).slice(2, 6), title, comment: "", csvFileName: null, csvHeaders: [], csvData: [] })));
+    save(titles.map((title) => ({ id: "sec" + Date.now() + Math.random().toString(36).slice(2, 6), title, comment: "", csvFileName: null, csvHeaders: [], csvData: [], highlightNumber: "", highlightLabel: "", chartType: "none", chartColumn: "", chartValueColumn: "", showTable: true })));
   };
 
   const addSection = () => {
     if (!newSectionTitle.trim()) return;
-    save([...sections, { id: "sec" + Date.now(), title: newSectionTitle.trim(), comment: "", csvFileName: null, csvHeaders: [], csvData: [] }]);
+    save([...sections, { id: "sec" + Date.now(), title: newSectionTitle.trim(), comment: "", csvFileName: null, csvHeaders: [], csvData: [], highlightNumber: "", highlightLabel: "", chartType: "none", chartColumn: "", chartValueColumn: "", showTable: true }]);
     setNewSectionTitle("");
   };
 
@@ -3518,6 +3860,7 @@ function ReportsView({ clients }) {
   };
 
   if (!client) return <div className="text-sm" style={{ color: T.slate }}>No clients yet — add one on the Clients tab first.</div>;
+  const monthLabel = monthYearLabel(monthYear);
 
   return (
     <div className="flex flex-col gap-4 h-full min-h-0">
@@ -3535,6 +3878,13 @@ function ReportsView({ clients }) {
             <input type="month" value={monthYear} onChange={(e) => setMonthYear(e.target.value)}
               className="text-sm px-3 py-2 rounded-lg outline-none" style={{ background: T.card, border: `1px solid ${T.border}`, color: T.ink }} />
           </div>
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-wide mb-1.5" style={{ color: T.slate }}>Created by</div>
+            <select value={createdBy} onChange={(e) => persist({ createdBy: e.target.value })}
+              className="text-sm px-3 py-2 rounded-lg outline-none" style={{ background: T.card, border: `1px solid ${T.border}`, color: T.ink }}>
+              {TEAM.map((name) => <option key={name} value={name}>{name}</option>)}
+            </select>
+          </div>
           <div className="flex-1" />
           <div>
             <div className="text-xs font-semibold uppercase tracking-wide mb-1.5" style={{ color: T.slate }}>Start from a template</div>
@@ -3546,6 +3896,49 @@ function ReportsView({ clients }) {
           </div>
         </div>
       </Card>
+
+      {sections.length > 0 && (
+        <Card style={{ padding: "14px 16px" }}>
+          <div className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: T.slate }}>CSVs needed for {monthLabel}</div>
+          <div className="flex flex-col gap-1.5">
+            {sections.map((s) => {
+              const guide = guideForSection(s.title);
+              const has = s.csvHeaders?.length > 0;
+              return (
+                <div key={s.id} className="flex items-start gap-2 text-xs py-1" style={{ borderBottom: `1px solid ${T.border}` }}>
+                  {has ? <CheckCircle2 size={14} color={T.tealDark} className="shrink-0 mt-0.5" /> : <Circle size={14} color={T.slateLight} className="shrink-0 mt-0.5" />}
+                  <div>
+                    <span className="font-semibold" style={{ color: T.ink }}>{s.title} for {monthLabel}</span>
+                    {has ? (
+                      <span style={{ color: T.slateLight }}> — uploaded, {s.csvData.length} row{s.csvData.length === 1 ? "" : "s"}</span>
+                    ) : (
+                      <span style={{ color: T.coral }}> — needed</span>
+                    )}
+                    <div style={{ color: T.slateLight }}>
+                      {guide ? `Suggested columns: ${guide.join(", ")}` : "Any CSV works — the first row is treated as column headers."}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      )}
+
+      <div className="grid grid-cols-2 gap-4">
+        <Card style={{ padding: 16 }}>
+          <div className="text-xs font-semibold uppercase tracking-wide mb-1.5" style={{ color: T.slate }}>Highlights this month</div>
+          <textarea value={highlights} onChange={(e) => persist({ highlights: e.target.value })} rows={4}
+            placeholder={"What went well this month? Start a line with \"• \" for a bullet point."}
+            className="w-full text-sm px-3 py-2 rounded-lg outline-none resize-y" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+        </Card>
+        <Card style={{ padding: 16 }}>
+          <div className="text-xs font-semibold uppercase tracking-wide mb-1.5" style={{ color: T.slate }}>Focus for next month</div>
+          <textarea value={focusNextMonth} onChange={(e) => persist({ focusNextMonth: e.target.value })} rows={4}
+            placeholder={"What's the priority for next month? Start a line with \"• \" for a bullet point."}
+            className="w-full text-sm px-3 py-2 rounded-lg outline-none resize-y" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+        </Card>
+      </div>
 
       {!loaded ? (
         <div className="text-sm" style={{ color: T.slateLight }}>Loading…</div>
@@ -3574,6 +3967,59 @@ function ReportsView({ clients }) {
                 {s.csvFileName && (
                   <span className="text-xs" style={{ color: T.slateLight }}>{s.csvFileName} — {s.csvData?.length || 0} row{s.csvData?.length === 1 ? "" : "s"}</span>
                 )}
+              </div>
+
+              {s.csvHeaders?.length > 0 && (
+                <div className="flex items-center gap-3 mb-3 flex-wrap">
+                  <label className="flex items-center gap-1.5 text-xs" style={{ color: T.slate }}>
+                    <input type="checkbox" checked={s.showTable !== false} onChange={(e) => updateSection(s.id, { showTable: e.target.checked })} />
+                    Show data table
+                  </label>
+                  <div>
+                    <div className="text-[10px] font-semibold uppercase tracking-wide mb-1" style={{ color: T.slateLight }}>Chart</div>
+                    <select value={s.chartType || "none"} onChange={(e) => updateSection(s.id, { chartType: e.target.value })}
+                      className="text-xs px-2.5 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
+                      <option value="none">No chart</option>
+                      <option value="bar">Bar chart</option>
+                      <option value="pie">Pie chart</option>
+                    </select>
+                  </div>
+                  {s.chartType && s.chartType !== "none" && (
+                    <div>
+                      <div className="text-[10px] font-semibold uppercase tracking-wide mb-1" style={{ color: T.slateLight }}>Column to chart</div>
+                      <select value={s.chartColumn || ""} onChange={(e) => updateSection(s.id, { chartColumn: e.target.value })}
+                        className="text-xs px-2.5 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
+                        <option value="">Choose column…</option>
+                        {s.csvHeaders.map((h) => <option key={h} value={h}>{h}</option>)}
+                      </select>
+                    </div>
+                  )}
+                  {s.chartType && s.chartType !== "none" && (
+                    <div>
+                      <div className="text-[10px] font-semibold uppercase tracking-wide mb-1" style={{ color: T.slateLight }}>Value (optional, sums numbers)</div>
+                      <select value={s.chartValueColumn || ""} onChange={(e) => updateSection(s.id, { chartValueColumn: e.target.value })}
+                        className="text-xs px-2.5 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
+                        <option value="">Count rows</option>
+                        {s.csvHeaders.map((h) => <option key={h} value={h}>{h}</option>)}
+                      </select>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="flex items-center gap-3 mb-3">
+                <div className="flex-1">
+                  <div className="text-[10px] font-semibold uppercase tracking-wide mb-1" style={{ color: T.slateLight }}>Highlight number</div>
+                  <input value={s.highlightNumber || ""} onChange={(e) => updateSection(s.id, { highlightNumber: e.target.value })}
+                    placeholder={s.csvData?.length ? `auto: ${s.csvData.length}` : "e.g. 11"}
+                    className="w-full text-sm px-2.5 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+                </div>
+                <div className="flex-1">
+                  <div className="text-[10px] font-semibold uppercase tracking-wide mb-1" style={{ color: T.slateLight }}>Highlight label</div>
+                  <input value={s.highlightLabel || ""} onChange={(e) => updateSection(s.id, { highlightLabel: e.target.value })}
+                    placeholder={s.title}
+                    className="w-full text-sm px-2.5 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+                </div>
               </div>
 
               {s.csvHeaders?.length > 0 && (
@@ -3618,8 +4064,27 @@ function ReportsView({ clients }) {
             </div>
           </Card>
 
+          <div className="flex items-center justify-center gap-3 py-2">
+            <button
+              disabled={sections.length === 0 || downloading}
+              onClick={async () => {
+                setDownloading(true);
+                try {
+                  await downloadMonthlyReportPdf({ client, monthYear, sections, highlights, focusNextMonth, createdBy });
+                } catch (err) {
+                  console.error("Monthly report PDF generation failed:", err);
+                  alert(`Couldn't build the PDF: ${err.message || err}`);
+                } finally {
+                  setDownloading(false);
+                }
+              }}
+              className="text-sm font-semibold px-5 py-2.5 rounded-lg flex items-center gap-1.5"
+              style={{ background: T.tealDark, color: "#fff", opacity: (sections.length === 0 || downloading) ? 0.5 : 1 }}>
+              <FileText size={14} /> {downloading ? "Generating…" : "Download as PDF"}
+            </button>
+          </div>
           <div className="text-xs text-center py-2" style={{ color: T.slateLight }}>
-            Sections and comments save automatically. Branded PDF export isn't wired up yet — send over a couple of real report templates and layout preferences and we'll build that next.
+            Sections and comments save automatically. Highlight numbers default to each section's CSV row count — set a manual number + label if row count isn't the right metric. Every section — template or manually added — gets its own CSV drop, table, and chart option.
           </div>
         </div>
       )}

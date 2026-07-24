@@ -3,7 +3,7 @@ import {
   Users, TrendingUp, Bell, Building2, CreditCard, StickyNote,
   ChevronRight, Plus, Check, Upload, Calendar, X, Search,
   ClipboardList, Layers, Circle, CheckCircle2, Image as ImageIcon,
-  Repeat, Trash2, ListChecks, ListTodo, Mail, ArrowUpRight, Store, LayoutDashboard, ChevronDown
+  Repeat, Trash2, ListChecks, ListTodo, Mail, ArrowUpRight, Store, LayoutDashboard, ChevronDown, Smartphone
 } from "lucide-react";
 import { collection, doc, onSnapshot, updateDoc, setDoc, getDocs, getDoc, deleteDoc } from "firebase/firestore";
 import { signOut } from "firebase/auth";
@@ -3048,9 +3048,168 @@ function DashboardsView({ clients }) {
   );
 }
 
+// Simplified mobile screen: search for a client, then quickly log a note or a task with a
+// due date and assignee. Built for field staff who just need to jot something down between
+// jobs, without wading through the full desktop client view. "Full App" always stays one tap
+// away for anyone who needs the deeper functionality while on a phone.
+function MobileQuickView({ clients, currentUser, goToFullApp }) {
+  const [search, setSearch] = useState("");
+  const [selectedId, setSelectedId] = useState(null);
+  const [mode, setMode] = useState("note");
+  const [noteText, setNoteText] = useState("");
+  const [taskText, setTaskText] = useState("");
+  const [taskDate, setTaskDate] = useState("");
+  const [taskAssignee, setTaskAssignee] = useState(TEAM[0]);
+  const [savedFlash, setSavedFlash] = useState(false);
+
+  const client = clients.find((c) => c.id === selectedId);
+  const q = search.trim().toLowerCase();
+  const filtered = q ? clients.filter((c) => c.name.toLowerCase().includes(q)) : clients;
+
+  const updateSelectedClient = (fn) => {
+    if (!client) return;
+    const updated = fn(client);
+    const { id, ...fields } = updated;
+    updateDoc(doc(db, "clients", client.id), fields);
+  };
+
+  const flash = () => { setSavedFlash(true); setTimeout(() => setSavedFlash(false), 1600); };
+
+  const saveNote = () => {
+    if (!noteText.trim() || !client) return;
+    updateSelectedClient((c) => ({ ...c, notes: [...(c.notes || []), { id: Date.now(), author: currentUser || "You", date: today(), text: noteText.trim(), tags: [] }] }));
+    setNoteText("");
+    flash();
+  };
+
+  const saveTask = () => {
+    if (!taskText.trim() || !taskDate || !client) return;
+    updateSelectedClient((c) => ({ ...c, reminders: [...(c.reminders || []), { id: Date.now(), text: taskText.trim(), date: taskDate, recurring: "none", done: false, assignee: taskAssignee }] }));
+    setTaskText(""); setTaskDate("");
+    flash();
+  };
+
+  return (
+    <div className="min-h-screen flex flex-col" style={{ background: T.paper }}>
+      <div className="flex items-center justify-between px-4 py-4 shrink-0" style={{ background: T.charcoal }}>
+        <img src="/logo.png" alt="OSHE" style={{ height: 26, width: "auto" }} />
+        <button onClick={goToFullApp} className="text-xs font-semibold px-3 py-2 rounded-lg" style={{ background: T.charcoalSoft, color: "#fff" }}>
+          Full App
+        </button>
+      </div>
+
+      <div className="flex-1 p-4 flex flex-col gap-4 overflow-y-auto">
+        {!client ? (
+          <>
+            <div className="text-base font-bold" style={{ color: T.ink }}>Select a client</div>
+            <div className="relative">
+              <Search size={16} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: T.slate }} />
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search clients…"
+                autoFocus
+                className="w-full pl-9 pr-3 py-3 rounded-xl text-base outline-none"
+                style={{ border: `1px solid ${T.border}`, background: T.card }}
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              {filtered.map((c) => (
+                <button key={c.id} onClick={() => setSelectedId(c.id)}
+                  className="text-left px-4 py-3.5 rounded-xl text-sm font-semibold flex items-center justify-between"
+                  style={{ background: T.card, color: T.ink, border: `1px solid ${T.border}` }}>
+                  {c.name}
+                  <ChevronRight size={16} style={{ color: T.slateLight }} />
+                </button>
+              ))}
+              {filtered.length === 0 && (
+                <div className="text-sm px-1 py-6 text-center" style={{ color: T.slate }}>No clients match "{search}"</div>
+              )}
+            </div>
+          </>
+        ) : (
+          <>
+            <button onClick={() => setSelectedId(null)} className="text-xs font-semibold self-start flex items-center gap-1" style={{ color: T.tealDark }}>
+              <ChevronRight size={14} style={{ transform: "rotate(180deg)" }} /> Change client
+            </button>
+            <div className="text-xl font-bold" style={{ color: T.ink }}>{client.name}</div>
+
+            <div className="flex gap-2 p-1 rounded-xl" style={{ background: T.paperAlt }}>
+              <button onClick={() => setMode("note")}
+                className="flex-1 py-2.5 rounded-lg text-sm font-semibold flex items-center justify-center gap-1.5 transition-colors"
+                style={{ background: mode === "note" ? T.card : "transparent", color: mode === "note" ? T.ink : T.slate }}>
+                <StickyNote size={15} /> Note
+              </button>
+              <button onClick={() => setMode("task")}
+                className="flex-1 py-2.5 rounded-lg text-sm font-semibold flex items-center justify-center gap-1.5 transition-colors"
+                style={{ background: mode === "task" ? T.card : "transparent", color: mode === "task" ? T.ink : T.slate }}>
+                <ListTodo size={15} /> Task
+              </button>
+            </div>
+
+            {mode === "note" ? (
+              <div className="flex flex-col gap-3">
+                <textarea value={noteText} onChange={(e) => setNoteText(e.target.value)} rows={6}
+                  placeholder="What's the update?"
+                  className="w-full p-3 rounded-xl text-base outline-none resize-none"
+                  style={{ border: `1px solid ${T.border}`, background: T.card }} />
+                <button onClick={saveNote} disabled={!noteText.trim()}
+                  className="py-3.5 rounded-xl text-sm font-bold" style={{ background: T.tealDark, color: "#fff", opacity: noteText.trim() ? 1 : 0.4 }}>
+                  Save Note
+                </button>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-3">
+                <input value={taskText} onChange={(e) => setTaskText(e.target.value)} placeholder="What needs doing?"
+                  className="w-full p-3 rounded-xl text-base outline-none" style={{ border: `1px solid ${T.border}`, background: T.card }} />
+                <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: T.slate }}>Due date</div>
+                <input type="date" value={taskDate} onChange={(e) => setTaskDate(e.target.value)}
+                  className="w-full p-3 rounded-xl text-base outline-none" style={{ border: `1px solid ${T.border}`, background: T.card }} />
+                <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: T.slate }}>Assignee</div>
+                <select value={taskAssignee} onChange={(e) => setTaskAssignee(e.target.value)}
+                  className="w-full p-3 rounded-xl text-base outline-none" style={{ border: `1px solid ${T.border}`, background: T.card }}>
+                  {TEAM.map((m) => <option key={m} value={m}>{m}</option>)}
+                </select>
+                <button onClick={saveTask} disabled={!taskText.trim() || !taskDate}
+                  className="py-3.5 rounded-xl text-sm font-bold" style={{ background: T.tealDark, color: "#fff", opacity: (taskText.trim() && taskDate) ? 1 : 0.4 }}>
+                  Save Task
+                </button>
+              </div>
+            )}
+
+            {savedFlash && (
+              <div className="text-sm font-bold text-center py-2.5 rounded-xl flex items-center justify-center gap-1.5" style={{ background: "#E4F8F5", color: T.tealDark }}>
+                <Check size={15} /> Saved
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 
 export default function App() {
   const [module, setModule] = useState("clients");
+  // Detect a mobile-width viewport and default straight into the Quick Add screen the first
+  // time — field staff on their phone want notes/tasks fast, not the full desktop layout.
+  // They can still reach the full app any time via the "Full App" button, and from there
+  // it won't auto-redirect them back.
+  const [isMobile, setIsMobile] = useState(false);
+  const hasAutoRedirected = useRef(false);
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth < 768);
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, []);
+  useEffect(() => {
+    if (isMobile && !hasAutoRedirected.current) {
+      hasAutoRedirected.current = true;
+      setModule("mobile");
+    }
+  }, [isMobile]);
   const [currentUser, setCurrentUser] = useState(null);
   useEffect(() => {
     (async () => {
@@ -3489,12 +3648,21 @@ export default function App() {
     );
   }
 
+  if (module === "mobile") {
+    return (
+      <div style={{ fontFamily: "'Inter', system-ui, sans-serif" }}>
+        <MobileQuickView clients={clients} currentUser={currentUser} goToFullApp={() => setModule("clients")} />
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-screen w-full" style={{ background: T.paper, fontFamily: "'Inter', system-ui, sans-serif" }}>
       <div className="w-56 shrink-0 flex flex-col p-4 gap-1" style={{ background: T.charcoal }}>
         <div className="px-3 py-3 mb-3">
           <img src="/logo.png" alt="OSHE" style={{ height: 36, width: "auto" }} />
         </div>
+        <NavItem icon={Smartphone} label="Quick Add" active={false} onClick={() => setModule("mobile")} />
         <NavItem icon={Users} label="Clients" active={module === "clients"} onClick={() => setModule("clients")} />
         <NavItem icon={Layers} label="Systems" active={module === "systems"} onClick={() => setModule("systems")} />
         <NavItem icon={TrendingUp} label="Sales" active={module === "sales"} onClick={() => setModule("sales")} />

@@ -3,7 +3,7 @@ import {
   Users, TrendingUp, Bell, Building2, CreditCard, StickyNote,
   ChevronRight, Plus, Check, Upload, Calendar, X, Search,
   ClipboardList, Layers, Circle, CheckCircle2, Image as ImageIcon,
-  Repeat, Trash2, ListChecks, ListTodo, Mail, ArrowUpRight, Store, LayoutDashboard, ChevronDown, Smartphone, FileText
+  Repeat, Trash2, ListChecks, ListTodo, Mail, ArrowUpRight, Store, LayoutDashboard, ChevronDown, Smartphone, FileText, CalendarClock
 } from "lucide-react";
 import { collection, doc, onSnapshot, updateDoc, setDoc, getDocs, getDoc, deleteDoc } from "firebase/firestore";
 import { signOut } from "firebase/auth";
@@ -2892,7 +2892,7 @@ function BillingOverview({ clients, resellers }) {
 /* ---------- My Tasks (per person) ---------- */
 function TasksView({ tasks, clients, onboardings, currentUser, goToClient, resellers, goToReseller }) {
   const [person, setPerson] = useState(currentUser || TEAM[0]);
-  const [draft, setDraft] = useState({ title: "", priority: "Medium", clientId: "", dueDate: "" });
+  const [draft, setDraft] = useState({ title: "", priority: "Medium", clientId: "", dueDate: "", estHours: "" });
 
   const resellerTasks = useMemo(() => {
     const out = [];
@@ -2937,8 +2937,8 @@ function TasksView({ tasks, clients, onboardings, currentUser, goToClient, resel
     if (!draft.title.trim()) return;
     const clientName = clients.find((c) => c.id === draft.clientId)?.name || null;
     const id = "task" + Date.now();
-    setDoc(doc(db, "tasks", id), { title: draft.title, assignee: person, priority: draft.priority, done: false, clientId: draft.clientId || null, clientName, dueDate: draft.dueDate || null });
-    setDraft({ title: "", priority: "Medium", clientId: "", dueDate: "" });
+    setDoc(doc(db, "tasks", id), { title: draft.title, assignee: person, priority: draft.priority, done: false, clientId: draft.clientId || null, clientName, dueDate: draft.dueDate || null, estHours: draft.estHours ? Number(draft.estHours) : 0 });
+    setDraft({ title: "", priority: "Medium", clientId: "", dueDate: "", estHours: "" });
   };
   const toggleDone = (id) => {
     const t = tasks.find((x) => x.id === id);
@@ -2950,6 +2950,7 @@ function TasksView({ tasks, clients, onboardings, currentUser, goToClient, resel
   };
   const deleteTaskPermanently = (id) => deleteDoc(doc(db, "tasks", id));
   const setPriority = (id, priority) => updateDoc(doc(db, "tasks", id), { priority });
+  const setEstHours = (id, hours) => updateDoc(doc(db, "tasks", id), { estHours: hours ? Number(hours) : 0 });
 
   return (
     <div className="flex flex-col gap-4 h-full overflow-y-auto">
@@ -3038,10 +3039,15 @@ function TasksView({ tasks, clients, onboardings, currentUser, goToClient, resel
                   )}
                 </div>
               </div>
-              <select value={t.priority} onClick={(e) => e.stopPropagation()} onChange={(e) => setPriority(t.id, e.target.value)} className="text-xs font-semibold px-2.5 py-1 rounded-full outline-none border-none"
-                style={{ color: meta.color, background: meta.bg }}>
-                {Object.keys(priorityMeta).map((p) => <option key={p} value={p}>{p}</option>)}
-              </select>
+              <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                <input type="number" min="0" step="0.5" value={t.estHours || ""} onChange={(e) => setEstHours(t.id, e.target.value)}
+                  placeholder="hrs" title="Estimated hours — counts toward Schedule workload"
+                  className="w-14 text-xs px-1.5 py-1 rounded-lg outline-none text-center" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+                <select value={t.priority} onChange={(e) => setPriority(t.id, e.target.value)} className="text-xs font-semibold px-2.5 py-1 rounded-full outline-none border-none"
+                  style={{ color: meta.color, background: meta.bg }}>
+                  {Object.keys(priorityMeta).map((p) => <option key={p} value={p}>{p}</option>)}
+                </select>
+              </div>
             </Card>
           );
         })}
@@ -3074,6 +3080,9 @@ function TasksView({ tasks, clients, onboardings, currentUser, goToClient, resel
         </select>
         <input type="date" value={draft.dueDate} onChange={(e) => setDraft({ ...draft, dueDate: e.target.value })}
           className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+        <input type="number" min="0" step="0.5" placeholder="hrs" value={draft.estHours} onChange={(e) => setDraft({ ...draft, estHours: e.target.value })}
+          title="Estimated hours — counts toward Schedule workload"
+          className="w-16 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
         <select value={draft.priority} onChange={(e) => setDraft({ ...draft, priority: e.target.value })} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
           {Object.keys(priorityMeta).map((p) => <option key={p} value={p}>{p}</option>)}
         </select>
@@ -3118,7 +3127,7 @@ function NotificationsBell({ notifications, dismissNotification, reminderCount, 
 function WorkflowsView({ workflows }) {
   const addWorkflow = () => {
     const id = "wf-" + Date.now();
-    setDoc(doc(db, "workflows", id), { name: "New Workflow", isDefault: false, steps: [{ id: "step" + Date.now(), title: "First step", owner: TEAM[0], dueDays: 3 }] });
+    setDoc(doc(db, "workflows", id), { name: "New Workflow", isDefault: false, steps: [{ id: "step" + Date.now(), title: "First step", owner: TEAM[0], dueDays: 3, estHours: 1 }] });
   };
   const removeWorkflow = (id) => deleteDoc(doc(db, "workflows", id));
   const setDefault = (id) => {
@@ -3167,11 +3176,14 @@ function WorkflowsView({ workflows }) {
                 <input type="number" value={step.dueDays} onChange={(e) => updateWorkflow(wf.id, (w) => ({ ...w, steps: w.steps.map((s) => (s.id === step.id ? { ...s, dueDays: Number(e.target.value) } : s)) }))}
                   className="w-16 px-2 py-1.5 rounded-lg outline-none text-xs" style={{ border: `1px solid ${T.border}`, color: T.ink }} title="Due, days from onboarding start" />
                 <span className="text-[11px] shrink-0" style={{ color: T.slateLight }}>days</span>
+                <input type="number" min="0" step="0.5" value={step.estHours ?? ""} onChange={(e) => updateWorkflow(wf.id, (w) => ({ ...w, steps: w.steps.map((s) => (s.id === step.id ? { ...s, estHours: e.target.value ? Number(e.target.value) : 0 } : s)) }))}
+                  className="w-14 px-2 py-1.5 rounded-lg outline-none text-xs" style={{ border: `1px solid ${T.border}`, color: T.ink }} title="Estimated hours — counts toward Schedule workload" placeholder="hrs" />
+                <span className="text-[11px] shrink-0" style={{ color: T.slateLight }}>hrs</span>
                 <button onClick={() => updateWorkflow(wf.id, (w) => ({ ...w, steps: w.steps.filter((s) => s.id !== step.id) }))}><Trash2 size={14} color={T.slateLight} /></button>
               </div>
             ))}
           </div>
-          <button onClick={() => updateWorkflow(wf.id, (w) => ({ ...w, steps: [...w.steps, { id: "step" + Date.now(), title: "New step", owner: TEAM[0], dueDays: 7 }] }))}
+          <button onClick={() => updateWorkflow(wf.id, (w) => ({ ...w, steps: [...w.steps, { id: "step" + Date.now(), title: "New step", owner: TEAM[0], dueDays: 7, estHours: 1 }] }))}
             className="flex items-center gap-1.5 text-xs font-semibold mt-3" style={{ color: T.tealDark }}>
             <Plus size={13} /> Add step
           </button>
@@ -4100,6 +4112,175 @@ function ReportsView({ clients }) {
   );
 }
 
+/* ---------- Schedule (Jo & Judith workload capacity, out of their weekly hours) ----------
+   Pulls in three sources of assigned work: Tasks (estHours field), Workflow onboarding
+   steps (estHours field), and manually-booked Time Blocks (this tab). Capacity is a
+   simple 40hrs × number of weeks in the chosen window — no leave/holiday accounting yet,
+   that's a "later" problem. */
+const SCHEDULE_PEOPLE = ["Jo", "Judith"];
+// Jo works a 30hr week, Judith 40 — update here if that ever changes.
+const WEEKLY_CAPACITY = { Jo: 30, Judith: 40 };
+const SCHEDULE_WINDOWS = { week: { label: "1 week", days: 7 }, "2weeks": { label: "2 weeks", days: 14 }, month: { label: "1 month", days: 30 } };
+
+// A recurring block's `date` is its anchor/first occurrence. "daily" expands to every day
+// from max(start, anchor) to end; "weekly" expands to every matching weekday — so neither
+// shows up in a window before it was set up, but both repeat forward indefinitely after.
+function expandRecurringDates(anchorDate, start, end, repeat) {
+  const dates = [];
+  const anchor = new Date(anchorDate + "T00:00:00");
+  const cursor = new Date(Math.max(new Date(start + "T00:00:00").getTime(), anchor.getTime()));
+  if (repeat === "weekly") {
+    const dow = anchor.getDay();
+    while (cursor.getDay() !== dow) cursor.setDate(cursor.getDate() + 1);
+    while (cursor.toISOString().slice(0, 10) < end) {
+      dates.push(cursor.toISOString().slice(0, 10));
+      cursor.setDate(cursor.getDate() + 7);
+    }
+  } else if (repeat === "daily") {
+    while (cursor.toISOString().slice(0, 10) < end) {
+      dates.push(cursor.toISOString().slice(0, 10));
+      cursor.setDate(cursor.getDate() + 1);
+    }
+  }
+  return dates;
+}
+
+function gatherWorkloadItems(person, tasks, onboardings, clients, scheduleBlocks, start, end) {
+  const items = [];
+  tasks.filter((t) => t.assignee === person && !t.done && t.dueDate && t.dueDate >= start && t.dueDate < end).forEach((t) => {
+    items.push({ type: "task", title: t.title, date: t.dueDate, hours: t.estHours || 0, clientId: t.clientId, clientName: t.clientName });
+  });
+  clients.forEach((c) => {
+    (onboardings[c.id] || []).forEach((inst) => {
+      inst.steps.forEach((step) => {
+        if (step.owner === person && !step.done && step.dueDate && step.dueDate >= start && step.dueDate < end) {
+          items.push({ type: "workflow", title: step.title, date: step.dueDate, hours: step.estHours || 0, clientId: c.id, clientName: c.name, workflowName: inst.workflowName });
+        }
+      });
+    });
+  });
+  scheduleBlocks.filter((b) => b.assignee === person).forEach((b) => {
+    if (b.repeat && b.repeat !== "none") {
+      expandRecurringDates(b.date, start, end, b.repeat).forEach((d) => {
+        items.push({ type: "block", id: b.id, title: b.note || "Booked time", date: d, hours: b.hours || 0, repeat: b.repeat });
+      });
+    } else if (b.date && b.date >= start && b.date < end) {
+      items.push({ type: "block", id: b.id, title: b.note || "Booked time", date: b.date, hours: b.hours || 0 });
+    }
+  });
+  return items.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+}
+
+function ScheduleView({ tasks, clients, onboardings, scheduleBlocks, addScheduleBlock, removeScheduleBlock, goToClient }) {
+  const [windowKey, setWindowKey] = useState("week");
+  const [drafts, setDrafts] = useState(Object.fromEntries(SCHEDULE_PEOPLE.map((p) => [p, { date: today(), hours: "", note: "", repeat: "none" }])));
+
+  const { days } = SCHEDULE_WINDOWS[windowKey];
+  const start = today();
+  const end = addDays(start, days);
+
+  const setDraftField = (person, field, value) => setDrafts((d) => ({ ...d, [person]: { ...d[person], [field]: value } }));
+  const bookTime = (person) => {
+    const d = drafts[person];
+    if (!d.date || !d.hours) return;
+    addScheduleBlock({ assignee: person, date: d.date, hours: Number(d.hours), note: d.note.trim(), repeat: d.repeat });
+    setDraftField(person, "hours", "");
+    setDraftField(person, "note", "");
+    setDraftField(person, "repeat", "none");
+  };
+
+  return (
+    <div className="flex flex-col gap-4 h-full min-h-0 overflow-y-auto">
+      <Card style={{ padding: "12px 16px" }}>
+        <div className="flex items-center gap-4">
+          <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: T.slate }}>Window</div>
+          <div className="flex rounded-lg p-1" style={{ background: T.paperAlt }}>
+            {Object.entries(SCHEDULE_WINDOWS).map(([key, w]) => (
+              <button key={key} onClick={() => setWindowKey(key)} className="text-xs font-semibold px-4 py-1.5 rounded-md"
+                style={{ background: windowKey === key ? T.card : "transparent", color: windowKey === key ? T.tealDark : T.slate }}>
+                {w.label}
+              </button>
+            ))}
+          </div>
+          <div className="text-xs" style={{ color: T.slateLight }}>{fmtDate(start)} – {fmtDate(addDays(end, -1))}</div>
+        </div>
+      </Card>
+
+      <div className="grid grid-cols-2 gap-4">
+        {SCHEDULE_PEOPLE.map((person) => {
+          const capacity = Math.round(WEEKLY_CAPACITY[person] * (days / 7));
+          const items = gatherWorkloadItems(person, tasks, onboardings, clients, scheduleBlocks, start, end);
+          const totalHours = items.reduce((sum, i) => sum + (i.hours || 0), 0);
+          const pct = capacity > 0 ? Math.round((totalHours / capacity) * 100) : 0;
+          const barColor = pct > 100 ? T.coral : pct >= 80 ? T.amber : T.tealDark;
+          const draft = drafts[person];
+
+          return (
+            <Card key={person} style={{ padding: 18 }} className="flex flex-col gap-3">
+              <div className="flex items-center justify-between">
+                <div className="text-base font-bold" style={{ color: T.ink }}>{person}</div>
+                <div className="text-sm font-semibold" style={{ color: barColor }}>{totalHours}h / {capacity}h ({pct}%)</div>
+              </div>
+              <div className="w-full rounded-full h-2.5" style={{ background: T.paperAlt }}>
+                <div className="h-2.5 rounded-full" style={{ width: `${Math.min(100, pct)}%`, background: barColor }} />
+              </div>
+              {pct > 100 && <div className="text-[11px] font-semibold" style={{ color: T.coral }}>Over capacity for this window</div>}
+
+              <div className="flex flex-col gap-1.5 max-h-64 overflow-y-auto mt-1">
+                {items.length === 0 && <div className="text-xs" style={{ color: T.slateLight }}>Nothing scheduled in this window.</div>}
+                {items.map((item, i) => (
+                  <div key={i} className="flex items-center justify-between text-xs py-1.5 px-2 rounded-lg" style={{ background: T.paperAlt }}>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Pill color={item.type === "task" ? T.tealDark : item.type === "workflow" ? T.blue : T.amber} bg={T.card}>
+                        {item.type === "task" ? "Task" : item.type === "workflow" ? "Workflow" : item.repeat === "daily" ? "Daily" : item.repeat === "weekly" ? "Weekly" : "Booked"}
+                      </Pill>
+                      <button onClick={() => item.clientId && goToClient(item.clientId, item.type === "workflow" ? "onboarding" : "overview")}
+                        className="truncate text-left" disabled={!item.clientId} style={{ color: T.ink, cursor: item.clientId ? "pointer" : "default" }} title={item.title}>
+                        {item.title}{item.clientName ? ` — ${item.clientName}` : ""}
+                      </button>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span style={{ color: T.slateLight }}>{fmtDate(item.date)}</span>
+                      <span className="font-semibold" style={{ color: T.ink }}>{item.hours}h</span>
+                      {item.type === "block" && (
+                        <button onClick={() => removeScheduleBlock(item.id)} title={item.repeat && item.repeat !== "none" ? `Remove this ${item.repeat} booking (removes all future occurrences)` : "Remove booking"}>
+                          <Trash2 size={12} color={T.slateLight} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex items-center gap-1.5 pt-2 flex-wrap" style={{ borderTop: `1px solid ${T.border}` }}>
+                <input type="date" value={draft.date} onChange={(e) => setDraftField(person, "date", e.target.value)}
+                  className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+                <input type="number" min="0" step="0.5" placeholder="hrs" value={draft.hours} onChange={(e) => setDraftField(person, "hours", e.target.value)}
+                  className="w-16 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+                <input placeholder="What for?" value={draft.note} onChange={(e) => setDraftField(person, "note", e.target.value)}
+                  className="flex-1 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink, minWidth: 100 }} />
+                <select value={draft.repeat} onChange={(e) => setDraftField(person, "repeat", e.target.value)}
+                  className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} title="Repeats forward from the date above">
+                  <option value="none">Doesn't repeat</option>
+                  <option value="daily">Repeats daily</option>
+                  <option value="weekly">Repeats weekly</option>
+                </select>
+                <button onClick={() => bookTime(person)} className="text-xs font-semibold px-3 py-1.5 rounded-lg shrink-0" style={{ background: T.tealDark, color: "#fff" }}>
+                  Book
+                </button>
+              </div>
+            </Card>
+          );
+        })}
+      </div>
+
+      <div className="text-xs text-center py-2" style={{ color: T.slateLight }}>
+        Workload pulls in Tasks and Workflow steps assigned to Jo/Judith (set their "hrs" when creating one) plus anything booked here directly. Capacity is Jo's 30hrs / Judith's 40hrs × weeks in the window — doesn't yet account for leave or public holidays.
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [module, setModule] = useState("clients");
   // Detect a mobile-width viewport and default straight into the Quick Add screen the first
@@ -4281,6 +4462,17 @@ export default function App() {
     // prompt as any other item, rather than silently having nothing.
     setDoc(doc(db, "documentTemplates", templateKey("erp", trimmed)), { content: "" });
   };
+
+  // Manually-booked time blocks on the Schedule tab (e.g. "Tue 9am-1pm — BMC site visit")
+  // — these count toward workload capacity the same as Tasks and Workflow steps, just
+  // without needing a task/step to exist for them.
+  const [scheduleBlocks, setScheduleBlocks] = useState([]);
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "scheduleBlocks"), (snap) => setScheduleBlocks(snap.docs.map((d) => ({ id: d.id, ...d.data() }))), (err) => console.error("Schedule blocks subscription failed:", err));
+    return unsub;
+  }, []);
+  const addScheduleBlock = (block) => setDoc(doc(db, "scheduleBlocks", "block" + Date.now()), block);
+  const removeScheduleBlock = (id) => deleteDoc(doc(db, "scheduleBlocks", id));
 
   // One-time seed of real procedure content, condensed from OSHE's actual reference documents.
   // Never overwrites anything already written — only fills in a key if it's genuinely empty,
@@ -4627,6 +4819,7 @@ export default function App() {
         <NavItem icon={ListChecks} label="Workflows" active={module === "workflows"} onClick={() => setModule("workflows")} />
         <NavItem icon={ListTodo} label="My Tasks" active={module === "tasks"} onClick={() => setModule("tasks")} />
         <NavItem icon={FileText} label="Reports" active={module === "reports"} onClick={() => setModule("reports")} />
+        <NavItem icon={CalendarClock} label="Schedule" active={module === "schedule"} onClick={() => setModule("schedule")} />
         <div className="flex-1" />
         <div className="px-3 pb-2">
           <div className="text-[10px] uppercase tracking-wide mb-1.5" style={{ color: "#5C7274" }}>Logged in as</div>
@@ -4640,7 +4833,7 @@ export default function App() {
         <div className="flex items-center justify-between px-8 py-5" style={{ borderBottom: `1px solid ${T.border}` }}>
           <div>
             <div className="text-xl font-bold" style={{ color: T.ink }}>
-              {{ clients: "Clients", systems: "Systems", sales: "Sales", billing: "Billing", workflows: "Workflows", resellers: "Resellers", tasks: "My Tasks", dashboards: "Dashboards", reports: "Reports" }[module]}
+              {{ clients: "Clients", systems: "Systems", sales: "Sales", billing: "Billing", workflows: "Workflows", resellers: "Resellers", tasks: "My Tasks", dashboards: "Dashboards", reports: "Reports", schedule: "Schedule" }[module]}
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -4665,6 +4858,7 @@ export default function App() {
           {module === "resellers" && <ResellersView resellers={resellers} selectedId={selectedReseller} setSelectedId={setSelectedReseller} />}
           {module === "tasks" && <TasksView tasks={tasks} clients={clients} onboardings={onboardings} currentUser={currentUser} goToClient={goToClient} resellers={resellers} goToReseller={goToReseller} />}
           {module === "reports" && <ReportsView clients={clients} />}
+          {module === "schedule" && <ScheduleView tasks={tasks} clients={clients} onboardings={onboardings} scheduleBlocks={scheduleBlocks} addScheduleBlock={addScheduleBlock} removeScheduleBlock={removeScheduleBlock} goToClient={goToClient} />}
         </div>
       </div>
     </div>

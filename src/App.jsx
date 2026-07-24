@@ -1257,45 +1257,49 @@ function drawCenteredText(page, text, centerX, y, size, font, color) {
   page.drawText(text, { x: centerX - w / 2, y, size, font, color });
 }
 
-// Draws the 4-box Health & Safety Policy grid (PCBU / Officers / Supervisors / Workers),
-// all boxes the same height (sized to the tallest list). Returns the bottom y.
+// Draws the 4-box Health & Safety Policy grid (PCBU / Officers / Supervisors / Workers).
+// Each ROW is sized to its own tallest box (not one global height across all 4), so a
+// shorter list doesn't leave a big gap of empty space at the bottom of its box. Returns
+// the bottom y.
 function drawPolicyGrid({ page, x, y0, maxWidth, font, boldFont, rgb, clientName }) {
   const quadrants = getPolicyQuadrants(clientName);
-  const colGap = 14, rowGap = 10;
+  const colGap = 14, rowGap = 8;
   const colW = (maxWidth - colGap) / 2;
   const headerH = 20, cellPad = 8;
+  const bulletSize = 9, lineHeight = 11;
 
   const cellContentHeight = (items) => {
     let h = 0;
     items.forEach((item) => {
-      h += wrapTextLines("•  " + item, font, 7.5, colW - 2 * cellPad).length * 9.5 + 3;
+      h += wrapTextLines("•  " + item, font, bulletSize, colW - 2 * cellPad).length * lineHeight + 3;
     });
     return h;
   };
-  const maxContentH = Math.max(...quadrants.map((q) => cellContentHeight(q.items)));
-  const cellH = headerH + maxContentH + cellPad * 2;
 
-  const drawCell = (cx, yTop, item) => {
+  const drawCell = (cx, yTop, item, cellH) => {
     page.drawRectangle({ x: cx, y: yTop - headerH, width: colW, height: headerH, color: rgb(item.color[0], item.color[1], item.color[2]) });
     page.drawText(item.label, { x: cx + cellPad, y: yTop - headerH + 6, size: 9.5, font: boldFont, color: rgb(1, 1, 1) });
     let cy = yTop - headerH - cellPad - 7;
     item.items.forEach((line) => {
-      wrapTextLines("•  " + line, font, 7.5, colW - 2 * cellPad).forEach((wl) => {
-        page.drawText(wl, { x: cx + cellPad, y: cy, size: 7.5, font, color: rgb(0.2, 0.25, 0.25) });
-        cy -= 9.5;
+      wrapTextLines("•  " + line, font, bulletSize, colW - 2 * cellPad).forEach((wl) => {
+        page.drawText(wl, { x: cx + cellPad, y: cy, size: bulletSize, font, color: rgb(0.2, 0.25, 0.25) });
+        cy -= lineHeight;
       });
       cy -= 3;
     });
     page.drawRectangle({ x: cx, y: yTop - cellH, width: colW, height: cellH, borderColor: rgb(0.75, 0.8, 0.8), borderWidth: 1 });
   };
 
-  drawCell(x, y0, quadrants[0]);
-  drawCell(x + colW + colGap, y0, quadrants[1]);
-  const row2Y = y0 - cellH - rowGap;
-  drawCell(x, row2Y, quadrants[2]);
-  drawCell(x + colW + colGap, row2Y, quadrants[3]);
+  const row1H = headerH + Math.max(cellContentHeight(quadrants[0].items), cellContentHeight(quadrants[1].items)) + cellPad * 2;
+  const row2H = headerH + Math.max(cellContentHeight(quadrants[2].items), cellContentHeight(quadrants[3].items)) + cellPad * 2;
 
-  return row2Y - cellH;
+  drawCell(x, y0, quadrants[0], row1H);
+  drawCell(x + colW + colGap, y0, quadrants[1], row1H);
+  const row2Y = y0 - row1H - rowGap;
+  drawCell(x, row2Y, quadrants[2], row2H);
+  drawCell(x + colW + colGap, row2Y, quadrants[3], row2H);
+
+  return row2Y - row2H;
 }
 
 
@@ -1563,8 +1567,11 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
     let page = pdfDoc.addPage([pageWidth, pageHeight]);
     const bandHeight = 170;
     page.drawRectangle({ x: 0, y: pageHeight - bandHeight, width: pageWidth, height: bandHeight, color: charcoal });
-    page.drawText("HEALTH AND SAFETY MANUAL", { x: margin, y: pageHeight - 55, size: 10, font: boldFont, color: teal });
-    page.drawText(client.name, { x: margin, y: pageHeight - 85, size: 20, font: boldFont, color: rgb(1, 1, 1) });
+    page.drawText("HEALTH AND SAFETY MANUAL", { x: margin, y: pageHeight - 58, size: 13, font: boldFont, color: teal });
+    const nameMaxWidth = pageWidth - margin * 2;
+    let nameSize = 32;
+    while (nameSize > 18 && boldFont.widthOfTextAtSize(client.name, nameSize) > nameMaxWidth) nameSize -= 1;
+    page.drawText(client.name, { x: margin, y: pageHeight - 100, size: nameSize, font: boldFont, color: rgb(1, 1, 1) });
 
     // Large standalone logo, top-left, just under the header band.
     if (logoImage) {
@@ -1609,11 +1616,11 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
     // image's scaled height up front lets us reserve space for heading + body + diagram as one
     // unit, so a section never gets split with its heading on one page and diagram on the next.
     const SECTION_DIAGRAMS = {
-      "5.1 Organisational Roles, Responsibilities, Accountabilities & Authorities": { file: "org-hierarchy.png", maxHeight: 220 },
+      "5.1 Organisational Roles, Responsibilities, Accountabilities & Authorities": { file: "org-hierarchy.png", maxHeight: 220, center: true },
       "6.1 Objectives": { file: "planning-pdca.png", maxHeight: 120, center: true },
-      "7. Hazard Identification and Assessment of OHS Risks": { file: "hazard-categories.png", maxHeight: 220 },
-      "7.1 Legal and Other Requirements": { file: "legislation-flow.png", maxHeight: 140, gapBefore: 6 },
-      "8.1 Hierarchy of Controls": { file: "hierarchy-of-controls.png", maxHeight: 145 },
+      "7. Hazard Identification and Assessment of OHS Risks": { file: "hazard-categories.png", maxHeight: 220, center: true },
+      "7.1 Legal and Other Requirements": { file: "legislation-flow.png", maxHeight: 140, gapBefore: 6, center: true },
+      "8.1 Hierarchy of Controls": { file: "hierarchy-of-controls.png", maxHeight: 145, center: true },
       "9. Incidents and Corrective Actions": { file: "incident-corrective-cycle.png", maxHeight: 110, center: true },
     };
     function scaledImageHeight(image, forWidth, maxHeight) {
@@ -1742,27 +1749,35 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
       const pdfDoc = await PDFDocument.create();
       const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
       const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+      const logoImage = await loadClientLogoImage(client, pdfDoc);
       const lw = pageHeight, lh = pageWidth, lMargin = 40; // landscape: swap portrait dims
       const page = pdfDoc.addPage([lw, lh]);
       const lMaxWidth = lw - lMargin * 2;
 
-      const bandHeight = 70;
+      const bandHeight = 55;
       page.drawRectangle({ x: 0, y: lh - bandHeight, width: lw, height: bandHeight, color: charcoal });
       const titleSize = 17;
       drawCenteredText(page, "Health & Safety Policy", lw / 2, lh - bandHeight / 2 - titleSize / 3, titleSize, boldFont, rgb(1, 1, 1));
+      if (logoImage) {
+        const maxLogoH = 30, maxLogoW = 90;
+        const scale = Math.min(maxLogoH / logoImage.height, maxLogoW / logoImage.width, 1);
+        const w = logoImage.width * scale, h = logoImage.height * scale;
+        page.drawImage(logoImage, { x: lw - lMargin - w, y: lh - bandHeight / 2 - h / 2, width: w, height: h });
+      }
 
-      let y = lh - bandHeight - 22;
-      const introLines = wrapTextLines(getPolicyIntro(client.name), font, 8, lMaxWidth * 0.85);
-      introLines.forEach((line) => { drawCenteredText(page, line, lw / 2, y, 8, font, ink); y -= 10.5; });
-      y -= 12;
+      let y = lh - bandHeight - 16;
+      const introSize = 10;
+      const introLines = wrapTextLines(getPolicyIntro(client.name), font, introSize, lMaxWidth * 0.85);
+      introLines.forEach((line) => { drawCenteredText(page, line, lw / 2, y, introSize, font, ink); y -= introSize + 3; });
+      y -= 6;
 
       const bottomY = drawPolicyGrid({ page, x: lMargin, y0: y, maxWidth: lMaxWidth, font, boldFont, rgb, clientName: client.name });
 
-      let sy = bottomY - 30;
+      let sy = bottomY - 20;
       const rightColX = lw - lMargin - 200;
       page.drawText("Director Name: _______________________________", { x: lMargin, y: sy, size: 9, font, color: rgb(0.2, 0.25, 0.25) });
       page.drawText(`Date: ${fmtDate(today())}`, { x: rightColX, y: sy, size: 9, font, color: rgb(0.2, 0.25, 0.25) });
-      sy -= 22;
+      sy -= 24;
       page.drawText("Signed: _______________________________", { x: lMargin, y: sy, size: 9, font, color: rgb(0.2, 0.25, 0.25) });
       page.drawText(`Review Date: ${fmtDate(addDays(today(), 365))}`, { x: rightColX, y: sy, size: 9, font, color: rgb(0.2, 0.25, 0.25) });
 
@@ -1810,12 +1825,15 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
         y -= 13;
       });
 
-      ensureSpace(70);
-      let sy = y - 30;
+      // Sign-off block always sits at a fixed spot near the bottom of whichever page the
+      // text ends on, rather than floating directly under wherever the text happens to end.
+      // If the body text ran too close to that fixed spot, push the sign-off to a fresh page.
+      if (y < margin + 100) newPage();
+      let sy = margin + 30;
       const rightColX = pageWidth - margin - 200;
       page.drawText("Director Name: _______________________________", { x: margin, y: sy, size: 9, font, color: rgb(0.2, 0.25, 0.25) });
       page.drawText(`Date: ${fmtDate(today())}`, { x: rightColX, y: sy, size: 9, font, color: rgb(0.2, 0.25, 0.25) });
-      sy -= 22;
+      sy -= 28;
       page.drawText("Signed: _______________________________", { x: margin, y: sy, size: 9, font, color: rgb(0.2, 0.25, 0.25) });
       page.drawText(`Review Date: ${fmtDate(addDays(today(), 365))}`, { x: rightColX, y: sy, size: 9, font, color: rgb(0.2, 0.25, 0.25) });
 

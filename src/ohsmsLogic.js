@@ -71,6 +71,8 @@ export const CONDITIONAL_PROCEDURES = [
   { key: "workers", label: "Induction & Training Procedure" },
   { key: "continualImprovement", label: "Continual Improvement Procedure" },
   { key: "wellbeing", label: "Wellbeing Procedure" },
+  { key: "fatigueManagement", label: "Fatigue Management Procedure" },
+  { key: "returnToWork", label: "Return to Work Procedure" },
 ];
 
 export const COMPLIANCE_EXTRA_PROCEDURES = [

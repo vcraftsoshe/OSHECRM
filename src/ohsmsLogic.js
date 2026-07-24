@@ -98,6 +98,37 @@ export const CONDITIONAL_POLICIES = [
   { key: "fatigueStress", label: "Fatigue & Stress Management Policy" },
 ];
 
+// Emergency Response Plan — lives in its own DOCUMENT_CATEGORIES tab (categoryKey "erp"),
+// separate from the single-paragraph "Emergency Response Plan" summary that still sits in
+// CONDITIONAL_PROCEDURES above (that one is the short blurb inside the Procedures pack; this
+// is the full multi-emergency plan with real content per emergency type, built the same
+// checkbox + editable-template way as everything else in the app).
+export const ERP_CONTACT_ITEMS = ["Emergency Contact Numbers", "Company Emergency Contacts"];
+
+export const EMERGENCY_TYPES = [
+  "Fire",
+  "Medical Emergency",
+  "Earthquake",
+  "Tsunami",
+  "Cyclone / Severe Storm",
+  "Tornado",
+  "Explosion / Structural Damage",
+  "Electric Shock",
+  "Spill Response",
+  "Chainsaw Accident",
+  "Plant Roll Over",
+  "Service Strike",
+  "Ladder Rescue Plan (Harness Use)",
+  "Elevated Work Platform Rescue (Harness Use)",
+  "Elevated Work Platforms (EWP)",
+  "Lone Workers",
+];
+
+// Contact items are always included by default (every client needs a numbers page); the
+// individual emergency types default unchecked so each client only gets the ones relevant
+// to their site — tick the ones that apply.
+export const ERP_ITEMS = [...ERP_CONTACT_ITEMS, ...EMERGENCY_TYPES];
+
 export function computeOhsmsPack(t) {
   const complianceForced = t.compliance === true;
 

@@ -3,13 +3,13 @@ import {
   Users, TrendingUp, Bell, Building2, CreditCard, StickyNote,
   ChevronRight, Plus, Check, Upload, Calendar, X, Search,
   ClipboardList, Layers, Circle, CheckCircle2, Image as ImageIcon,
-  Repeat, Trash2, ListChecks, ListTodo, Mail, ArrowUpRight, Store, LayoutDashboard, ChevronDown, Smartphone
+  Repeat, Trash2, ListChecks, ListTodo, Mail, ArrowUpRight, Store, LayoutDashboard, ChevronDown, Smartphone, FileText
 } from "lucide-react";
 import { collection, doc, onSnapshot, updateDoc, setDoc, getDocs, getDoc, deleteDoc } from "firebase/firestore";
 import { signOut } from "firebase/auth";
 import { ref as storageRef, getDownloadURL, uploadBytes } from "firebase/storage";
 import { db, auth, storage } from "./firebase";
-import { SECTION_ITEMS, ALWAYS_PROCEDURES, CONDITIONAL_PROCEDURES, COMPLIANCE_EXTRA_PROCEDURES, ALWAYS_POLICIES, CONDITIONAL_POLICIES } from "./ohsmsLogic";
+import { SECTION_ITEMS, ALWAYS_PROCEDURES, CONDITIONAL_PROCEDURES, COMPLIANCE_EXTRA_PROCEDURES, ALWAYS_POLICIES, CONDITIONAL_POLICIES, ERP_ITEMS, ERP_CONTACT_ITEMS } from "./ohsmsLogic";
 
 /* ---------- Resilient dynamic import ----------
    Vite splits `await import("pdf-lib")` into its own hashed chunk file
@@ -1082,6 +1082,12 @@ const DOCUMENT_CATEGORIES = [
     alwaysLabels: ALWAYS_POLICIES,
     complianceExtraLabels: [],
   },
+  {
+    key: "erp", label: "Emergency Response Plan",
+    itemList: ERP_ITEMS,
+    alwaysLabels: ERP_CONTACT_ITEMS,
+    complianceExtraLabels: [],
+  },
 ];
 
 function categoryItems(category) {
@@ -1545,6 +1551,179 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
     return;
   }
 
+  if (categoryKey === "erp") {
+    // Emergency Response Plan: one combined document — page 1 is the cover (centered logo
+    // + title, moved up top) with the Emergency Numbers / Site Contacts table directly
+    // beneath it on the same page, then every ticked emergency flows continuously after
+    // that (like the Manual's sections) — sections stack normally and share a page when
+    // they fit, only breaking to a fresh page when a section genuinely doesn't fit where
+    // it is, so a heading is never stranded away from its own body.
+    const pdfDoc = await PDFDocument.create();
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    const logoImage = await loadClientLogoImage(client, pdfDoc);
+
+    const centerX = pageWidth / 2;
+    const drawCenteredOn = (pg, text, size, f, color, yPos) => {
+      const w = f.widthOfTextAtSize(text, size);
+      pg.drawText(text, { x: centerX - w / 2, y: yPos, size, font: f, color });
+    };
+
+    // --- Page 1: cover header (logo + title, pushed up top) + the contacts table below it ---
+    let page = pdfDoc.addPage([pageWidth, pageHeight]);
+    let cy = pageHeight - 70;
+    if (logoImage) {
+      const bigMaxH = 100, bigMaxW = 220;
+      const scale = Math.min(bigMaxH / logoImage.height, bigMaxW / logoImage.width, 1);
+      const w = logoImage.width * scale, h = logoImage.height * scale;
+      page.drawImage(logoImage, { x: centerX - w / 2, y: cy - h, width: w, height: h });
+      cy -= h + 22;
+    }
+    drawCenteredOn(page, "EMERGENCY RESPONSE PLAN", 21, boldFont, charcoal, cy);
+    cy -= 24;
+    drawCenteredOn(page, client.name, 13, boldFont, rgb(0.2, 0.28, 0.28), cy);
+    cy -= 18;
+    const issueDate = today();
+    drawCenteredOn(page, `Issued: ${fmtDate(issueDate)}  ·  Review Date: ${fmtDate(addDays(issueDate, 365))}`, 9, font, slate, cy);
+    cy -= 20;
+    page.drawLine({ start: { x: margin, y: cy }, end: { x: pageWidth - margin, y: cy }, thickness: 0.75, color: rgb(0.85, 0.85, 0.85) });
+
+    // Thin repeating content header for every page after the first.
+    const headerHeight = 34, topGap = headerHeight + 20;
+    const drawContentHeader = (pg) => {
+      pg.drawLine({ start: { x: margin, y: pageHeight - headerHeight + 8 }, end: { x: pageWidth - margin, y: pageHeight - headerHeight + 8 }, thickness: 0.75, color: rgb(0.85, 0.85, 0.85) });
+      pg.drawText("EMERGENCY RESPONSE PLAN", { x: margin, y: pageHeight - 22, size: 8, font: boldFont, color: teal });
+      const nw = boldFont.widthOfTextAtSize(client.name, 8);
+      pg.drawText(client.name, { x: pageWidth - margin - nw, y: pageHeight - 22, size: 8, font: boldFont, color: slate });
+    };
+    const newPage = () => { page = pdfDoc.addPage([pageWidth, pageHeight]); drawContentHeader(page); y = pageHeight - topGap; };
+
+    // Numbers/contacts are stored as editable "Label: value" template text (same Templates
+    // tab as everything else) — parsed into table rows here rather than a separate data
+    // format, so changing e.g. the Hospital number is just editing that line of text.
+    const parseRows = (raw) => (raw || "").replaceAll("The Company", client.name).split("\n\n").map((p) => p.trim()).filter(Boolean)
+      .map((p) => { const idx = p.indexOf(":"); return idx > 0 ? { label: p.slice(0, idx).trim(), value: p.slice(idx + 1).trim() } : null; })
+      .filter(Boolean);
+    const numberRows = parseRows(documentTemplates[templateKey("erp", "Emergency Contact Numbers")]);
+    const companyRowsRaw = parseRows(documentTemplates[templateKey("erp", "Company Emergency Contacts")]);
+    const companyRows = companyRowsRaw.map((r) => {
+      const m = r.value.match(/Name\s*—\s*([^\n]*?)\s*Number\s*—\s*(.*)$/);
+      return m ? { role: r.label, name: m[1].trim(), number: m[2].trim() } : { role: r.label, name: "", number: r.value };
+    });
+
+    // Table sits flush against the bottom margin — compute its exact height first (title +
+    // both tables' headers/rows) and start drawing from there, rather than butting straight
+    // up against the title block, so the logo/title stay where they are and the table anchors
+    // to the bottom of the page instead.
+    const tableTitleH = 24, tableHeaderH = 20, tableRowH = 22, tableGap = 24;
+    const numTableH = tableHeaderH + numberRows.length * tableRowH;
+    const compTableH = tableHeaderH + companyRows.length * tableRowH;
+    const tableBlockH = tableTitleH + numTableH + tableGap + compTableH;
+
+    let y = margin + tableBlockH;
+    page.drawText("Emergency Numbers & Site Contacts", { x: margin, y, size: 14, font: boldFont, color: teal });
+    y -= tableTitleH;
+
+    const drawTableHeader = (cols, widths) => {
+      const totalW = widths.reduce((a, b) => a + b, 0);
+      page.drawRectangle({ x: margin, y: y - 20, width: totalW, height: 20, color: charcoal });
+      let cx = margin;
+      cols.forEach((c, i) => { page.drawText(c, { x: cx + 8, y: y - 15, size: 9, font: boldFont, color: rgb(1, 1, 1) }); cx += widths[i]; });
+      y -= 20;
+    };
+    const drawTableRow = (cells, widths, shade) => {
+      const rowH = 22, totalW = widths.reduce((a, b) => a + b, 0);
+      if (shade) page.drawRectangle({ x: margin, y: y - rowH, width: totalW, height: rowH, color: rgb(0.96, 0.98, 0.97) });
+      let cx = margin;
+      cells.forEach((c, i) => { page.drawText(String(c || ""), { x: cx + 8, y: y - rowH + 7, size: 9.5, font, color: ink }); cx += widths[i]; });
+      page.drawLine({ start: { x: margin, y: y - rowH }, end: { x: margin + totalW, y: y - rowH }, thickness: 0.5, color: rgb(0.88, 0.88, 0.88) });
+      y -= rowH;
+    };
+
+    const numWidths = [260, maxWidth - 260];
+    drawTableHeader(["Service", "Number"], numWidths);
+    numberRows.forEach((r, i) => drawTableRow([r.label, r.value], numWidths, i % 2 === 1));
+
+    y -= tableGap;
+    const compWidths = [140, 220, maxWidth - 360];
+    drawTableHeader(["Role", "Name", "Number"], compWidths);
+    companyRows.forEach((r, i) => drawTableRow([r.role, r.name, r.number], compWidths, i % 2 === 1));
+
+    // --- Emergencies flow continuously from here, sections stacking normally ---
+    const splitHeading = (text) => {
+      const colonIdx = text.indexOf(":");
+      if (colonIdx > 0 && colonIdx < 60) return { heading: text.slice(0, colonIdx + 1), body: text.slice(colonIdx + 1).trim() };
+      return { heading: null, body: text };
+    };
+    const BULLET_INDENT = 14, bodySize = 9.5, lineH = 12.5, headingH = 14, paraGap = 6;
+    const wrapBodyWithBullets = (body, forWidth) => {
+      const result = [];
+      body.split("\n").forEach((seg) => {
+        if (seg.trim() === "") return;
+        const isBullet = seg.trim().startsWith("• ");
+        const cleanText = isBullet ? seg.trim().slice(2) : seg;
+        const effectiveWidth = isBullet ? forWidth - BULLET_INDENT : forWidth;
+        wrapTextLines(cleanText, font, bodySize, effectiveWidth).forEach((line, i) => result.push({ text: line, isBullet, isFirst: i === 0 }));
+      });
+      return result;
+    };
+    const ensureSpace = (needed) => { if (y - needed < margin) newPage(); };
+
+    const emergencyLabels = included.filter((label) => !ERP_CONTACT_ITEMS.includes(label));
+    const fullPageHeight = pageHeight - topGap - margin;
+    emergencyLabels.forEach((label) => {
+      const raw = documentTemplates[templateKey("erp", label)] || "";
+      const content = raw.replaceAll("The Company", client.name) || `No template text written yet for "${label}".`;
+      const paragraphs = content.split("\n\n").map((p) => {
+        const { heading, body } = splitHeading(p);
+        const bodyLines = wrapBodyWithBullets(body, maxWidth);
+        return { heading, bodyLines, height: (heading ? headingH : 0) + bodyLines.length * lineH + paraGap };
+      });
+      const sectionHeight = 22 + paragraphs.reduce((sum, p) => sum + p.height, 0);
+
+      // Orphan control at the whole-emergency level: if it fits where we are, keep stacking
+      // on the current page; if it doesn't but would fit on a fresh page, start a new page
+      // so the heading and its content land together rather than split; if it's simply
+      // longer than one page (rare), start fresh and let it flow across as many as it needs.
+      if (y - sectionHeight < margin && sectionHeight <= fullPageHeight) newPage();
+      else ensureSpace(30);
+
+      page.drawText(label, { x: margin, y, size: 13, font: boldFont, color: teal });
+      y -= 22;
+
+      paragraphs.forEach(({ heading, bodyLines }) => {
+        if (heading) {
+          ensureSpace(headingH);
+          page.drawText(heading, { x: margin, y, size: 10.5, font: boldFont, color: teal });
+          y -= headingH;
+        }
+        bodyLines.forEach((l) => {
+          ensureSpace(lineH);
+          if (l.isBullet && l.isFirst) {
+            page.drawText("•", { x: margin, y, size: bodySize, font, color: ink });
+            page.drawText(l.text, { x: margin + BULLET_INDENT, y, size: bodySize, font, color: ink });
+          } else if (l.isBullet) {
+            page.drawText(l.text, { x: margin + BULLET_INDENT, y, size: bodySize, font, color: ink });
+          } else {
+            page.drawText(l.text, { x: margin, y, size: bodySize, font, color: ink });
+          }
+          y -= lineH;
+        });
+        y -= paraGap;
+      });
+    });
+
+    const bytes = await pdfDoc.save();
+    const blob = new Blob([bytes], { type: "application/pdf" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${client.name.replace(/\s+/g, "_")}-Emergency_Response_Plan.pdf`;
+    a.click();
+    URL.revokeObjectURL(url);
+    return;
+  }
+
   // Procedures / Policies: each ticked item is a genuinely separate standalone document —
   // download each one as its own real PDF file, not bundled into anything.
   for (let idx = 0; idx < included.length; idx++) {
@@ -1689,6 +1868,11 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
       },
       "Contractor Management Procedure": {
         2: [{ file: "contractor-prequalification-arrangements.png", maxHeight: 200 }],
+      },
+      // Paragraph 3 of this procedure is the "Notifiable Events:" paragraph — the diagram
+      // goes right after it, same as every other inline diagram in this map.
+      "Incident Reporting & Investigation Procedure": {
+        3: [{ file: "incident-corrective-cycle.png", maxHeight: 110 }],
       },
     };
     const drawInlineDiagram = async (filename, maxHeight, preloadedImg) => {
@@ -1905,7 +2089,7 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
 }
 
 
-function SystemsView({ clients, selectedId, setSelectedId, documentTemplates, saveDocumentTemplate, systemReviewLog, addSystemReviewLogEntry }) {
+function SystemsView({ clients, selectedId, setSelectedId, documentTemplates, saveDocumentTemplate, systemReviewLog, addSystemReviewLogEntry, customErpItems, addCustomErpItem }) {
   const client = clients.find((c) => c.id === selectedId) || clients[0];
   const [mode, setMode] = useState("build");
   const [categoryKey, setCategoryKey] = useState("sections");
@@ -1915,6 +2099,14 @@ function SystemsView({ clients, selectedId, setSelectedId, documentTemplates, sa
   const [logoPreviewUrl, setLogoPreviewUrl] = useState(null);
   const [downloading, setDownloading] = useState(false);
   const [newLogEntry, setNewLogEntry] = useState({ type: "Review", person: TEAM[0], notes: "" });
+  const [newEmergencyName, setNewEmergencyName] = useState("");
+  const addEmergency = () => {
+    const name = newEmergencyName.trim();
+    if (!name) return;
+    addCustomErpItem(name);
+    setChecked((c) => ({ ...c, [name]: true }));
+    setNewEmergencyName("");
+  };
 
   useEffect(() => {
     setChecked(defaultChecked(client, category));
@@ -1946,7 +2138,9 @@ function SystemsView({ clients, selectedId, setSelectedId, documentTemplates, sa
     }
   };
 
-  const items = categoryItems(category);
+  const items = categoryKey === "erp"
+    ? [...categoryItems(category), ...customErpItems.map((i) => i.label)]
+    : categoryItems(category);
   const included = items.filter((label) => checked[label]);
   const hasRealAnswers = Boolean(client?.intake?.ohsmsPack);
 
@@ -2034,6 +2228,16 @@ function SystemsView({ clients, selectedId, setSelectedId, documentTemplates, sa
 
           <div className="w-80 shrink-0 flex flex-col gap-2 overflow-y-auto">
             <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: T.slate }}>{category.label} {included.length}/{items.length} selected</div>
+            {categoryKey === "erp" && (
+              <div className="flex items-center gap-1.5 mb-1">
+                <input value={newEmergencyName} onChange={(e) => setNewEmergencyName(e.target.value)} placeholder="New emergency type…"
+                  onKeyDown={(e) => e.key === "Enter" && addEmergency()}
+                  className="flex-1 text-xs px-2.5 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+                <button onClick={addEmergency} className="text-xs font-semibold px-2.5 py-1.5 rounded-lg shrink-0 flex items-center gap-1" style={{ background: T.tealDark, color: "#fff" }}>
+                  <Plus size={12} /> Add
+                </button>
+              </div>
+            )}
             {items.map((label) => {
               const isAlways = category.alwaysLabels.includes(label);
               const isComplianceExtra = category.complianceExtraLabels.includes(label);
@@ -2073,7 +2277,7 @@ function SystemsView({ clients, selectedId, setSelectedId, documentTemplates, sa
                 className="text-xs font-semibold px-3 py-1.5 rounded-lg"
                 style={{ background: included.length === 0 ? T.paperAlt : T.tealDark, color: included.length === 0 ? T.slateLight : "#fff", cursor: included.length === 0 ? "not-allowed" : "pointer" }}
               >
-                {downloading ? "Generating…" : categoryKey === "sections" ? "Download as PDF" : "Download as individual PDFs"}
+                {downloading ? "Generating…" : (categoryKey === "sections" || categoryKey === "erp") ? "Download as PDF" : "Download as individual PDFs"}
               </button>
             </div>
             <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${T.border}`, background: "#fff", maxHeight: "calc(100% - 28px)", overflowY: "auto" }}>
@@ -2738,7 +2942,11 @@ function TasksView({ tasks, clients, onboardings, currentUser, goToClient, resel
   };
   const toggleDone = (id) => {
     const t = tasks.find((x) => x.id === id);
-    if (t) updateDoc(doc(db, "tasks", id), { done: !t.done });
+    if (!t) return;
+    const nowDone = !t.done;
+    // Crossing a task off is what counts as its completion date now — no separate
+    // "mark complete" step, so stamp it here and clear it again if someone unticks it.
+    updateDoc(doc(db, "tasks", id), { done: nowDone, completedDate: nowDone ? today() : null });
   };
   const deleteTaskPermanently = (id) => deleteDoc(doc(db, "tasks", id));
   const setPriority = (id, priority) => updateDoc(doc(db, "tasks", id), { priority });
@@ -2989,14 +3197,20 @@ function monthLabel(m) {
 }
 // Touchpoints = logged hours + notes for that month — the two things in the data model
 // that carry a real date and represent actual client-facing activity.
-function touchpointCounts(client, months) {
+function touchpointCounts(client, months, tasks = []) {
   const counts = Object.fromEntries(months.map((m) => [m, 0]));
   (client.hours?.log || []).forEach((h) => { const m = (h.date || "").slice(0, 7); if (m in counts) counts[m]++; });
   (client.notes || []).forEach((n) => { const m = (n.date || "").slice(0, 7); if (m in counts) counts[m]++; });
+  // Crossing a task off now stamps completedDate (see toggleDone), so completed tasks
+  // linked to this client count as a touchpoint too.
+  tasks.filter((t) => t.clientId === client.id && t.done && t.completedDate).forEach((t) => {
+    const m = (t.completedDate || "").slice(0, 7);
+    if (m in counts) counts[m]++;
+  });
   return counts;
 }
 
-function DashboardsView({ clients }) {
+function DashboardsView({ clients, tasks }) {
   const months = useMemo(() => dashboardMonths(), []);
   const active = clients.filter((c) => !c.archived);
   const groups = CLIENT_PROFILES.map((p) => ({ profile: p, list: active.filter((c) => (c.profile || "Standard Client") === p) }));
@@ -3019,7 +3233,7 @@ function DashboardsView({ clients }) {
                 <div />
                 {months.map((m) => <div key={m} className="text-[10px] text-center font-semibold" style={{ color: T.slateLight }}>{monthLabel(m)}</div>)}
                 {g.list.map((c) => {
-                  const counts = touchpointCounts(c, months);
+                  const counts = touchpointCounts(c, months, tasks);
                   return (
                     <React.Fragment key={c.id}>
                       <div className="text-xs font-medium py-1.5 truncate" style={{ color: T.ink }}>{c.name}</div>
@@ -3042,7 +3256,7 @@ function DashboardsView({ clients }) {
         </div>
       ))}
       <div className="text-xs text-center" style={{ color: T.slateLight }}>
-        Hover a dot to see the exact count. Task completions aren't counted yet since tasks don't currently record a completion date.
+        Hover a dot to see the exact count. Includes hours logged, notes added, and tasks crossed off for that client.
       </div>
     </div>
   );
@@ -3189,6 +3403,229 @@ function MobileQuickView({ clients, currentUser, goToFullApp }) {
   );
 }
 
+
+/* ---------- Monthly Report Generator (groundwork) ----------
+   Compiles a monthly H&S report per client: a list of named sections, each optionally
+   backed by a CSV dropped in from the OSHE app (parsed to a preview table) plus a free-text
+   comment/narrative for that section — matching the shape of the real OSHE monthly reports
+   (e.g. "Incidents and Near Misses" pairs a data table with an Outcome Breakdown narrative;
+   "Toolbox Talks" pairs a facilitator count with a Notes paragraph).
+
+   This is intentionally just the compiling/editing groundwork — no branded PDF export yet.
+   Two starter templates are offered, mirroring the two real report shapes seen so far:
+   a consultancy-style client (Highlights, Incidents & Near Misses, Hui & Meetings, Trends,
+   Recommended Actions) and a construction-site client (Toolbox Talks, Permits, Site Reviews
+   & Observations, Incidents & Near Misses, Task Analyses, Sign-In & Visitor Log, Corrective
+   Actions). Add more templates here as real examples come in. */
+const REPORT_TEMPLATES = {
+  "Consultancy client (e.g. Manaaki Ora Trust style)": [
+    "Highlights",
+    "Incidents and Near Misses",
+    "Hui and Health & Safety Meetings",
+    "Trends and Observations",
+    "Recommended Actions",
+  ],
+  "Construction site client (e.g. BMC style)": [
+    "Toolbox Talks",
+    "Permits",
+    "Site Reviews & Observations",
+    "Incidents & Near Misses",
+    "Task Analyses",
+    "Sign-In & Visitor Log",
+    "Corrective Actions",
+  ],
+};
+
+// Minimal dependency-free CSV parser — handles quoted fields (including embedded commas
+// and escaped "" quotes) since OSHE app exports are likely to have commas inside free-text
+// fields like incident descriptions.
+function parseCsv(text) {
+  const rows = [];
+  let row = [], field = "", inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; } else { inQuotes = false; }
+      } else field += c;
+    } else if (c === '"') inQuotes = true;
+    else if (c === ",") { row.push(field); field = ""; }
+    else if (c === "\n" || c === "\r") {
+      if (c === "\r" && text[i + 1] === "\n") i++;
+      row.push(field); field = "";
+      if (row.some((v) => v.trim() !== "")) rows.push(row);
+      row = [];
+    } else field += c;
+  }
+  if (field !== "" || row.length) { row.push(field); rows.push(row); }
+  if (rows.length === 0) return { headers: [], data: [] };
+  const [headers, ...data] = rows;
+  return { headers, data };
+}
+
+function reportKey(clientId, monthYear) { return `${clientId}__${monthYear}`; }
+
+function currentMonthYear() { return new Date().toISOString().slice(0, 7); }
+
+function ReportsView({ clients }) {
+  const [selectedId, setSelectedId] = useState(clients[0]?.id || "");
+  const client = clients.find((c) => c.id === selectedId) || clients[0];
+  const [monthYear, setMonthYear] = useState(currentMonthYear());
+  const [sections, setSections] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const [newSectionTitle, setNewSectionTitle] = useState("");
+
+  useEffect(() => {
+    if (!client) return;
+    setLoaded(false);
+    const key = reportKey(client.id, monthYear);
+    getDoc(doc(db, "monthlyReports", key))
+      .then((snap) => setSections(snap.exists() ? snap.data().sections || [] : []))
+      .catch((err) => console.error("Couldn't load monthly report:", err))
+      .finally(() => setLoaded(true));
+  }, [client?.id, monthYear]);
+
+  const save = (nextSections) => {
+    setSections(nextSections);
+    if (!client) return;
+    setDoc(doc(db, "monthlyReports", reportKey(client.id, monthYear)), {
+      clientId: client.id, clientName: client.name, monthYear, sections: nextSections, updatedAt: today(),
+    });
+  };
+
+  const applyTemplate = (templateName) => {
+    const titles = REPORT_TEMPLATES[templateName] || [];
+    save(titles.map((title) => ({ id: "sec" + Date.now() + Math.random().toString(36).slice(2, 6), title, comment: "", csvFileName: null, csvHeaders: [], csvData: [] })));
+  };
+
+  const addSection = () => {
+    if (!newSectionTitle.trim()) return;
+    save([...sections, { id: "sec" + Date.now(), title: newSectionTitle.trim(), comment: "", csvFileName: null, csvHeaders: [], csvData: [] }]);
+    setNewSectionTitle("");
+  };
+
+  const removeSection = (id) => save(sections.filter((s) => s.id !== id));
+  const updateSection = (id, fields) => save(sections.map((s) => (s.id === id ? { ...s, ...fields } : s)));
+
+  const handleCsvUpload = (id, file) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const { headers, data } = parseCsv(String(e.target.result || ""));
+      updateSection(id, { csvFileName: file.name, csvHeaders: headers, csvData: data });
+    };
+    reader.readAsText(file);
+  };
+
+  if (!client) return <div className="text-sm" style={{ color: T.slate }}>No clients yet — add one on the Clients tab first.</div>;
+
+  return (
+    <div className="flex flex-col gap-4 h-full min-h-0">
+      <Card style={{ padding: "14px 16px" }}>
+        <div className="flex flex-wrap items-end gap-4">
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-wide mb-1.5" style={{ color: T.slate }}>Client</div>
+            <select value={client.id} onChange={(e) => setSelectedId(e.target.value)}
+              className="text-sm px-3 py-2 rounded-lg outline-none" style={{ background: T.card, border: `1px solid ${T.border}`, color: T.ink }}>
+              {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-wide mb-1.5" style={{ color: T.slate }}>Month</div>
+            <input type="month" value={monthYear} onChange={(e) => setMonthYear(e.target.value)}
+              className="text-sm px-3 py-2 rounded-lg outline-none" style={{ background: T.card, border: `1px solid ${T.border}`, color: T.ink }} />
+          </div>
+          <div className="flex-1" />
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-wide mb-1.5" style={{ color: T.slate }}>Start from a template</div>
+            <select defaultValue="" onChange={(e) => { if (e.target.value) applyTemplate(e.target.value); e.target.value = ""; }}
+              className="text-sm px-3 py-2 rounded-lg outline-none" style={{ background: T.card, border: `1px solid ${T.border}`, color: T.ink }}>
+              <option value="">Choose a template…</option>
+              {Object.keys(REPORT_TEMPLATES).map((name) => <option key={name} value={name}>{name}</option>)}
+            </select>
+          </div>
+        </div>
+      </Card>
+
+      {!loaded ? (
+        <div className="text-sm" style={{ color: T.slateLight }}>Loading…</div>
+      ) : (
+        <div className="flex-1 overflow-y-auto flex flex-col gap-4">
+          {sections.length === 0 && (
+            <Card style={{ padding: 20 }}>
+              <div className="text-sm" style={{ color: T.slate }}>
+                No sections yet for {client.name} — {monthYear}. Pick a template above to start, or add sections manually below.
+              </div>
+            </Card>
+          )}
+          {sections.map((s) => (
+            <Card key={s.id} style={{ padding: 16 }}>
+              <div className="flex items-center justify-between gap-3 mb-3">
+                <input value={s.title} onChange={(e) => updateSection(s.id, { title: e.target.value })}
+                  className="text-sm font-bold flex-1 outline-none px-1 py-0.5 rounded" style={{ color: T.tealDark, background: "transparent" }} />
+                <button onClick={() => removeSection(s.id)} title="Remove section"><Trash2 size={15} color={T.slateLight} /></button>
+              </div>
+
+              <div className="flex items-center gap-3 mb-3">
+                <label className="text-xs font-semibold px-3 py-1.5 rounded-lg cursor-pointer flex items-center gap-1.5" style={{ background: T.paperAlt, color: T.tealDark }}>
+                  <Upload size={13} /> {s.csvFileName ? "Replace CSV" : "Drop in CSV"}
+                  <input type="file" accept=".csv,text/csv" className="hidden" onChange={(e) => handleCsvUpload(s.id, e.target.files?.[0])} />
+                </label>
+                {s.csvFileName && (
+                  <span className="text-xs" style={{ color: T.slateLight }}>{s.csvFileName} — {s.csvData?.length || 0} row{s.csvData?.length === 1 ? "" : "s"}</span>
+                )}
+              </div>
+
+              {s.csvHeaders?.length > 0 && (
+                <div className="overflow-x-auto mb-3 rounded-lg" style={{ border: `1px solid ${T.border}` }}>
+                  <table className="text-xs w-full">
+                    <thead>
+                      <tr style={{ background: T.paperAlt }}>
+                        {s.csvHeaders.map((h, i) => <th key={i} className="text-left px-2 py-1.5 font-semibold" style={{ color: T.slate }}>{h}</th>)}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {s.csvData.slice(0, 8).map((row, ri) => (
+                        <tr key={ri} style={{ borderTop: `1px solid ${T.border}` }}>
+                          {row.map((cell, ci) => <td key={ci} className="px-2 py-1.5" style={{ color: T.ink }}>{cell}</td>)}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {s.csvData.length > 8 && (
+                    <div className="text-[11px] px-2 py-1.5" style={{ color: T.slateLight }}>+ {s.csvData.length - 8} more row{s.csvData.length - 8 === 1 ? "" : "s"}</div>
+                  )}
+                </div>
+              )}
+
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide mb-1.5" style={{ color: T.slate }}>Comment / narrative</div>
+                <textarea value={s.comment} onChange={(e) => updateSection(s.id, { comment: e.target.value })} rows={3}
+                  placeholder="What should this section say — highlights, trends, anything worth calling out?"
+                  className="w-full text-sm px-3 py-2 rounded-lg outline-none resize-y" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+              </div>
+            </Card>
+          ))}
+
+          <Card style={{ padding: 14 }}>
+            <div className="flex items-center gap-2">
+              <input value={newSectionTitle} onChange={(e) => setNewSectionTitle(e.target.value)} placeholder="New section title (e.g. Permits)"
+                onKeyDown={(e) => e.key === "Enter" && addSection()}
+                className="flex-1 text-sm px-3 py-2 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+              <button onClick={addSection} className="text-xs font-semibold px-3 py-2 rounded-lg shrink-0" style={{ background: T.tealDark, color: "#fff" }}>
+                <Plus size={13} className="inline -mt-0.5 mr-1" /> Add section
+              </button>
+            </div>
+          </Card>
+
+          <div className="text-xs text-center py-2" style={{ color: T.slateLight }}>
+            Sections and comments save automatically. Branded PDF export isn't wired up yet — send over a couple of real report templates and layout preferences and we'll build that next.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function App() {
   const [module, setModule] = useState("clients");
@@ -3354,6 +3791,24 @@ export default function App() {
   }, []);
   const addSystemReviewLogEntry = (entry) => setDoc(doc(db, "systemReviewLog", "log" + Date.now()), entry);
 
+  // Custom emergency types added via the "Add emergency" button on the ERP tab — global,
+  // like systemReviewLog, since a new emergency type (e.g. a site-specific hazard) is
+  // something every client's ERP tab should be able to pick from, not just the one it was
+  // added for.
+  const [customErpItems, setCustomErpItems] = useState([]);
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "customErpItems"), (snap) => setCustomErpItems(snap.docs.map((d) => ({ id: d.id, ...d.data() }))), (err) => console.error("Custom ERP items subscription failed:", err));
+    return unsub;
+  }, []);
+  const addCustomErpItem = (label) => {
+    const trimmed = label.trim();
+    if (!trimmed) return;
+    setDoc(doc(db, "customErpItems", "erpitem" + Date.now()), { label: trimmed, createdAt: today() });
+    // Seed an empty, ready-to-write template so it shows the same "no template text yet"
+    // prompt as any other item, rather than silently having nothing.
+    setDoc(doc(db, "documentTemplates", templateKey("erp", trimmed)), { content: "" });
+  };
+
   // One-time seed of real procedure content, condensed from OSHE's actual reference documents.
   // Never overwrites anything already written — only fills in a key if it's genuinely empty,
   // so any edits Sophie/Vanessa have already made are always safe.
@@ -3425,6 +3880,32 @@ export default function App() {
       "Environmental Policy": "The Company is committed to achieving the principles of environmental sustainability. We recognise our moral and legal responsibility to ensure our operations do not place the local community or environment at risk of harm.\n\nThe Company achieves this by: complying with, and exceeding where practicable, all applicable legislation, regulations and codes of practice; integrating sustainability considerations into all business decisions; minimising toxic emissions through the selection and use of our fleet; promoting environmental awareness among our workers and encouraging them to work in an environmentally responsible manner; reducing waste through innovative work practices and recycling; minimising waste by evaluating operations and ensuring they are as efficient as possible; and reviewing and continually improving our environmental sustainability performance.\n\nTo ensure the success of this policy, senior management will: ensure the environmental policy is implemented; comply with all relevant environmental legislation and adhere to regulatory standards; establish measurable objectives and targets aimed at eliminating waste, pollution and environmental harm; act in a socially responsible manner in regard to the management of our people, communities and resources; encourage consultation and co-operation between management, workers and stakeholders on matters affecting the environment; and provide adequate resources to meet these environmental commitments.\n\nAll workers are required to: follow all environmental policies and procedures; recognise and report hazards which may affect the environment; and act in a socially responsible manner at all times while encouraging an environmentally friendly workplace.",
       "Fatigue & Stress Management Policy": "The Company recognises that workers who are impaired by stress and fatigue are a risk to themselves and those around them. This policy aims to improve overall safety and wellbeing, to achieve a safe working environment.\n\nThe Company achieves this by: shifts not exceeding 14 hours including travel (home to home); workers not exceeding an average of 60 working hours per week; no work period exceeding 4.5 hours without a rest break; ensuring rest breaks are in accordance with the Employment Relations Amendment Act 2018; ensuring rest breaks are set and agreed prior to works commencing; considering an additional 10-minute break between work periods when extreme conditions present; investigating incidents where fatigue may have been involved; providing adequate facilities and drinking water; and limiting periods of excessive mental or physical demands by managing workloads.\n\nAll workers are required to: turn up in a state fit for work, having done everything possible to get a good sleep and rest; inform their manager or supervisor if a task is beyond their capabilities; recognise the signs and symptoms of fatigue — including feeling constantly tired, having little energy, feeling sluggish, excessive yawning or falling asleep at work, reduced vigilance, bad moods, forgetfulness, inability to concentrate, poor communication, poor decision-making, reduced hand-eye coordination and slower reaction times, as well as less obvious symptoms such as drowsiness, headaches, dizziness, blurred vision or impaired visual perception and a need for extended sleep on days off; communicate with their manager or supervisor if they start showing signs and symptoms of fatigue, and make managers and supervisors aware of other workers who may be fatigued; and report fatigue-related incidents.\n\nNon-compliance with this policy may result in disciplinary action. This policy applies to all workers, including contractors and subcontractors under The Company's operational control. The Company's Officer(s) are accountable for ensuring this policy is implemented. The policy shall be reviewed annually and updated as required.",
     };
+
+    // Emergency Response Plan content — the real per-emergency text from H.A.R.M's
+    // reference ERP document, plus a numbers page pre-filled with the standard NZ
+    // national/regional lines (Police/Ambulance/Fire, Hospital, WorkSafe, etc.) and a
+    // blank Company Emergency Contacts page for each client's own Controller/Fire
+    // Warden/First Aider names and numbers.
+    const realErpContent = {
+      "Emergency Contact Numbers": "Police / Ambulance / Fire: 111\n\nHospital: 07 579 8000\n\nWorkSafe: 0800 030 040\n\nEnvironment Bay of Plenty: 0800 884 880\n\nCivil Defence: 07 577 7000\n\nPoison Centre: 0800 764 766\n\nPower (including 24 hour faults): 0800 27 27 27\n\nThese are the standard NZ national/regional numbers \u2014 update the regional council and power company lines above if this client sits outside the Bay of Plenty area.",
+      "Company Emergency Contacts": "Emergency Controller: Name \u2014 ___________________________ Number \u2014 ___________________________\n\nFire Warden: Name \u2014 ___________________________ Number \u2014 ___________________________\n\nFirst Aider: Name \u2014 ___________________________ Number \u2014 ___________________________\n\nFill in the names and numbers for this client's site before generating the PDF.",
+      "Fire": "If you discover a fire:\n\u2022 Warn occupants in the immediate area\n\u2022 Operate the nearest fire alarm manual call point or yell FIRE FIRE FIRE\n\u2022 Evaluate the situation and determine if you can handle the fire or if an immediate call for assistance is best\n\u2022 Call the Fire Service on 111\n\u2022 Stay low and avoid inhaling toxic smoke or hazardous vapours\n\u2022 Report to the Emergency Controller at the evacuation point and pass on any relevant information about the fire\n\u2022 If the exit for evacuation is blocked, exit using an alternative route\n\u2022 Go to the assembly point\n\nIf you are warned of a fire:\n\u2022 Activate the nearest manual call point if the alarm is not already sounding\n\u2022 Assist others to evacuate if required\n\u2022 Evacuate to the assembly point\n\nYou will need to provide the following information:\n\u2022 The nature of the emergency (e.g. alarms ringing)\n\u2022 Building name, street number, street name\n\u2022 Nearest intersection, suburb and city\n\nEvacuation management team: The evacuation management team consists of an Emergency Controller, Fire Warden and first aider.\n\nAfter hours procedure: If the building is occupied outside of normal hours, anyone discovering a fire is to:\n\u2022 Warn occupants in the immediate area\n\u2022 Operate the nearest fire alarm manual call point\n\u2022 Call the Fire Service on 111\n\u2022 Evacuate the building\n\u2022 Go to the assembly point\n\u2022 Liaise with the Fire Service upon their arrival",
+      "Medical Emergency": "\u2022 Danger: Assess the risk, ensure the area is safe for yourself, the patient and others in the area.\n\u2022 Response: Check for a response from the patient, ask names, squeeze shoulders. If there is no response send for help, if there is a response make comfortable, check for injuries and monitor response\n\u2022 Send for help: Call 111 or ask another person to make the call\n\u2022 Airway: Open mouth, if foreign material is present clear the airway with your fingers and place in the recovery position, open the airway by tilting head up and lifting the chin\n\u2022 Breathing: Check for normal breathing, if not breathing start CPR. If normal breathing place in recovery position, monitor breathing, manage injuries and treat for shock\n\u2022 CPR: Start CPR, 30 Chest compressions: 2 Breaths. Continue CPR until help arrives or patient recovers\n\u2022 Defibrillation: Apply defibrillators as soon as possible if available, follow voice prompts\n\u2022 Try not to move the patient unless there is imminent danger in the area or to perform life saving techniques if you feel there is any injuries to the neck/spine. If there is bleeding, apply pressure. Keep patient warm.",
+      "Earthquake": "During an Earthquake:\n\u2022 Drop, cover and Hold On. Minimise your movements to a few steps to a nearby safe place and if you are indoors, stay there until the shaking has stopped and you are sure exiting is safe.\n\nIf Indoors:\n\u2022 DROP to your hands and knees.\n\u2022 COVER your head and neck with your arms. This position protects you from falling and provides some protection for vital organs. Because moving can put you in danger from the debris in your path, only move if you need to get away from the danger of falling objects. If you can move safely, crawl for additional cover under a sturdy desk or table. If there is low furniture, or an interior wall or corner nearby and the path is clear, these may also provide some additional cover. Stay away from glass, windows, outside doors and walls, and anything that could fall, such as lighting fixtures or furniture.\n\u2022 HOLD ON to any sturdy shelter until the shaking stops.\n\u2022 Stay away from glass, windows, outside doors and walls, and anything that could fall, such as lighting fixtures or furniture.\n\u2022 If you are in bed: STAY there and COVER your head and neck with a pillow. At night, hazards and debris are difficult to see and avoid; attempts to move in the dark result in more injuries than remaining in bed.\n\u2022 DO NOT get in a doorway as this does not provide protection from falling or flying objects and you likely will not be able to remain standing.\n\u2022 Stay inside until the shaking stops and it is safe to go outside. Do not exit a building during the shaking. Research has shown that most injuries occur when people inside buildings attempt to move to a different location inside the building or try to leave.\n\u2022 DO NOT use the elevators.\n\u2022 Be aware that the electricity may go out or the sprinkler systems or fire alarms may turn on.\n\nIf Outdoors:\n\u2022 If you can, move away from buildings, streetlights, and utility wires.\n\u2022 Once in the open, Drop, Cover, and Hold On. STAY THERE until the shaking stops. This might not be possible in a city, so you may need to duck inside a building to avoid falling debris.\n\nIf in a Moving Vehicle:\n\u2022 Stop as quickly as safety permits and stay in the vehicle. Avoid stopping near or under buildings, trees, overpasses, and utility wires.\n\u2022 Proceed cautiously once the earthquake has stopped. Avoid roads, bridges, or ramps that might have been damaged by the earthquake.\n\nWhen the Shaking Stops:\n\u2022 When the shaking stops, look around to make sure it is safe to move and there is a safe way out through the debris. Then exit the building.\n\u2022 Expect aftershocks. These secondary shockwaves are usually less violent than the main quake but can be strong enough to do additional damage to weakened structures and can occur in the first hours, days, weeks, or even months after the quake. Drop, Cover, and Hold On whenever you feel shaking.\n\u2022 Check for injuries and provide assistance if you have training. Assist with rescues if you can do this safely.\n\u2022 Look for and extinguish small fires. Fire is the most common hazard after an earthquake. Never use a lighter or matches near damaged areas.\n\u2022 Listen to a battery-operated radio or television for the latest emergency information.\n\u2022 Use the telephone only for emergency calls.\n\nIf Trapped Under Debris:\n\u2022 Do not light a match.\n\u2022 Do not move about or kick up dust.\n\u2022 Cover your mouth with a handkerchief or clothing.\n\u2022 Tap on a pipe or wall so rescuers can locate you. Use a whistle if one is available. Shout only as a last resort. Shouting can cause you to inhale dangerous amounts of dust.",
+      "Tsunami": "During a tsunami:\n\u2022 Move immediately to the nearest higher ground, or as far inland as you can. If evacuation maps are present, follow the routes shown.\n\u2022 Walk or bike if possible and drive only if essential. If driving, keep going once you are well outside the evacuation zone to allow room for others behind you.\n\u2022 If you cannot escape the tsunami, go to an upper storey of a sturdy building or climb onto a roof or up a tree, or grab a floating object and hang on until help arrives.\n\u2022 Never go to the shore to watch for a tsunami. Stay away from at-risk areas until the official all-clear is given.\n\u2022 Listen to your local radio stations as emergency management officials will be broadcasting the most appropriate advice for your community and situation.\n\nAfter a tsunami:\n\u2022 Continue to listen to the radio for civil defence advice and do not return to the evacuation zones until authorities have given the all-clear.\n\u2022 Be aware that there may be more than one wave and it may not be safe for up to 24 hours, or longer. The waves that follow the first one may also be bigger.\n\u2022 Check yourself for injuries and get first aid if needed. Help others if you can.\n\u2022 When re-entering homes or buildings, use extreme caution as floodwaters may have damaged buildings. Look for, and report, broken utility lines to appropriate authorities.\n\u2022 If your property is damaged, take notes and photographs for insurance purposes. If you rent your property, contact your landlord and your contents insurance company as soon as possible.",
+      "Cyclone / Severe Storm": "\u2022 Stay informed on weather updates. Listen to your local radio stations as civil defence authorities will be broadcasting the most appropriate advice for your community and situation.\n\u2022 Secure, or move indoors, all items that could get blown about and cause harm in strong winds.\n\u2022 Close windows, external and internal doors. Pull curtains and drapes over unprotected glass areas to prevent injury from shattered or flying glass.\n\u2022 If the wind becomes destructive, stay away from doors and windows and shelter further inside the house.\n\u2022 Water supplies can be affected so it is a good idea to store drinking water in containers and fill bathtubs and sinks with water.\n\u2022 Don't walk around outside and avoid driving unless absolutely necessary.\n\u2022 Power cuts are possible in severe weather. Unplug small appliances which may be affected by electrical power surges. If power is lost unplug major appliances to reduce the power surge and possible damage when power is restored.\n\u2022 Listen to your local radio stations as emergency management officials will be broadcasting the most appropriate advice for your community and situation.\n\u2022 Check for injuries and help others if you can, especially people who require special assistance.\n\u2022 Look for and report broken utility lines to appropriate authorities.",
+      "Tornado": "\u2022 Tornadoes sometimes occur during thunderstorms in some parts of New Zealand. A tornado is a narrow, violently rotating column of air extending downwards to the ground from the base of a thunderstorm. Warning signs include a long, continuous roar or rumble or a fast-approaching cloud of debris which can sometimes be funnel shaped.\n\u2022 Alert others if you can.\n\u2022 Take shelter immediately. A basement offers the greatest safety. If underground shelter is not available, move to an interior room without windows on the lowest floor. Get under sturdy furniture and cover yourself with a mattress or blanket.\n\u2022 If caught outside, get away from trees if you can. Lie down flat in a nearby gully, ditch or low spot and protect your head.\n\u2022 If in a car, get out immediately and look for a safe place to shelter. Do not try to outrun a tornado or get under the vehicle for shelter.",
+      "Explosion / Structural Damage": "\u2022 Remain calm\n\u2022 Be prepared for possible further explosions\n\u2022 Crawl under a table or desk\n\u2022 Stay away from windows, mirrors, overhead fixtures, filing cabinets, bookcases and electrical equipment\n\u2022 If evacuation is ordered, proceed to one of the designated exits\n\u2022 Do not move seriously injured persons unless they are in obvious immediate danger (of fire, building collapse, etc.)\n\u2022 Open doors carefully \u2014 watch for falling objects\n\u2022 If requested, accompany and assist persons with disabilities who appear to need direction or assistance\n\u2022 Do not use matches or lighters\n\u2022 Avoid using telephones unless to an emergency service",
+      "Electric Shock": "DO NOT TOUCH THE PERSON BEING ELECTROCUTED\n\n\u2022 Disconnect power at source if possible\n\u2022 If power cannot be turned off, use an insulated object \u2014 wood, rubber \u2014 to break the connection from person to power\n\u2022 Dial 111\n\u2022 Proceed with First Aid\n\u2022 Even if the person feels okay afterwards, seek medical attention",
+      "Spill Response": "IF you discover a spill:\n\u2022 Raise the alarm (switching on the fire alarm, shouting).\n\u2022 Evacuate people, if necessary.\n\u2022 Identify spilt material. Consult Safety Data Sheet (SDS).\n\u2022 Use appropriate personal protective equipment depending on the spill material, such as suitable gloves, protective eyewear, suitable protective clothing.\n\u2022 Stop or shut off the source of the spill immediately, if it safe to do so.\n\u2022 Remove sources of ignition if a flammable substance has been spilled.\n\u2022 If the spill involves a flammable substance, move away from the spill before using a mobile or cordless phone.\n\u2022 Notify spill contact person & any other emergency contact(s): owner, manager, etc.\n\u2022 Do not walk through the spill if you can avoid it and keep the contaminated area as small as possible\n\u2022 Pump liquid spills into a safe container, absorb them with appropriate materials or mix with a compatible solid so it can be swept up for disposal.\n\u2022 Use absorbent materials, such as absorbent pads, booms or kitty litter to contain spills that are relatively small in nature and where the spilled substance and its hazardous properties have been properly identified and assessed.\n\u2022 Cover/block any drains/catch basins in the spill area to prevent material from entering into the storm water system, sanitary sewer system or septic system.\n\u2022 Cover powder spills to stop them blowing around or dampen them where it is safe to do so.\n\u2022 Sweep or vacuum up powder spills and put them in a safe container.\n\u2022 Collect absorbent materials and treat as hazardous waste. Dispose of contaminated materials, clean-up equipment or clothing as a waste or ask your waste disposal contractor to dispose of it for you.\n\u2022 Replace any containment equipment or PPE immediately and complete a spill report to find out how and why the spill occurred.\n\u2022 If the spill is large or otherwise uncontrollable or poses a potential immediate hazard to human health and safety, call Bay of Plenty Regional Council Pollution Hotline 0800 884 883.\n\u2022 If the spill exposes workers or any other person to a serious risk to their health and safety, call WorkSafe 0800 030 040.",
+      "Chainsaw Accident": "\u2022 Turn off the machine immediately\n\u2022 Raise the alarm that someone has been injured\n\u2022 Assist with first aid and stop the bleeding (if applicable)\n\u2022 To stop bleeding, place a large bandage or something very absorbent directly over the wound and apply firm pressure\n\u2022 If direct pressure will not stop the bleeding and it is in a limb, you can try using an improvised tourniquet by wrapping a belt tightly around the limb to slow down the blood flow\n\u2022 Ring 111 and ask for ambulance assistance",
+      "Plant Roll Over": "\u2022 Turn off the machine if it is safe to do so\n\u2022 Account for all people known to be in the area\n\u2022 Assist anyone hurt if you can without putting yourself in danger\n\u2022 Check for breathing and heart function \u2014 if either has stopped, immediate resuscitation procedures should be conducted. Control bleeding (if any) and administer other required first aid. Psychological reassurance and physical warmth can also improve a victim's survival chances\n\u2022 Contact other people as necessary and appropriate (owners, managers, employees, neighbours, Ambulance, Fire Brigade etc.) for additional assistance\n\u2022 If the ground is soft, it may be possible to dig the victim out from under the plant \u2014 always block or crib the machine to prevent it from tipping and causing further injuries\n\u2022 Upon arrival of emergency response personnel, direct them to the location of the injured person(s) that require their attention and services",
+      "Service Strike": "All strikes:\n\u2022 Do not attempt repairs.\n\u2022 Inform utility supplier/service owner as soon as possible.\n\u2022 Report all damage, even if leaks or loss of power are not evident.\n\u2022 Inform service users.\n\u2022 Inform owners of adjacent services if there is a risk of gas or water ingress or contamination.\n\u2022 Keep members of the public away and post warning signs.\n\nGas strikes:\n\u2022 Call national emergency number 0800 111999.\n\u2022 Evacuate workers and others to a safe distance.\n\u2022 Warn local residents and businesses.\n\u2022 No smoking or naked flames.\n\u2022 Keep vehicles and members of the public away from the area.\n\u2022 Warn service users if a service connection has been disturbed as this may result in a leak within the building.\n\u2022 Co-operate with and assist gas supply company, police and fire authority.\n\nElectrical Cable Strike:\n\u2022 Avoid all contact.\n\u2022 Do not try to disentangle cables from excavator buckets.\n\u2022 Do not attempt to leave the excavator involved unless assured that the cable is no longer live.\n\u2022 Evacuate workers and others to a safe distance.\n\u2022 Keep vehicles and members of the public away from the area.\n\u2022 Contact service owner and emergency services as appropriate.\n\u2022 Co-operate with and assist cable owner and emergency services.",
+      "Ladder Rescue Plan (Harness Use)": "\u2022 If the fallen worker is suspended from a lifeline, move the worker (if possible) to an area that rescuers can access safely with a ladder.\n\u2022 Set up the appropriate ladder(s) to reach the fallen worker.\n\u2022 Rig separate lifelines for rescuers to use while carrying out the rescue from the ladder(s).\n\u2022 If the fallen worker is not conscious or cannot reliably help with the rescue, at least two rescuers may be needed.\n\u2022 If the fallen worker is suspended directly from a lanyard or a lifeline, securely attach a separate lowering line to the harness.\n\u2022 Other rescuers on the ground (or closest work surface) should lower the fallen worker while the rescuer on the ladder guides the fallen worker to the ground (or work surface).\n\u2022 Once the fallen worker has been brought to a safe location, administer first aid and treat the person for suspension trauma and any other injury.\n\u2022 Arrange transportation to hospital if required.",
+      "Elevated Work Platform Rescue (Harness Use)": "\u2022 Bring the EWP to the accident site and use it to reach the suspended worker.\n\u2022 Ensure that rescue workers are wearing full-body harnesses attached to appropriate anchors in the EWP.\n\u2022 Ensure that the EWP has the load capacity for both the rescuer(s) and the fallen worker.\n\u2022 If the fallen worker is not conscious, two rescuers will probably be needed to safely handle the weight of the fallen worker.\n\u2022 Position the EWP platform below the worker and disconnect the worker\u2019s lanyard when it is safe to do so. When the worker is safely on the EWP, reattach the lanyard to an appropriate anchor point on the EWP if possible.\n\u2022 Lower the worker to a safe location and administer first aid. Treat the worker for suspension trauma and any other injury.\n\u2022 Arrange transportation to hospital if required.",
+      "Elevated Work Platforms (EWP)": "If EWP Touches Powerlines:\n\u2022 Anyone in the EWP should stay there and warn any others nearby to stay clear. If it is safe to do so, operate the controls to break contact\n\u2022 If it is not safe to break contact - call for help, warning everyone to keep well clear of the machine\n\u2022 Stay put until the power company can de-energise the line and advise that it is safe to get off the EWP\n\u2022 If help is not immediately available, electrical contact cannot be broken and there is an urgent reason to get off the EWP (such as fire):\n\u2022 Switch off the motor and \u2013 where applicable \u2013 apply brakes > remove any loose clothing\n\u2022 Climb to a point on the EWP where you can safely jump to the ground about 1 metre above the ground\n\u2022 Jump so that you are well clear of the platform before any part of you touches the ground\n\nFall away from the EWP and not towards it:\n\u2022 Do not touch the EWP until the power company advises it is safe to do so\n\nPlatform Stuck at Height or A Medical Emergency:\n\u2022 Wherever possible, a trained person should do the rescue using the machine\u2019s ground controls or secondary lowering system. If this is not possible, use another EWP to carry out the rescue\n\u2022 The rescue machine needs to be placed so the people doing the rescue are not put at risk\n\u2022 The work platforms of both machines need to be next to each other with as little gap as possible between them > switch off the engines on both machines during the transfer\n\u2022 Where practicable, the person being rescued, and the rescuer should wear full body harnesses with adjustable lanyards. Attach lanyards to certified anchor points on the rescue machine before starting the transfer\n\nCall emergency services if:\n\u2022 There is an injury, illness or risk of exposure to toxic substances\n\u2022 Someone has been hanging for any length of time \u2013 they might be suffering from suspension trauma\n\u2022 The operators on the work platform cannot communicate with rescuers on the ground",
+      "Lone Workers": "\u2022 It is important that a check-in procedure be in place. A verbal and visual check-in is adequate while other workers are at the yard in the same area.\n\u2022 The cell phone will be the main source of contact. Ensure this is fully charged before leaving the Office. If a cell phone is unreliable in your area, be sure to have alternative methods of communication available (such as use of public telephones)\n\u2022 When working alone, the operator should know the following details:\n\u2022 Pre-agreed intervals of regular contact arranged between the lone worker and the delegated contact person\n\u2022 A secondary Worker will be assigned to escort the lone worker if at any time they feel there could be a risk to safety\n\u2022 Have the contact person call the lone employee periodically if possible to make sure he/she is okay\n\u2022 Pick out a code word to be used to identify or confirm that help is needed\n\u2022 If the lone employee does not check-in when he is supposed to then the contact person shall arrange a visual check on employee. That contact person will then carry out rescue procedures if applicable.",
+    };
     (async () => {
       try {
         // Sections and Policies: only fill in if genuinely empty, so any edits already made
@@ -3432,6 +3913,7 @@ export default function App() {
         const conditionalContent = [
           ...Object.entries(realSectionContent).map(([label, content]) => ["sections", label, content]),
           ...Object.entries(realPolicyContent).map(([label, content]) => ["policies", label, content]),
+          ...Object.entries(realErpContent).map(([label, content]) => ["erp", label, content]),
         ];
         await Promise.all(
           conditionalContent.map(async ([catKey, label, content]) => {
@@ -3671,6 +4153,7 @@ export default function App() {
         <NavItem icon={Store} label="Resellers" active={module === "resellers"} onClick={() => setModule("resellers")} />
         <NavItem icon={ListChecks} label="Workflows" active={module === "workflows"} onClick={() => setModule("workflows")} />
         <NavItem icon={ListTodo} label="My Tasks" active={module === "tasks"} onClick={() => setModule("tasks")} />
+        <NavItem icon={FileText} label="Reports" active={module === "reports"} onClick={() => setModule("reports")} />
         <div className="flex-1" />
         <div className="px-3 pb-2">
           <div className="text-[10px] uppercase tracking-wide mb-1.5" style={{ color: "#5C7274" }}>Logged in as</div>
@@ -3678,14 +4161,13 @@ export default function App() {
             {currentUser || "…"}
           </div>
         </div>
-        <div className="text-[11px] px-3 pb-1" style={{ color: "#5C7274" }}>Clients is live &middot; other tabs still mock data</div>
       </div>
 
       <div className="flex-1 flex flex-col min-w-0">
         <div className="flex items-center justify-between px-8 py-5" style={{ borderBottom: `1px solid ${T.border}` }}>
           <div>
             <div className="text-xl font-bold" style={{ color: T.ink }}>
-              {{ clients: "Clients", systems: "Systems", sales: "Sales", billing: "Billing", workflows: "Workflows", resellers: "Resellers", tasks: "My Tasks", dashboards: "Dashboards" }[module]}
+              {{ clients: "Clients", systems: "Systems", sales: "Sales", billing: "Billing", workflows: "Workflows", resellers: "Resellers", tasks: "My Tasks", dashboards: "Dashboards", reports: "Reports" }[module]}
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -3702,13 +4184,14 @@ export default function App() {
               onboardings={onboardings} updateOnboardingsForClient={updateOnboardingsForClient} workflows={workflows}
               pushNotification={pushNotification} goToWorkflows={() => setModule("workflows")} tabRequest={clientTabRequest} />
           )}
-          {module === "systems" && <SystemsView clients={clients} selectedId={selectedClient} setSelectedId={setSelectedClient} documentTemplates={documentTemplates} saveDocumentTemplate={saveDocumentTemplate} systemReviewLog={systemReviewLog} addSystemReviewLogEntry={addSystemReviewLogEntry} />}
+          {module === "systems" && <SystemsView clients={clients} selectedId={selectedClient} setSelectedId={setSelectedClient} documentTemplates={documentTemplates} saveDocumentTemplate={saveDocumentTemplate} systemReviewLog={systemReviewLog} addSystemReviewLogEntry={addSystemReviewLogEntry} customErpItems={customErpItems} addCustomErpItem={addCustomErpItem} />}
           {module === "sales" && <SalesView leads={leads} convertLeadToClient={convertLeadToClient} />}
           {module === "billing" && <BillingOverview clients={clients} resellers={resellers} />}
-          {module === "dashboards" && <DashboardsView clients={clients} />}
+          {module === "dashboards" && <DashboardsView clients={clients} tasks={tasks} />}
           {module === "workflows" && <WorkflowsView workflows={workflows} />}
           {module === "resellers" && <ResellersView resellers={resellers} selectedId={selectedReseller} setSelectedId={setSelectedReseller} />}
           {module === "tasks" && <TasksView tasks={tasks} clients={clients} onboardings={onboardings} currentUser={currentUser} goToClient={goToClient} resellers={resellers} goToReseller={goToReseller} />}
+          {module === "reports" && <ReportsView clients={clients} />}
         </div>
       </div>
     </div>

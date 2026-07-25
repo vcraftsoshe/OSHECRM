@@ -1090,6 +1090,26 @@ const DOCUMENT_CATEGORIES = [
   },
 ];
 
+// The sign-up form's `emergencyOptions` (SignupForm.jsx) were written independently of this
+// app's ERP tab emergency types, so the labels don't match 1:1. Where a sign-up label maps
+// cleanly onto real ERP content, tick that item; "Natural disaster" and "Working at Heights
+// rescue" cover more than one ERP item so they map to several. Anything on the sign-up form
+// with no ERP equivalent yet (no real reference content exists for it) isn't silently
+// dropped — syncFromIntake() below creates it as a new custom ERP item instead, same as
+// clicking "Add emergency" by hand, just blank and ready to write.
+const SIGNUP_TO_ERP_LABELS = {
+  "Fire": ["Fire"],
+  "Medical emergency": ["Medical Emergency"],
+  "Hazardous substance spill": ["Spill Response"],
+  "Plant roll over": ["Plant Roll Over"],
+  "Natural disaster": ["Earthquake", "Tsunami", "Cyclone / Severe Storm", "Tornado"],
+  "Electrical incident": ["Electric Shock"],
+  "Working at Heights rescue": ["Ladder Rescue Plan (Harness Use)", "Elevated Work Platform Rescue (Harness Use)", "Elevated Work Platforms (EWP)"],
+  "Lone working": ["Lone Workers"],
+  "Service strike": ["Service Strike"],
+  "Chainsaw": ["Chainsaw Accident"],
+};
+
 function categoryItems(category) {
   return category.itemList;
 }
@@ -2107,6 +2127,30 @@ function SystemsView({ clients, selectedId, setSelectedId, documentTemplates, sa
     setChecked((c) => ({ ...c, [name]: true }));
     setNewEmergencyName("");
   };
+  const syncFromIntake = () => {
+    const emergencies = client?.intake?.emergencies || [];
+    if (emergencies.length === 0) return;
+    const toTick = {};
+    emergencies.forEach((label) => {
+      if (label === "Other") {
+        const customLabel = (client.intake.emergencyOther || "").trim();
+        if (!customLabel) return;
+        if (!customErpItems.some((i) => i.label === customLabel)) addCustomErpItem(customLabel);
+        toTick[customLabel] = true;
+        return;
+      }
+      const mapped = SIGNUP_TO_ERP_LABELS[label];
+      if (mapped) {
+        mapped.forEach((m) => { toTick[m] = true; });
+      } else {
+        // No ERP content exists for this one yet (e.g. "Excavation collapse") — create it
+        // as a blank custom item rather than dropping it silently.
+        if (!customErpItems.some((i) => i.label === label)) addCustomErpItem(label);
+        toTick[label] = true;
+      }
+    });
+    setChecked((c) => ({ ...c, ...toTick }));
+  };
 
   useEffect(() => {
     setChecked(defaultChecked(client, category));
@@ -2237,6 +2281,12 @@ function SystemsView({ clients, selectedId, setSelectedId, documentTemplates, sa
                   <Plus size={12} /> Add
                 </button>
               </div>
+            )}
+            {categoryKey === "erp" && Array.isArray(client?.intake?.emergencies) && client.intake.emergencies.length > 0 && (
+              <button onClick={syncFromIntake} className="text-xs font-semibold px-2.5 py-1.5 rounded-lg mb-1 flex items-center justify-center gap-1.5"
+                style={{ background: T.paperAlt, color: T.tealDark }} title="Tick the emergencies this client selected on their sign-up form">
+                <Repeat size={12} /> Sync from sign-up form ({client.intake.emergencies.length})
+              </button>
             )}
             {items.map((label) => {
               const isAlways = category.alwaysLabels.includes(label);

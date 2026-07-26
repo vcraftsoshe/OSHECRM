@@ -51,11 +51,12 @@ const T = {
 
 const TEAM = ["Vanessa", "Sophie", "Judith", "Jo"];
 
-const stageOrder = ["New Lead", "Contacted", "Proposal Sent", "Won", "Lost"];
+const stageOrder = ["New Lead", "Contacted", "Proposal Sent", "Nurture", "Won", "Lost"];
 const stageMeta = {
   "New Lead": { color: T.slateLight, bg: "#EEF2F2" },
   "Contacted": { color: T.blue, bg: "#EAF1F4" },
   "Proposal Sent": { color: T.amber, bg: "#FBF1E3" },
+  "Nurture": { color: "#8B6BA8", bg: "#F2ECF7" },
   "Won": { color: T.tealDark, bg: "#E4F8F5" },
   "Lost": { color: T.coral, bg: "#F8EBE9" },
 };
@@ -184,6 +185,798 @@ const initialLeads = [
   { id: 3, company: "Foundation Plus", contact: "Tane Walker", value: "$18,000", stage: "Proposal Sent", formEmail: null, formStatus: "none", notes: [{ id: 1, text: "Wants a walk-through of the OHSMS builder before signing.", date: "2026-07-16" }] },
   { id: 4, company: "Summit Roofing Co", contact: "Grace Liu", value: "$5,000", stage: "Won", formEmail: "grace@summitroofing.co.nz", formStatus: "sent", notes: [] },
   { id: 5, company: "Harbour Fitout", contact: "Dana Reid", value: "$7,200", stage: "Lost", formEmail: null, formStatus: "none", notes: [{ id: 1, text: "Went with a competitor on price.", date: "2026-07-05" }] },
+];
+
+// Real pipeline data from the 2026-07-26 OSHE Sales Leads export (ClickUp), added directly
+// rather than through any upload UI. Deterministic ids ("lead-import-N") so the seeding
+// effect further down can add any missing ones without ever duplicating on a repeat load —
+// separate from initialLeads above, which is just placeholder demo data for a brand new,
+// never-used install.
+const importedLeads = [
+  {
+    "id": "lead-import-1",
+    "company": "MJ Excavators",
+    "contact": "",
+    "value": "",
+    "stage": "Won",
+    "formEmail": null,
+    "formStatus": "none",
+    "notes": [
+      {
+        "id": 1780000000000,
+        "type": "Note",
+        "text": "System is issued",
+        "date": "2026-07-27"
+      },
+      {
+        "id": 1780000000002,
+        "type": "Note",
+        "text": "Lead source: Referral",
+        "date": "2026-07-27"
+      }
+    ]
+  },
+  {
+    "id": "lead-import-2",
+    "company": "P3 Earthworks Limited",
+    "contact": "Nicole",
+    "value": "",
+    "stage": "Won",
+    "formEmail": "nicole@p3earthworks.co.nz",
+    "formStatus": "none",
+    "notes": [
+      {
+        "id": 1780000001000,
+        "type": "Note",
+        "text": "Emails back & froth with vanessa",
+        "date": "2026-07-27"
+      }
+    ]
+  },
+  {
+    "id": "lead-import-3",
+    "company": "The Hunters Club",
+    "contact": "Amber Shaw",
+    "value": "",
+    "stage": "Won",
+    "formEmail": "amber@parachute.nz",
+    "formStatus": "none",
+    "notes": []
+  },
+  {
+    "id": "lead-import-4",
+    "company": "Buildwells Builders",
+    "contact": "Nick",
+    "value": "",
+    "stage": "Won",
+    "formEmail": null,
+    "formStatus": "none",
+    "notes": [
+      {
+        "id": 1780000003000,
+        "type": "Note",
+        "text": "OSHE Details.msg",
+        "date": "2026-07-27"
+      }
+    ]
+  },
+  {
+    "id": "lead-import-5",
+    "company": "Effective Electrical",
+    "contact": "Connor",
+    "value": "",
+    "stage": "Won",
+    "formEmail": "connor@effectiveelectrical.co.nz",
+    "formStatus": "none",
+    "notes": [
+      {
+        "id": 1780000004000,
+        "type": "Note",
+        "text": "connor filling in the form today 29..6.26 - Responded to the email",
+        "date": "2026-07-27"
+      },
+      {
+        "id": 1780000004002,
+        "type": "Note",
+        "text": "Lead source: Referral",
+        "date": "2026-07-27"
+      },
+      {
+        "id": 1780000004003,
+        "type": "Reminder",
+        "text": "Follow up with Connor",
+        "date": "2026-07-27",
+        "dueDate": "2026-06-09",
+        "assignee": "Jo"
+      }
+    ]
+  },
+  {
+    "id": "lead-import-6",
+    "company": "SurfPrep",
+    "contact": "Ben Blair",
+    "value": "",
+    "stage": "Nurture",
+    "formEmail": "ben.blair@surfprep.co.nz",
+    "formStatus": "none",
+    "notes": [
+      {
+        "id": 1780000005000,
+        "type": "Note",
+        "text": "on hold - follow up in October",
+        "date": "2026-07-27"
+      },
+      {
+        "id": 1780000005002,
+        "type": "Note",
+        "text": "Lead source: Linkdn",
+        "date": "2026-07-27"
+      }
+    ]
+  },
+  {
+    "id": "lead-import-7",
+    "company": "Constructors",
+    "contact": "Etienne Buitendach",
+    "value": "",
+    "stage": "Nurture",
+    "formEmail": "Etienne.Buitendach@constructors.co.nz",
+    "formStatus": "none",
+    "notes": [
+      {
+        "id": 1780000006000,
+        "type": "Note",
+        "text": "have they booked in  @Vanessa Crafts ?",
+        "date": "2026-07-27"
+      },
+      {
+        "id": 1780000006002,
+        "type": "Note",
+        "text": "Lead source: Linkdn",
+        "date": "2026-07-27"
+      }
+    ]
+  },
+  {
+    "id": "lead-import-8",
+    "company": "Metro",
+    "contact": "Nick Hardy-Jones",
+    "value": "",
+    "stage": "Nurture",
+    "formEmail": "Nick.Hardy-Jones@metroglass.co.nz",
+    "formStatus": "none",
+    "notes": [
+      {
+        "id": 1780000007000,
+        "type": "Note",
+        "text": "can you call him to reschedule our meeting to discussed proposal we were supposed to catch up a few times now but keeps being missed by both of us  @Cearah Mulder   Metro Proposal.pdf",
+        "date": "2026-07-27"
+      }
+    ]
+  },
+  {
+    "id": "lead-import-9",
+    "company": "Iconiq Construction Group",
+    "contact": "Brooke Chambers",
+    "value": "",
+    "stage": "Nurture",
+    "formEmail": "admin@iconiqgroup.nz",
+    "formStatus": "none",
+    "notes": [
+      {
+        "id": 1780000008000,
+        "type": "Note",
+        "text": "Hi Vanessa,     Thanks for getting in touch.   We\u2019d be interested in exploring the software once our project workload increases. It has been a slower start to the year for us, so we will reconnect with you when the timing is better on our end.     Appreciate you reaching out.     Regards,",
+        "date": "2026-07-27"
+      },
+      {
+        "id": 1780000008002,
+        "type": "Note",
+        "text": "Lead source: Linkdn",
+        "date": "2026-07-27"
+      }
+    ]
+  },
+  {
+    "id": "lead-import-10",
+    "company": "Signature",
+    "contact": "Ivone Sass",
+    "value": "",
+    "stage": "Nurture",
+    "formEmail": "ivone@signature.net.nz",
+    "formStatus": "none",
+    "notes": [
+      {
+        "id": 1780000009000,
+        "type": "Note",
+        "text": "Hi Vanessa,   Thanks for reaching out\ud83d\ude0a.     The timing is not great currently; however, I do have your email address and will reach out when I am ready.       Kindest regards   Ivone Sass   Director   022 0710036",
+        "date": "2026-07-27"
+      },
+      {
+        "id": 1780000009002,
+        "type": "Note",
+        "text": "Lead source: Cold Outreach",
+        "date": "2026-07-27"
+      }
+    ]
+  },
+  {
+    "id": "lead-import-11",
+    "company": "Altus",
+    "contact": "Rangi Solomon",
+    "value": "",
+    "stage": "Nurture",
+    "formEmail": "rangi.solomon@altus.co.nz",
+    "formStatus": "none",
+    "notes": [
+      {
+        "id": 1780000010000,
+        "type": "Note",
+        "text": "Have you had time to draft a response for me for his email reply? @Vanessa Crafts",
+        "date": "2026-07-27"
+      },
+      {
+        "id": 1780000010002,
+        "type": "Note",
+        "text": "Lead source: Cold Outreach",
+        "date": "2026-07-27"
+      }
+    ]
+  },
+  {
+    "id": "lead-import-12",
+    "company": "Pollock & Crane",
+    "contact": "TBC",
+    "value": "",
+    "stage": "Nurture",
+    "formEmail": "TBC",
+    "formStatus": "none",
+    "notes": [
+      {
+        "id": 1780000011000,
+        "type": "Note",
+        "text": "have reached out to   Thomas Slater   e.  thomas@pollockcranes.co.nz   m. +64 21 843 088     waiting to hear back",
+        "date": "2026-07-27"
+      },
+      {
+        "id": 1780000011002,
+        "type": "Note",
+        "text": "Lead source: Referral",
+        "date": "2026-07-27"
+      }
+    ]
+  },
+  {
+    "id": "lead-import-13",
+    "company": "ContainerCo",
+    "contact": "Phil Rutland",
+    "value": "",
+    "stage": "Nurture",
+    "formEmail": "Phil.Rutland@containerco.co.nz",
+    "formStatus": "none",
+    "notes": [
+      {
+        "id": 1780000012000,
+        "type": "Note",
+        "text": "Phil called but he no longer works there,   Need a different contact",
+        "date": "2026-07-27"
+      },
+      {
+        "id": 1780000012002,
+        "type": "Note",
+        "text": "Lead source: Linkdn",
+        "date": "2026-07-27"
+      }
+    ]
+  },
+  {
+    "id": "lead-import-14",
+    "company": "Beejays",
+    "contact": "Katrina Robertson",
+    "value": "$9000",
+    "stage": "Nurture",
+    "formEmail": "katrina@beejays.co.nz",
+    "formStatus": "none",
+    "notes": [
+      {
+        "id": 1780000013000,
+        "type": "Note",
+        "text": "Rung Katrina  - she is going on maternity leave in 3 months time - (September) for 12 months - a new lady is starting so we need to ring her in October - they do want to change as they have 4 systems they use atm - Enable for HR, Safety Culture for daily pre starts & 2 she forgot - she wants to have one system & keep her HR one separate. @Vanessa Crafts",
+        "date": "2026-07-27"
+      },
+      {
+        "id": 1780000013002,
+        "type": "Note",
+        "text": "Lead source: Tradeshow",
+        "date": "2026-07-27"
+      }
+    ]
+  },
+  {
+    "id": "lead-import-15",
+    "company": "NZ Windows",
+    "contact": "Chloe Morgan",
+    "value": "",
+    "stage": "Nurture",
+    "formEmail": "chloem@nzwindows.co.nz",
+    "formStatus": "none",
+    "notes": [
+      {
+        "id": 1780000014000,
+        "type": "Note",
+        "text": "updated Vanessa, i have put a date on it & tagged us both in, i also have this in my outlook to follow up then. @Vanessa Crafts",
+        "date": "2026-07-27"
+      },
+      {
+        "id": 1780000014002,
+        "type": "Note",
+        "text": "Lead source: Linkdn",
+        "date": "2026-07-27"
+      }
+    ]
+  },
+  {
+    "id": "lead-import-16",
+    "company": "Christchurch Attractions",
+    "contact": "Marty Byrne",
+    "value": "",
+    "stage": "Nurture",
+    "formEmail": "Marty@christchurchattractions.nz",
+    "formStatus": "none",
+    "notes": [
+      {
+        "id": 1780000015000,
+        "type": "Note",
+        "text": "Last coms - With the recent resignation of our Tram Ops Manager we are about to recruit for a replacement so I really need them on board before we have a good look at where we are in the H & S space.   At this stage I expect that to be some time in late June.",
+        "date": "2026-07-27"
+      },
+      {
+        "id": 1780000015002,
+        "type": "Note",
+        "text": "Lead source: Linkdn",
+        "date": "2026-07-27"
+      }
+    ]
+  },
+  {
+    "id": "lead-import-17",
+    "company": "Port of Tauranga",
+    "contact": "Karl Trask",
+    "value": "",
+    "stage": "Nurture",
+    "formEmail": "Karl.Trask@port-tauranga.co.nz",
+    "formStatus": "none",
+    "notes": [
+      {
+        "id": 1780000016000,
+        "type": "Note",
+        "text": "phoned Karl - he put me onto Karen (carin) 027 252 9094 as she is the decision maker if they change - she advised that they are not looking for a new software for POT - but speak with Pat as he may beg to differ - phone Pat Kirk, he was in a meeting and asked if i could call him back Monday afternoon. @Vanessa Crafts",
+        "date": "2026-07-27"
+      },
+      {
+        "id": 1780000016002,
+        "type": "Note",
+        "text": "Lead source: Cold Outreach",
+        "date": "2026-07-27"
+      },
+      {
+        "id": 1780000016003,
+        "type": "Reminder",
+        "text": "Follow up with Karl Trask",
+        "date": "2026-07-27",
+        "dueDate": "2026-06-15",
+        "assignee": "Vanessa"
+      }
+    ]
+  },
+  {
+    "id": "lead-import-18",
+    "company": "Livingstone",
+    "contact": "",
+    "value": "",
+    "stage": "Nurture",
+    "formEmail": null,
+    "formStatus": "none",
+    "notes": [
+      {
+        "id": 1780000017000,
+        "type": "Note",
+        "text": "Kim Wihare is the GM - People, Culture & Safety - 029-264-1056   image.png   phoned Kim left a message to call me bacl - I will follow this up if she hasn't phoned me by Monday arvo. @Vanessa Crafts",
+        "date": "2026-07-27"
+      },
+      {
+        "id": 1780000017002,
+        "type": "Note",
+        "text": "Lead source: Cold Outreach",
+        "date": "2026-07-27"
+      }
+    ]
+  },
+  {
+    "id": "lead-import-19",
+    "company": "Universal Cranes",
+    "contact": "Shane",
+    "value": "",
+    "stage": "Nurture",
+    "formEmail": "shane.fraser@universalcranes.co.nz",
+    "formStatus": "none",
+    "notes": [
+      {
+        "id": 1780000018002,
+        "type": "Note",
+        "text": "Lead source: Linkdn",
+        "date": "2026-07-27"
+      }
+    ]
+  },
+  {
+    "id": "lead-import-20",
+    "company": "Stabicraft",
+    "contact": "",
+    "value": "",
+    "stage": "Nurture",
+    "formEmail": null,
+    "formStatus": "none",
+    "notes": []
+  },
+  {
+    "id": "lead-import-21",
+    "company": "The Civil Collective",
+    "contact": "Tracy Davis (its a Dude)",
+    "value": "",
+    "stage": "Nurture",
+    "formEmail": "tracy@thecivilcollective.co.nz",
+    "formStatus": "none",
+    "notes": [
+      {
+        "id": 1780000020000,
+        "type": "Note",
+        "text": "Called Tracey he said still having cashflow problems so call back in 2 months @Vanessa Crafts",
+        "date": "2026-07-27"
+      },
+      {
+        "id": 1780000020003,
+        "type": "Reminder",
+        "text": "Follow up with Tracy Davis (its a Dude)",
+        "date": "2026-07-27",
+        "dueDate": "2026-08-10",
+        "assignee": "Vanessa"
+      }
+    ]
+  },
+  {
+    "id": "lead-import-22",
+    "company": "Rapid Slabs",
+    "contact": "Trang Jones",
+    "value": "",
+    "stage": "Nurture",
+    "formEmail": "contactus@rapidslabs.co.nz",
+    "formStatus": "none",
+    "notes": [
+      {
+        "id": 1780000021000,
+        "type": "Note",
+        "text": "spoke with Trang she said they are not ready to move yet - but i will touch base with her in about 5 months time to see how they are going  @Vanessa Crafts @Judith Page",
+        "date": "2026-07-27"
+      },
+      {
+        "id": 1780000021002,
+        "type": "Note",
+        "text": "Lead source: Social Media",
+        "date": "2026-07-27"
+      },
+      {
+        "id": 1780000021003,
+        "type": "Reminder",
+        "text": "Follow up with Trang Jones",
+        "date": "2026-07-27",
+        "dueDate": "2026-06-18",
+        "assignee": "Jo"
+      }
+    ]
+  },
+  {
+    "id": "lead-import-23",
+    "company": "Halter",
+    "contact": "Kirby",
+    "value": "",
+    "stage": "Nurture",
+    "formEmail": "kirby.wotherspoon@halter.co.nz",
+    "formStatus": "none",
+    "notes": [
+      {
+        "id": 1780000022000,
+        "type": "Note",
+        "text": "Vanessa had contact to do external reviews but did not pitch the software - email will be sent from vanessa to chat to Kirby about this",
+        "date": "2026-07-27"
+      },
+      {
+        "id": 1780000022003,
+        "type": "Reminder",
+        "text": "Follow up with Kirby",
+        "date": "2026-07-27",
+        "dueDate": "2026-05-25",
+        "assignee": "Vanessa"
+      }
+    ]
+  },
+  {
+    "id": "lead-import-24",
+    "company": "Aqua Vent Mechanics",
+    "contact": "027 496 9313",
+    "value": "",
+    "stage": "Proposal Sent",
+    "formEmail": "steven@aquavent.co.nz",
+    "formStatus": "none",
+    "notes": [
+      {
+        "id": 1780000023000,
+        "type": "Note",
+        "text": "have phoned left a text message for Steven to call me",
+        "date": "2026-07-27"
+      },
+      {
+        "id": 1780000023002,
+        "type": "Note",
+        "text": "Lead source: Social Media",
+        "date": "2026-07-27"
+      }
+    ]
+  },
+  {
+    "id": "lead-import-25",
+    "company": "Northwest Electrical",
+    "contact": "",
+    "value": "",
+    "stage": "Proposal Sent",
+    "formEmail": null,
+    "formStatus": "none",
+    "notes": [
+      {
+        "id": 1780000024000,
+        "type": "Note",
+        "text": "12/7 demo had with owner another had with Bronywn 16/7 - follow up next week  @jo",
+        "date": "2026-07-27"
+      },
+      {
+        "id": 1780000024002,
+        "type": "Note",
+        "text": "Lead source: Linkdn",
+        "date": "2026-07-27"
+      }
+    ]
+  },
+  {
+    "id": "lead-import-26",
+    "company": "Shawn Williamson Building",
+    "contact": "Rebecca",
+    "value": "",
+    "stage": "Proposal Sent",
+    "formEmail": "safety@shawnwilliamson.co.nz",
+    "formStatus": "none",
+    "notes": [
+      {
+        "id": 1780000025000,
+        "type": "Note",
+        "text": "tired to ring rebecca she is not in today - so have moved the FU date to Monday",
+        "date": "2026-07-27"
+      }
+    ]
+  },
+  {
+    "id": "lead-import-27",
+    "company": "Holtz Construction",
+    "contact": "Jurie (pronouced URY)",
+    "value": "",
+    "stage": "Proposal Sent",
+    "formEmail": "jurie@holtzconstruction.co.nz",
+    "formStatus": "none",
+    "notes": [
+      {
+        "id": 1780000026000,
+        "type": "Note",
+        "text": "FU Monday 27.7.26 with vanessa",
+        "date": "2026-07-27"
+      }
+    ]
+  },
+  {
+    "id": "lead-import-28",
+    "company": "Free Flow Drains",
+    "contact": "Roger Rao",
+    "value": "",
+    "stage": "Proposal Sent",
+    "formEmail": "roger@freeflowdrains.co.nz",
+    "formStatus": "none",
+    "notes": [
+      {
+        "id": 1780000027000,
+        "type": "Note",
+        "text": "have contacted rodger - he is going to find out a little more on what we talked about with extension for their systems, he still said lets talk in 1 month - he said thank you for caring about the exp date & binding into a contract that he dosen't want anymore - @Vanessa Crafts",
+        "date": "2026-07-27"
+      },
+      {
+        "id": 1780000027002,
+        "type": "Note",
+        "text": "Lead source: Tradeshow",
+        "date": "2026-07-27"
+      }
+    ]
+  },
+  {
+    "id": "lead-import-29",
+    "company": "Pro Construction",
+    "contact": "Paul",
+    "value": "",
+    "stage": "Proposal Sent",
+    "formEmail": "info@proconstruction.co.nz",
+    "formStatus": "none",
+    "notes": [
+      {
+        "id": 1780000028000,
+        "type": "Note",
+        "text": "spoke with Paul on 17.6.26 he said he would like to wait until the end of his job at Rita - have put a date on to ring him at the end of august a she needs H & S in place prior to his next big job -",
+        "date": "2026-07-27"
+      },
+      {
+        "id": 1780000028003,
+        "type": "Reminder",
+        "text": "Follow up with Paul",
+        "date": "2026-07-27",
+        "dueDate": "2026-06-09",
+        "assignee": "Jo"
+      }
+    ]
+  },
+  {
+    "id": "lead-import-30",
+    "company": "Diamond Scaffolding",
+    "contact": "Lance",
+    "value": "",
+    "stage": "Proposal Sent",
+    "formEmail": "Lance@diamondscaffolding.co.nz",
+    "formStatus": "none",
+    "notes": [
+      {
+        "id": 1780000029000,
+        "type": "Note",
+        "text": "spoke to lance, he wants to come on board but his site app pro doesn't expire until September, but Vanessa has offered Lance to join now & bill in september - have phoned lance to inform him hasn't returned my call as yet",
+        "date": "2026-07-27"
+      },
+      {
+        "id": 1780000029003,
+        "type": "Reminder",
+        "text": "Follow up with Lance",
+        "date": "2026-07-27",
+        "dueDate": "2026-05-29",
+        "assignee": "Vanessa"
+      }
+    ]
+  },
+  {
+    "id": "lead-import-31",
+    "company": "Condor Civil",
+    "contact": "Mark Suckling",
+    "value": "",
+    "stage": "Proposal Sent",
+    "formEmail": "mark.s@condorcivil.co.nz",
+    "formStatus": "none",
+    "notes": [
+      {
+        "id": 1780000030000,
+        "type": "Note",
+        "text": "Hi Mark,   My apologies, I thought I'd already sent this through. As promised, here's some further info.   OSHE is a user-centric app that creates seamless workflows across the business, keeping your management of health and safety consistent. It can be set up as a DIY solution, with us on call for any support or questions along the way. We also have highly qualified consultants on hand if you need further support, such as SOP development, site reviews, or pre-quals.   Our pricing for 25 users starts at $249+GST. This includes a complete OHSM, with policies and procedures to ensure your documentation aligns with the online system.   We also offer a complimentary one-hour onboarding session to get you up to speed and talk through setup. Further support after that is $130+GST per hour.   If you're keen to move ahead, you can complete your sign-up\u00a0 here \u00a0and we'll get the team started on setup ASAP.   Any further questions, feel free to give me a call or reply to this email.   Vanessa   SENT 20/7/26",
+        "date": "2026-07-27"
+      },
+      {
+        "id": 1780000030003,
+        "type": "Reminder",
+        "text": "Follow up with Mark Suckling",
+        "date": "2026-07-27",
+        "dueDate": "2026-05-28",
+        "assignee": "Jo"
+      }
+    ]
+  },
+  {
+    "id": "lead-import-32",
+    "company": "Seamless Builders",
+    "contact": "Amy or Jordon",
+    "value": "",
+    "stage": "New Lead",
+    "formEmail": "amy@seamlessbuilders.co.nz",
+    "formStatus": "none",
+    "notes": [
+      {
+        "id": 1780000031000,
+        "type": "Note",
+        "text": "rung didn't answer so will call back monday",
+        "date": "2026-07-27"
+      },
+      {
+        "id": 1780000031002,
+        "type": "Note",
+        "text": "Lead source: Cold Outreach",
+        "date": "2026-07-27"
+      }
+    ]
+  },
+  {
+    "id": "lead-import-33",
+    "company": "Rachael Stanton",
+    "contact": "",
+    "value": "",
+    "stage": "New Lead",
+    "formEmail": "info@haurakitress.co.nz",
+    "formStatus": "none",
+    "notes": [
+      {
+        "id": 1780000032000,
+        "type": "Note",
+        "text": "Emailed Rachael to FU - we had spoke a while back but she never got back to me with any feedback with an appointment",
+        "date": "2026-07-27"
+      }
+    ]
+  },
+  {
+    "id": "lead-import-34",
+    "company": "CES Electrical",
+    "contact": "Duane",
+    "value": "",
+    "stage": "New Lead",
+    "formEmail": "duane@ceselectrical.co.nz",
+    "formStatus": "none",
+    "notes": [
+      {
+        "id": 1780000033000,
+        "type": "Note",
+        "text": "emailed duane about a FU for a chat or demo",
+        "date": "2026-07-27"
+      },
+      {
+        "id": 1780000033003,
+        "type": "Reminder",
+        "text": "Follow up with Duane",
+        "date": "2026-07-27",
+        "dueDate": "2026-05-22",
+        "assignee": "Jo"
+      }
+    ]
+  },
+  {
+    "id": "lead-import-35",
+    "company": "Brendan Attewell",
+    "contact": "",
+    "value": "",
+    "stage": "New Lead",
+    "formEmail": "brendan@workingload.com",
+    "formStatus": "none",
+    "notes": [
+      {
+        "id": 1780000034000,
+        "type": "Note",
+        "text": "Have emailed Natalie to FU",
+        "date": "2026-07-27"
+      }
+    ]
+  },
+  {
+    "id": "lead-import-36",
+    "company": "XERO Reconcille Invoices",
+    "contact": "",
+    "value": "",
+    "stage": "New Lead",
+    "formEmail": null,
+    "formStatus": "none",
+    "notes": [
+      {
+        "id": 1780000035000,
+        "type": "Note",
+        "text": "@Vanessa Crafts",
+        "date": "2026-07-27"
+      }
+    ]
+  }
 ];
 
 const initialTasks = [
@@ -3416,7 +4209,7 @@ function DashboardsView({ clients, tasks, touchpointBaselines, updateTouchpointB
   const active = clients.filter((c) => !c.archived);
   const groups = CLIENT_PROFILES.map((p) => ({ profile: p, list: active.filter((c) => (c.profile || "Standard Client") === p) }));
   const [baselinesOpen, setBaselinesOpen] = useState(false);
-  const PERIOD_OPTIONS = [["Weekly", 7], ["Fortnightly", 14], ["Monthly", 30]];
+  const PERIOD_OPTIONS = [["Monthly", 30], ["Bi-monthly", 60], ["Quarterly", 90], ["6-monthly", 180]];
 
   return (
     <div className="flex flex-col gap-8">
@@ -3733,6 +4526,7 @@ function parseCsv(text) {
 }
 
 function reportKey(clientId, monthYear) { return `${clientId}__${monthYear}`; }
+
 
 function currentMonthYear() { return new Date().toISOString().slice(0, 7); }
 
@@ -4613,10 +5407,11 @@ export default function App() {
   // Leads now live in Firestore, same pattern as clients: live subscription plus a
   // one-time seed of the mock data using the same ids so nothing else breaks.
   const [leads, setLeads] = useState([]);
+  const [leadsLoaded, setLeadsLoaded] = useState(false);
   useEffect(() => {
     const unsub = onSnapshot(
       collection(db, "leads"),
-      (snap) => setLeads(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
+      (snap) => { setLeads(snap.docs.map((d) => ({ id: d.id, ...d.data() }))); setLeadsLoaded(true); },
       (err) => console.error("Leads subscription failed:", err)
     );
     return unsub;
@@ -4638,6 +5433,21 @@ export default function App() {
       }
     })();
   }, []);
+  // Adds the real imported pipeline (importedLeads, above) by fixed id — only once the
+  // live snapshot has actually loaded (leadsLoaded), so this never mistakes "still
+  // loading" for "doesn't exist yet" and overwrites something someone's since edited in
+  // the app. Only ever adds whichever of the 36 aren't already present; never touches the
+  // rest of the leads collection.
+  useEffect(() => {
+    if (!leadsLoaded) return;
+    const existingIds = new Set(leads.map((l) => l.id));
+    importedLeads.forEach((l) => {
+      if (!existingIds.has(l.id)) {
+        const { id, ...data } = l;
+        setDoc(doc(db, "leads", id), data);
+      }
+    });
+  }, [leadsLoaded, leads]);
   // My Tasks — real Firestore collection, one doc per task.
   const [tasks, setTasks] = useState([]);
   useEffect(() => {

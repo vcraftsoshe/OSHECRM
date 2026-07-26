@@ -3,7 +3,7 @@ import {
   Users, TrendingUp, Bell, Building2, CreditCard, StickyNote,
   ChevronRight, Plus, Check, Upload, Calendar, X, Search,
   ClipboardList, Layers, Circle, CheckCircle2, Image as ImageIcon,
-  Repeat, Trash2, ListChecks, ListTodo, Mail, ArrowUpRight, Store, LayoutDashboard, ChevronDown, Smartphone, FileText, CalendarClock
+  Repeat, Trash2, ListChecks, ListTodo, Mail, ArrowUpRight, Store, LayoutDashboard, ChevronDown, Smartphone, FileText, CalendarClock, MessageCircle
 } from "lucide-react";
 import { collection, doc, onSnapshot, updateDoc, setDoc, getDocs, getDoc, deleteDoc } from "firebase/firestore";
 import { signOut } from "firebase/auth";
@@ -217,6 +217,37 @@ const initialResellers = [
 
 function today() { return new Date().toISOString().slice(0, 10); }
 
+// A small "done!" chime for completing a task/reminder — synthesized with the Web Audio
+// API rather than a bundled audio file, so there's nothing to host or fail to load. A
+// quick two-note major-third rise (like a soft xylophone tap), low volume, self-cleans up
+// after it plays. Wrapped in try/catch since some browsers block audio before any user
+// gesture has happened on the page at all — better to silently skip than throw.
+function playCompletionChime() {
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const notes = [523.25, 659.25]; // C5, E5
+    notes.forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      const startTime = ctx.currentTime + i * 0.09;
+      gain.gain.setValueAtTime(0, startTime);
+      gain.gain.linearRampToValueAtTime(0.12, startTime + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0001, startTime + 0.35);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(startTime);
+      osc.stop(startTime + 0.4);
+    });
+    setTimeout(() => ctx.close(), 700);
+  } catch (err) {
+    // Audio is a nice-to-have here, never worth surfacing an error over.
+  }
+}
+
 // A short two-tone chime, synthesized in-browser — no audio file needed.
 function playChime() {
   try {
@@ -401,6 +432,18 @@ function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, wor
 }
 
 /* ---------- Clients module ---------- */
+// Shared by ClientsView's "Mark issued today" button and the Manual PDF download — an
+// OHSMS review reminder always has this shape: fires 30 days before the actual due date
+// (an early-warning buffer, not the due date itself), yearly, assigned to Jo.
+function ohsmsAnnualReminder(dueDate) {
+  return { id: "ohsms-annual-review", text: "OHSMS annual review due", date: addDays(dueDate, -30), recurring: "yearly", done: false, assignee: "Jo" };
+}
+function upsertOhsmsReminder(reminders, dueDate) {
+  const reminder = ohsmsAnnualReminder(dueDate);
+  const idx = (reminders || []).findIndex((r) => r.id === "ohsms-annual-review");
+  return idx >= 0 ? reminders.map((r, i) => (i === idx ? reminder : r)) : [...(reminders || []), reminder];
+}
+
 function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOnboardingsForClient, workflows, pushNotification, goToWorkflows, tabRequest }) {
   const client = clients.find((c) => c.id === selectedId) || clients[0];
   const [tab, setTab] = useState("overview");
@@ -460,7 +503,7 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
       billingType: newClientForm.billingType, billingSetupDone: true, profile: newClientForm.profile,
       contacts: [], notes: [], reminders: [], extras: [],
       hours: { included: Number(newClientForm.includedHours) || 0, log: [] }, users: { log: [] },
-      ohsmsLastIssued: lastIssued, ohsmsDue: lastIssued ? addDays(lastIssued, 365) : addDays(today(), 365),
+      ohsmsLastIssued: lastIssued, ohsmsDue: lastIssued ? addDays(lastIssued, 365) : null,
       intake: null,
     });
     setSelectedId(id);
@@ -520,12 +563,7 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
   // has to remember to add it by hand. Fires 1 month before the review is due, matching the
   // "Redo reminder" card's stated behavior. Uses a fixed id so re-issuing updates the same
   // reminder rather than piling up duplicates.
-  const withOhsmsReminder = (c, dueDate) => {
-    const reminder = { id: "ohsms-annual-review", text: "OHSMS annual review due", date: addDays(dueDate, -30), recurring: "yearly", done: false, assignee: "Jo" };
-    const idx = c.reminders.findIndex((r) => r.id === "ohsms-annual-review");
-    const reminders = idx >= 0 ? c.reminders.map((r, i) => (i === idx ? reminder : r)) : [...c.reminders, reminder];
-    return { ...c, reminders };
-  };
+  const withOhsmsReminder = (c, dueDate) => ({ ...c, reminders: upsertOhsmsReminder(c.reminders, dueDate) });
   const addReminder = () => {
     if (!newReminder.text.trim() || !newReminder.date) return;
     updateClient((c) => ({ ...c, reminders: [...c.reminders, { id: Date.now(), ...newReminder, done: false }] }));
@@ -535,22 +573,26 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
   // logs a note so it counts as a client touchpoint on the dashboard heatmap, and — if it's
   // a recurring reminder — immediately reopens it at its next due date rather than leaving it
   // permanently ticked off, so the next occurrence isn't lost.
-  const toggleReminderDone = (id) => updateClient((c) => {
-    const reminder = c.reminders.find((r) => r.id === id);
-    if (!reminder) return c;
-    const completing = !reminder.done;
-    let reminders;
-    if (completing && reminder.recurring !== "none") {
-      const nextDate = addDays(reminder.date, reminder.recurring === "yearly" ? 365 : 30);
-      reminders = c.reminders.map((r) => (r.id === id ? { ...r, date: nextDate, done: false } : r));
-    } else {
-      reminders = c.reminders.map((r) => (r.id === id ? { ...r, done: !r.done } : r));
-    }
-    const notes = completing
-      ? [...c.notes, { id: Date.now(), author: "You", date: today(), text: `Completed reminder: "${reminder.text}"` }]
-      : c.notes;
-    return { ...c, reminders, notes };
-  });
+  const toggleReminderDone = (id) => {
+    const reminder = client.reminders.find((r) => r.id === id);
+    if (reminder && !reminder.done) playCompletionChime();
+    updateClient((c) => {
+      const reminder = c.reminders.find((r) => r.id === id);
+      if (!reminder) return c;
+      const completing = !reminder.done;
+      let reminders;
+      if (completing && reminder.recurring !== "none") {
+        const nextDate = addDays(reminder.date, reminder.recurring === "yearly" ? 365 : 30);
+        reminders = c.reminders.map((r) => (r.id === id ? { ...r, date: nextDate, done: false } : r));
+      } else {
+        reminders = c.reminders.map((r) => (r.id === id ? { ...r, done: !r.done } : r));
+      }
+      const notes = completing
+        ? [...c.notes, { id: Date.now(), author: "You", date: today(), text: `Completed reminder: "${reminder.text}"` }]
+        : c.notes;
+      return { ...c, reminders, notes };
+    });
+  };
   const removeReminder = (id) => updateClient((c) => ({ ...c, reminders: c.reminders.filter((r) => r.id !== id) }));
 
   const dueIn = daysUntil(client.ohsmsDue);
@@ -2317,6 +2359,17 @@ function SystemsView({ clients, selectedId, setSelectedId, documentTemplates, sa
                   setDownloading(true);
                   try {
                     await downloadBuildPdf({ client, category, categoryKey, included, documentTemplates });
+                    if (categoryKey === "sections") {
+                      // Downloading the Manual is the actual moment it's issued to the
+                      // client — that's what should set the date of issue, not a default
+                      // picked when the client record was first created.
+                      const issueDate = today();
+                      const dueDate = addDays(issueDate, 365);
+                      await updateDoc(doc(db, "clients", client.id), {
+                        ohsmsLastIssued: issueDate, ohsmsDue: dueDate,
+                        reminders: upsertOhsmsReminder(client.reminders, dueDate),
+                      });
+                    }
                   } catch (err) {
                     console.error("PDF download failed:", err);
                     alert(`Couldn't generate the PDF: ${err.message || err}`);
@@ -2503,13 +2556,28 @@ function SalesView({ leads, convertLeadToClient }) {
     setShowAddLead(false);
   };
 
+  const getDraft = (leadId) => noteDrafts[leadId] || { type: "Note", text: "", dueDate: "", assignee: TEAM[0] };
+  const setDraftField = (leadId, field, value) => setNoteDrafts((d) => ({ ...d, [leadId]: { ...getDraft(leadId), [field]: value } }));
+
+  // Notes/reminders/touchpoints logged against a lead aren't just sales-stage scratch —
+  // they're the start of this client's history, so they need a real type on them (not just
+  // free text) so convertLeadToClient can file each one into the right place on the client
+  // record (reminders vs notes) once the lead signs up, instead of the history evaporating.
   const addNote = (leadId) => {
-    const text = noteDrafts[leadId];
-    if (!text || !text.trim()) return;
+    const draft = getDraft(leadId);
+    if (!draft.text || !draft.text.trim()) return;
+    if (draft.type === "Reminder" && !draft.dueDate) return;
     const lead = leads.find((l) => l.id === leadId);
     if (!lead) return;
-    updateDoc(doc(db, "leads", leadId), { notes: [...lead.notes, { id: Date.now(), text, date: today() }] });
-    setNoteDrafts({ ...noteDrafts, [leadId]: "" });
+    const entry = { id: Date.now(), type: draft.type, text: draft.text.trim(), date: today() };
+    if (draft.type === "Reminder") { entry.dueDate = draft.dueDate; entry.assignee = draft.assignee; }
+    updateDoc(doc(db, "leads", leadId), { notes: [...lead.notes, entry] });
+    setNoteDrafts((d) => ({ ...d, [leadId]: { type: "Note", text: "", dueDate: "", assignee: draft.assignee } }));
+  };
+  const noteTypeMeta = {
+    Note: { icon: StickyNote, color: T.slate, bg: T.paperAlt },
+    Reminder: { icon: Bell, color: T.amber, bg: "#FBF1E3" },
+    Touchpoint: { icon: MessageCircle, color: T.tealDark, bg: "#E4F8F5" },
   };
 
   return (
@@ -2537,13 +2605,13 @@ function SalesView({ leads, convertLeadToClient }) {
           const meta = stageMeta[stage];
           return (
             <div key={stage} className="w-72 shrink-0 flex flex-col gap-3">
-              <div className="flex items-center justify-between px-1">
-                <div className="flex items-center gap-2"><span style={{ width: 8, height: 8, borderRadius: 999, background: meta.color }} /><span className="text-sm font-semibold" style={{ color: T.ink }}>{stage}</span></div>
-                <span className="text-xs font-semibold" style={{ color: T.slate }}>{items.length}</span>
+              <div className="flex items-center justify-between px-3 py-2 rounded-lg" style={{ background: meta.bg }}>
+                <div className="flex items-center gap-2"><span style={{ width: 8, height: 8, borderRadius: 999, background: meta.color }} /><span className="text-sm font-semibold" style={{ color: meta.color }}>{stage}</span></div>
+                <span className="text-xs font-bold px-2 py-0.5 rounded-full" style={{ color: meta.color, background: T.card }}>{items.length}</span>
               </div>
               <div className="flex flex-col gap-2 overflow-y-auto">
                 {items.map((l) => (
-                  <Card key={l.id} style={{ padding: 12, borderTop: `3px solid ${meta.color}` }}>
+                  <Card key={l.id} style={{ padding: 12, borderTop: `4px solid ${meta.color}`, borderTopLeftRadius: 10, borderTopRightRadius: 10, boxShadow: "0 1px 3px rgba(21,36,35,0.06)" }}>
                     <div className="flex items-center justify-between">
                       <div className="text-sm font-semibold" style={{ color: T.ink }}>{l.company}</div>
                       <select value={l.stage} onChange={(e) => setStage(l.id, e.target.value)}
@@ -2581,18 +2649,48 @@ function SalesView({ leads, convertLeadToClient }) {
 
                     <button onClick={() => setExpandedNotes({ ...expandedNotes, [l.id]: !expandedNotes[l.id] })}
                       className="flex items-center gap-1.5 text-[11px] font-semibold mt-3 pt-2" style={{ color: T.slate, borderTop: `1px solid ${T.border}` }}>
-                      <StickyNote size={12} /> {l.notes.length > 0 ? `${l.notes.length} note${l.notes.length > 1 ? "s" : ""}` : "Add note"}
+                      <StickyNote size={12} /> {l.notes.length > 0 ? `${l.notes.length} entr${l.notes.length > 1 ? "ies" : "y"}` : "Add note, reminder, or touchpoint"}
                     </button>
                     {expandedNotes[l.id] && (
                       <div className="flex flex-col gap-1.5 mt-2">
-                        {l.notes.map((n) => (
-                          <div key={n.id} className="text-xs rounded-lg p-2" style={{ background: T.paperAlt, color: T.ink }}>
-                            {n.text}<div className="text-[10px] mt-0.5" style={{ color: T.slateLight }}>{fmtDate(n.date)}</div>
+                        {l.notes.map((n) => {
+                          const tm = noteTypeMeta[n.type] || noteTypeMeta.Note;
+                          const TypeIcon = tm.icon;
+                          return (
+                            <div key={n.id} className="text-xs rounded-lg p-2" style={{ background: tm.bg, color: T.ink }}>
+                              <div className="flex items-center gap-1.5 mb-0.5">
+                                <TypeIcon size={11} color={tm.color} />
+                                <span className="font-semibold" style={{ color: tm.color }}>{n.type || "Note"}</span>
+                              </div>
+                              {n.text}
+                              <div className="text-[10px] mt-0.5" style={{ color: T.slateLight }}>
+                                {n.type === "Reminder" ? `Due ${fmtDate(n.dueDate)} — ${n.assignee}` : fmtDate(n.date)}
+                              </div>
+                            </div>
+                          );
+                        })}
+                        <div className="flex flex-col gap-1.5 mt-1">
+                          <div className="flex items-center gap-1.5">
+                            <select value={getDraft(l.id).type} onChange={(e) => setDraftField(l.id, "type", e.target.value)}
+                              className="text-[11px] px-1.5 py-1.5 rounded-lg outline-none shrink-0" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
+                              <option value="Note">Note</option>
+                              <option value="Reminder">Reminder</option>
+                              <option value="Touchpoint">Touchpoint log</option>
+                            </select>
+                            <input placeholder={getDraft(l.id).type === "Reminder" ? "Reminder text..." : getDraft(l.id).type === "Touchpoint" ? "What happened..." : "Note..."}
+                              value={getDraft(l.id).text} onChange={(e) => setDraftField(l.id, "text", e.target.value)}
+                              className="flex-1 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
                           </div>
-                        ))}
-                        <div className="flex items-center gap-1.5">
-                          <input placeholder="Note..." value={noteDrafts[l.id] || ""} onChange={(e) => setNoteDrafts({ ...noteDrafts, [l.id]: e.target.value })}
-                            className="flex-1 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+                          {getDraft(l.id).type === "Reminder" && (
+                            <div className="flex items-center gap-1.5">
+                              <input type="date" value={getDraft(l.id).dueDate} onChange={(e) => setDraftField(l.id, "dueDate", e.target.value)}
+                                className="text-[11px] px-1.5 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+                              <select value={getDraft(l.id).assignee} onChange={(e) => setDraftField(l.id, "assignee", e.target.value)}
+                                className="text-[11px] px-1.5 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
+                                {TEAM.map((m) => <option key={m} value={m}>{m}</option>)}
+                              </select>
+                            </div>
+                          )}
                           <button onClick={() => addNote(l.id)} className="text-[11px] font-semibold px-2 py-1.5 rounded-lg shrink-0" style={{ background: T.tealDark, color: "#fff" }}>Add</button>
                         </div>
                       </div>
@@ -2997,6 +3095,7 @@ function TasksView({ tasks, clients, onboardings, currentUser, goToClient, resel
     // Crossing a task off is what counts as its completion date now — no separate
     // "mark complete" step, so stamp it here and clear it again if someone unticks it.
     updateDoc(doc(db, "tasks", id), { done: nowDone, completedDate: nowDone ? today() : null });
+    if (nowDone) playCompletionChime();
   };
   const deleteTaskPermanently = (id) => deleteDoc(doc(db, "tasks", id));
   const setPriority = (id, priority) => updateDoc(doc(db, "tasks", id), { priority });
@@ -3143,21 +3242,23 @@ function TasksView({ tasks, clients, onboardings, currentUser, goToClient, resel
 }
 
 /* ---------- Notifications bell ---------- */
-function NotificationsBell({ notifications, dismissNotification, reminderCount, currentUser }) {
+function NotificationsBell({ notifications, dismissNotification, upcomingReminders, currentUser, goToClient }) {
   const [open, setOpen] = useState(false);
   const active = notifications.filter((n) => !n.dismissed && n.forPerson === currentUser);
+  const myReminders = upcomingReminders.filter((r) => r.assignee === currentUser);
   const dismiss = (id) => dismissNotification(id);
+  const openReminder = (r) => { setOpen(false); goToClient(r.clientId, "reminders"); };
 
   return (
     <div className="relative">
       <button onClick={() => setOpen((v) => !v)} className="flex items-center gap-2 px-3 py-2 rounded-lg" style={{ background: T.paperAlt }}>
         <Bell size={14} color={T.slate} />
-        <span className="text-xs font-medium" style={{ color: T.ink }}>{active.length + reminderCount} updates</span>
+        <span className="text-xs font-medium" style={{ color: T.ink }}>{active.length + myReminders.length} updates</span>
       </button>
       {open && (
-        <div className="absolute right-0 top-11 w-80 rounded-xl z-10" style={{ background: T.card, border: `1px solid ${T.border}`, boxShadow: "0 8px 24px rgba(0,0,0,0.08)" }}>
+        <div className="absolute right-0 top-11 w-80 rounded-xl z-10 max-h-96 overflow-y-auto" style={{ background: T.card, border: `1px solid ${T.border}`, boxShadow: "0 8px 24px rgba(0,0,0,0.08)" }}>
           <div className="text-xs font-semibold uppercase tracking-wide px-4 pt-3 pb-2" style={{ color: T.slate }}>Notifications for {currentUser}</div>
-          {active.length === 0 && <div className="text-xs px-4 pb-3" style={{ color: T.slateLight }}>Nothing waiting.</div>}
+          {active.length === 0 && myReminders.length === 0 && <div className="text-xs px-4 pb-3" style={{ color: T.slateLight }}>Nothing waiting.</div>}
           {active.map((n) => (
             <div key={n.id} className="flex items-start justify-between gap-2 px-4 py-2.5" style={{ borderTop: `1px solid ${T.border}` }}>
               <div className="text-xs" style={{ color: T.ink }}>{n.message}</div>
@@ -3166,7 +3267,22 @@ function NotificationsBell({ notifications, dismissNotification, reminderCount, 
               </button>
             </div>
           ))}
-          <div className="text-xs px-4 py-2.5" style={{ color: T.slate, borderTop: `1px solid ${T.border}` }}>{reminderCount} reminders due within 2 weeks</div>
+          {myReminders.length > 0 && (
+            <>
+              <div className="text-[11px] font-semibold uppercase tracking-wide px-4 pt-3 pb-1" style={{ color: T.slateLight, borderTop: active.length > 0 ? `1px solid ${T.border}` : "none" }}>
+                Reminders due within 2 weeks
+              </div>
+              {myReminders.map((r) => (
+                <button key={r.id} onClick={() => openReminder(r)} className="w-full flex items-start justify-between gap-2 px-4 py-2.5 text-left" style={{ borderTop: `1px solid ${T.border}` }}>
+                  <div className="min-w-0">
+                    <div className="text-xs truncate" style={{ color: T.ink }}>{r.text}</div>
+                    <div className="text-[11px] mt-0.5" style={{ color: T.slateLight }}>{r.clientName} · due {fmtDate(r.date)}</div>
+                  </div>
+                  <ArrowUpRight size={13} color={T.slateLight} className="shrink-0 mt-0.5" />
+                </button>
+              ))}
+            </>
+          )}
         </div>
       )}
     </div>
@@ -3272,53 +3388,144 @@ function touchpointCounts(client, months, tasks = []) {
   return counts;
 }
 
-function DashboardsView({ clients, tasks }) {
+// Same three sources as touchpointCounts, but as a rolling "last N days" total instead of
+// calendar-month buckets — used to check a client against their profile's touchpoint
+// baseline, which cares about "lately" not "this specific month".
+function recentTouchpointCount(client, days, tasks = []) {
+  const cutoff = addDays(today(), -days);
+  let count = 0;
+  (client.hours?.log || []).forEach((h) => { if (h.date && h.date >= cutoff) count++; });
+  (client.notes || []).forEach((n) => { if (n.date && n.date >= cutoff) count++; });
+  tasks.filter((t) => t.clientId === client.id && t.done && t.completedDate && t.completedDate >= cutoff).forEach(() => count++);
+  return count;
+}
+
+// Heatmap intensity scale for the Dashboards touchpoint grid — 0 stays a faded neutral
+// (genuinely empty, not "a little teal"), then ramps through four real teal shades so the
+// grid reads like a proper heatmap instead of jumping straight from grey to solid color.
+function heatmapColor(n) {
+  if (n === 0) return { bg: T.border, opacity: 0.45 };
+  if (n === 1) return { bg: "#BEE8E1", opacity: 1 };
+  if (n <= 3) return { bg: "#5FCBBB", opacity: 1 };
+  if (n <= 5) return { bg: T.tealDark, opacity: 1 };
+  return { bg: "#086F65", opacity: 1 };
+}
+
+function DashboardsView({ clients, tasks, touchpointBaselines, updateTouchpointBaseline }) {
   const months = useMemo(() => dashboardMonths(), []);
   const active = clients.filter((c) => !c.archived);
   const groups = CLIENT_PROFILES.map((p) => ({ profile: p, list: active.filter((c) => (c.profile || "Standard Client") === p) }));
+  const [baselinesOpen, setBaselinesOpen] = useState(false);
+  const PERIOD_OPTIONS = [["Weekly", 7], ["Fortnightly", 14], ["Monthly", 30]];
 
   return (
     <div className="flex flex-col gap-8">
-      <div className="text-sm" style={{ color: T.slate }}>
-        Each dot is a month; darker means more touchpoints (hours logged + notes added) that month — a quick way to spot a client who's gone quiet.
-      </div>
-      {groups.map((g) => (
-        <div key={g.profile}>
-          <div className="text-sm font-bold mb-3" style={{ color: T.ink }}>
-            {g.profile} <span className="font-normal" style={{ color: T.slateLight }}>({g.list.length})</span>
+      <Card style={{ padding: "10px 16px" }}>
+        <button onClick={() => setBaselinesOpen((o) => !o)} className="w-full flex items-center justify-between text-left">
+          <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: T.slate }}>Touchpoint targets by client tier</span>
+          <ChevronDown size={14} color={T.slateLight} style={{ transform: baselinesOpen ? "rotate(180deg)" : "none" }} />
+        </button>
+        {baselinesOpen && (
+          <div className="flex flex-col gap-2 mt-3">
+            {CLIENT_PROFILES.map((profile) => {
+              const b = touchpointBaselines[profile] || { targetCount: 1, periodDays: 30, assignee: TEAM[0] };
+              return (
+                <div key={profile} className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-semibold w-36 shrink-0" style={{ color: T.ink }}>{profile}</span>
+                  <span className="text-xs" style={{ color: T.slateLight }}>at least</span>
+                  <input type="number" min="0" value={b.targetCount} onChange={(e) => updateTouchpointBaseline(profile, { targetCount: Number(e.target.value) })}
+                    className="w-14 text-xs px-2 py-1.5 rounded-lg outline-none text-center" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+                  <span className="text-xs" style={{ color: T.slateLight }}>touchpoint(s) every</span>
+                  <select value={b.periodDays} onChange={(e) => updateTouchpointBaseline(profile, { periodDays: Number(e.target.value) })}
+                    className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
+                    {PERIOD_OPTIONS.map(([label, days]) => <option key={days} value={days}>{label}</option>)}
+                  </select>
+                  <span className="text-xs" style={{ color: T.slateLight }}>— remind</span>
+                  <select value={b.assignee} onChange={(e) => updateTouchpointBaseline(profile, { assignee: e.target.value })}
+                    className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
+                    {TEAM.map((m) => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                </div>
+              );
+            })}
+            <div className="text-[11px] mt-1" style={{ color: T.slateLight }}>
+              A client that falls short gets a reminder for the person above, in their Reminders list — it clears itself automatically once they're back on track. Checked whenever the app's open, not on an overnight schedule.
+            </div>
           </div>
-          <Card style={{ padding: 16, overflowX: "auto" }}>
-            {g.list.length === 0 ? (
-              <div className="text-xs py-3" style={{ color: T.slateLight }}>No clients with this profile yet.</div>
-            ) : (
-              <div style={{ display: "grid", gridTemplateColumns: "160px repeat(12, minmax(28px, 1fr))", gap: 6, minWidth: 560 }}>
-                <div />
-                {months.map((m) => <div key={m} className="text-[10px] text-center font-semibold" style={{ color: T.slateLight }}>{monthLabel(m)}</div>)}
-                {g.list.map((c) => {
-                  const counts = touchpointCounts(c, months, tasks);
-                  return (
-                    <React.Fragment key={c.id}>
-                      <div className="text-xs font-medium py-1.5 truncate" style={{ color: T.ink }}>{c.name}</div>
-                      {months.map((m) => {
-                        const n = counts[m];
-                        const color = n === 0 ? T.border : n <= 2 ? T.amber : T.tealDark;
-                        return (
-                          <div key={m} className="flex items-center justify-center py-1.5">
-                            <div title={`${c.name} — ${monthLabel(m)}: ${n} touchpoint${n === 1 ? "" : "s"}`}
-                              style={{ width: 14, height: 14, borderRadius: 999, background: color, opacity: n === 0 ? 0.5 : 1 }} />
-                          </div>
-                        );
-                      })}
-                    </React.Fragment>
-                  );
-                })}
+        )}
+      </Card>
+
+      <div className="text-sm" style={{ color: T.slate }}>
+        Each square is a month; darker teal means more touchpoints (hours logged + notes added + tasks crossed off) that month — a quick way to spot a client who's gone quiet.
+      </div>
+      <div className="flex items-center gap-4 -mt-4 flex-wrap">
+        <span className="text-xs font-semibold" style={{ color: T.slateLight }}>Touchpoints:</span>
+        {[["No activity", 0], ["1", 1], ["2–3", 2], ["4–5", 4], ["6+", 6]].map(([label, n]) => {
+          const c = heatmapColor(n);
+          return (
+            <div key={label} className="flex items-center gap-1.5">
+              <div style={{ width: 14, height: 14, borderRadius: 4, background: c.bg, opacity: c.opacity }} />
+              <span className="text-xs" style={{ color: T.slate }}>{label}</span>
+            </div>
+          );
+        })}
+      </div>
+      {groups.map((g) => {
+        const groupTotal = g.list.reduce((sum, c) => {
+          const counts = touchpointCounts(c, months, tasks);
+          return sum + Object.values(counts).reduce((s, v) => s + v, 0);
+        }, 0);
+        return (
+          <div key={g.profile}>
+            <div className="flex items-center gap-2 mb-3">
+              <span style={{ width: 8, height: 8, borderRadius: 999, background: T.tealDark }} />
+              <div className="text-sm font-bold" style={{ color: T.ink }}>
+                {g.profile} <span className="font-normal" style={{ color: T.slateLight }}>({g.list.length})</span>
               </div>
-            )}
-          </Card>
-        </div>
-      ))}
+              {g.list.length > 0 && (
+                <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full ml-1" style={{ color: T.tealDark, background: T.paperAlt }}>
+                  {groupTotal} touchpoint{groupTotal === 1 ? "" : "s"} across group
+                </span>
+              )}
+            </div>
+            <Card style={{ padding: 16, overflowX: "auto" }}>
+              {g.list.length === 0 ? (
+                <div className="text-xs py-3" style={{ color: T.slateLight }}>No clients with this profile yet.</div>
+              ) : (
+                <div style={{ display: "grid", gridTemplateColumns: "160px repeat(12, minmax(28px, 1fr)) 56px", gap: 6, minWidth: 620 }}>
+                  <div />
+                  {months.map((m) => <div key={m} className="text-[10px] text-center font-semibold" style={{ color: T.slateLight }}>{monthLabel(m)}</div>)}
+                  <div className="text-[10px] text-center font-semibold" style={{ color: T.slateLight }}>Total</div>
+                  {g.list.map((c) => {
+                    const counts = touchpointCounts(c, months, tasks);
+                    const total = Object.values(counts).reduce((s, v) => s + v, 0);
+                    return (
+                      <React.Fragment key={c.id}>
+                        <div className="text-xs font-medium py-1.5 truncate" style={{ color: T.ink }}>{c.name}</div>
+                        {months.map((m) => {
+                          const n = counts[m];
+                          const hc = heatmapColor(n);
+                          return (
+                            <div key={m} className="flex items-center justify-center py-1.5">
+                              <div title={`${c.name} — ${monthLabel(m)}: ${n} touchpoint${n === 1 ? "" : "s"}`}
+                                style={{ width: 18, height: 18, borderRadius: 5, background: hc.bg, opacity: hc.opacity }} />
+                            </div>
+                          );
+                        })}
+                        <div className="flex items-center justify-center py-1.5">
+                          <span className="text-xs font-bold" style={{ color: total > 0 ? T.tealDark : T.slateLight }}>{total}</span>
+                        </div>
+                      </React.Fragment>
+                    );
+                  })}
+                </div>
+              )}
+            </Card>
+          </div>
+        );
+      })}
       <div className="text-xs text-center" style={{ color: T.slateLight }}>
-        Hover a dot to see the exact count. Includes hours logged, notes added, and tasks crossed off for that client.
+        Hover a square to see the exact count. Includes hours logged, notes added, and tasks crossed off for that client.
       </div>
     </div>
   );
@@ -4513,6 +4720,59 @@ export default function App() {
     setDoc(doc(db, "documentTemplates", templateKey("erp", trimmed)), { content: "" });
   };
 
+  // Touchpoint baselines — how often each client profile tier should hear from someone, and
+  // who gets nudged if a client falls short. One settings doc per profile.
+  const [touchpointBaselines, setTouchpointBaselines] = useState({});
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "touchpointBaselines"), (snap) => {
+      const map = {};
+      snap.docs.forEach((d) => { map[d.id] = d.data(); });
+      setTouchpointBaselines(map);
+    }, (err) => console.error("Touchpoint baselines subscription failed:", err));
+    return unsub;
+  }, []);
+  useEffect(() => {
+    (async () => {
+      try {
+        const snap = await getDocs(collection(db, "touchpointBaselines"));
+        if (snap.empty) {
+          await Promise.all(CLIENT_PROFILES.map((p) => setDoc(doc(db, "touchpointBaselines", p), { targetCount: 1, periodDays: 30, assignee: TEAM[0] })));
+        }
+      } catch (err) { console.error("Touchpoint baseline seed failed:", err); }
+    })();
+  }, []);
+  const updateTouchpointBaseline = (profile, patch) => setDoc(doc(db, "touchpointBaselines", profile), { ...(touchpointBaselines[profile] || { targetCount: 1, periodDays: 30, assignee: TEAM[0] }), ...patch });
+
+  // Client-side reconciliation: whenever clients/tasks/baselines change while someone has
+  // the app open, check each active client against their profile's baseline. Below target
+  // → upsert a fixed-id reminder for the assigned person (won't duplicate — same id gets
+  // reused). Back on track → auto-resolve that reminder rather than leaving it stale. This
+  // only runs while the app is open in a browser, there's no backend cron doing this
+  // overnight — it catches up next time anyone's looking at the app.
+  useEffect(() => {
+    if (Object.keys(touchpointBaselines).length === 0) return;
+    clients.filter((c) => !c.archived).forEach((client) => {
+      const baseline = touchpointBaselines[client.profile || "Standard Client"];
+      if (!baseline) return;
+      const periodDays = baseline.periodDays || 30;
+      const target = baseline.targetCount || 1;
+      const count = recentTouchpointCount(client, periodDays, tasks);
+      const fixedId = "touchpoint-baseline-" + client.id;
+      const existing = (client.reminders || []).find((r) => r.id === fixedId);
+      if (count < target && !existing) {
+        const reminder = {
+          id: fixedId, done: false, recurring: "none", assignee: baseline.assignee || TEAM[0],
+          text: `Touchpoint check-in needed for ${client.name} — only ${count} in the last ${periodDays} days (target ${target})`,
+          date: today(),
+        };
+        updateDoc(doc(db, "clients", client.id), { reminders: [...(client.reminders || []), reminder] });
+      } else if (count >= target && existing && !existing.done) {
+        updateDoc(doc(db, "clients", client.id), { reminders: client.reminders.map((r) => (r.id === fixedId ? { ...r, done: true } : r)) });
+      }
+    });
+  }, [clients, tasks, touchpointBaselines]);
+
+
   // Manually-booked time blocks on the Schedule tab (e.g. "Tue 9am-1pm — BMC site visit")
   // — these count toward workload capacity the same as Tasks and Workflow steps, just
   // without needing a task/step to exist for them.
@@ -4794,12 +5054,23 @@ export default function App() {
       requestedSections: ["policy", "hazard", "induction", "ppe"], supportHours: 6,
       existingWork: "No formal OHSMS in place yet — currently relying on a basic site safety folder.",
     };
+    // Carry the sales-stage history through rather than starting the client record blank —
+    // Reminder entries become real client reminders (still due, still assigned); Notes and
+    // Touchpoint logs both become client notes (touchpointCounts() on the Dashboards tab
+    // already counts any note by date, so a "Touchpoint" entry counts the same way once
+    // it's here — the type label is kept in the text so it's still visible which was which).
+    const carriedNotes = (lead.notes || [])
+      .filter((n) => n.type !== "Reminder")
+      .map((n) => ({ id: n.id, author: "Sales", date: n.date, text: n.type === "Touchpoint" ? `[Touchpoint] ${n.text}` : n.text, tags: [] }));
+    const carriedReminders = (lead.notes || [])
+      .filter((n) => n.type === "Reminder")
+      .map((n) => ({ id: n.id, text: n.text, date: n.dueDate || today(), recurring: "none", done: false, assignee: n.assignee || TEAM[0] }));
     const newClient = {
       name: lead.company, legalName: lead.company, logo: null,
       contract: { start: today(), renewal: addDays(today(), 365), value: lead.value + " / yr", plan: "New client — plan to confirm" },
       billing: { contact: lead.contact, email: lead.formEmail, terms: "TBC", status: "Current" },
       billingType: "FlatFee", billingSetupDone: false, profile: "Standard Client",
-      notes: [], reminders: [], contacts: [], ohsmsLastIssued: null, ohsmsDue: addDays(today(), 90),
+      notes: carriedNotes, reminders: carriedReminders, contacts: [], ohsmsLastIssued: null, ohsmsDue: addDays(today(), 90),
       extras: [], hours: { included: intake.supportHours, log: [] }, users: { log: [] }, intake,
     };
     await setDoc(doc(db, "clients", id), newClient);
@@ -4815,7 +5086,10 @@ export default function App() {
     setModule("clients");
   };
 
-  const upcomingReminders = useMemo(() => clients.flatMap((c) => c.reminders).filter((r) => daysUntil(r.date) <= 14), [clients]);
+  const upcomingReminders = useMemo(() => clients
+    .flatMap((c) => (c.reminders || []).map((r) => ({ ...r, clientId: c.id, clientName: c.name })))
+    .filter((r) => !r.done && daysUntil(r.date) <= 14)
+    .sort((a, b) => (a.date || "").localeCompare(b.date || "")), [clients]);
 
   if (!clientsLoaded) {
     return (
@@ -4887,7 +5161,7 @@ export default function App() {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <NotificationsBell notifications={notifications} dismissNotification={dismissNotification} reminderCount={upcomingReminders.length} currentUser={currentUser} />
+            <NotificationsBell notifications={notifications} dismissNotification={dismissNotification} upcomingReminders={upcomingReminders} currentUser={currentUser} goToClient={goToClient} />
             <button onClick={() => signOut(auth)} className="text-xs font-semibold px-3 py-2 rounded-lg" style={{ background: T.paperAlt, color: T.slate }}>
               Sign out
             </button>
@@ -4903,7 +5177,7 @@ export default function App() {
           {module === "systems" && <SystemsView clients={clients} selectedId={selectedClient} setSelectedId={setSelectedClient} documentTemplates={documentTemplates} saveDocumentTemplate={saveDocumentTemplate} systemReviewLog={systemReviewLog} addSystemReviewLogEntry={addSystemReviewLogEntry} customErpItems={customErpItems} addCustomErpItem={addCustomErpItem} />}
           {module === "sales" && <SalesView leads={leads} convertLeadToClient={convertLeadToClient} />}
           {module === "billing" && <BillingOverview clients={clients} resellers={resellers} />}
-          {module === "dashboards" && <DashboardsView clients={clients} tasks={tasks} />}
+          {module === "dashboards" && <DashboardsView clients={clients} tasks={tasks} touchpointBaselines={touchpointBaselines} updateTouchpointBaseline={updateTouchpointBaseline} />}
           {module === "workflows" && <WorkflowsView workflows={workflows} />}
           {module === "resellers" && <ResellersView resellers={resellers} selectedId={selectedReseller} setSelectedId={setSelectedReseller} />}
           {module === "tasks" && <TasksView tasks={tasks} clients={clients} onboardings={onboardings} currentUser={currentUser} goToClient={goToClient} resellers={resellers} goToReseller={goToReseller} />}

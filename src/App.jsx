@@ -987,6 +987,14 @@ function urgencyColor(dueDate) {
 }
 function currentMonth() { return today().slice(0, 7); }
 
+// Distinct months present in an hours log, newest first, always including the current
+// month even if nothing's logged yet — so the month picker always has something to show.
+function monthsWithActivity(log) {
+  const set = new Set((log || []).map((h) => h.date.slice(0, 7)));
+  set.add(currentMonth());
+  return [...set].sort().reverse();
+}
+
 /* ---------- Shared bits ---------- */
 function NavItem({ icon: Icon, label, active, onClick }) {
   return (
@@ -1082,6 +1090,23 @@ function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, wor
                   <Trash2 size={14} color={T.slateLight} />
                 </button>
               </div>
+            </div>
+            <div className="flex items-center gap-2 text-xs" style={{ color: T.slate }}>
+              <label className="flex items-center gap-1.5">
+                <input type="checkbox" checked={inst.billable || false}
+                  onChange={(e) => updateOnboardingsForClient(client.id, (clientList) => clientList.map((i) => (i.id === inst.id ? { ...i, billable: e.target.checked } : i)))} />
+                Billable
+              </label>
+              {inst.billable && (
+                <>
+                  <span>—</span>
+                  <span>$</span>
+                  <input type="number" min="0" value={inst.billableAmount ?? ""}
+                    onChange={(e) => updateOnboardingsForClient(client.id, (clientList) => clientList.map((i) => (i.id === inst.id ? { ...i, billableAmount: e.target.value ? Number(e.target.value) : 0 } : i)))}
+                    placeholder="0" className="w-20 px-2 py-1 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+                  <span>for this workflow</span>
+                </>
+              )}
             </div>
             <Card style={{ padding: 18 }}>
               <div className="flex flex-col gap-2">
@@ -1188,7 +1213,8 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
   });
   const setNCF = (field, value) => setNewClientForm((f) => ({ ...f, [field]: value }));
   const [showArchived, setShowArchived] = useState(false);
-  const [showArchivedHours, setShowArchivedHours] = useState(false);
+  const [viewMonth, setViewMonth] = useState(currentMonth());
+  useEffect(() => { setViewMonth(currentMonth()); }, [client?.id]);
   const visibleClients = clients.filter((c) => (showArchived ? c.archived : !c.archived));
 
   const archiveClient = (id) => updateDoc(doc(db, "clients", id), { archived: true });
@@ -1453,10 +1479,10 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
             {[
               { id: "overview", label: "Overview", icon: Building2 },
               { id: "contract", label: "Contract", icon: CreditCard },
-              { id: "billing", label: "Billing", icon: ClipboardList },
+              { id: "billing", label: "Activity", icon: ClipboardList },
               { id: "onboarding", label: "Workflows", icon: ListChecks },
               { id: "notes", label: "Notes", icon: StickyNote },
-              { id: "reminders", label: "Reminders", icon: Bell },
+              { id: "reminders", label: "Tasks", icon: Bell },
             ].map((t) => (
               <button key={t.id} onClick={() => setTab(t.id)} className="flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium -mb-px whitespace-nowrap"
                 style={{ color: tab === t.id ? T.tealDark : T.slate, borderBottom: tab === t.id ? `2px solid ${T.tealDark}` : "2px solid transparent" }}>
@@ -1661,43 +1687,56 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
                 </Card>
               </div>
 
+              {(onboardings[client.id] || []).some((i) => i.billable) && (
+                <Card style={{ padding: 16 }}>
+                  <div className="text-sm font-semibold mb-3" style={{ color: T.ink }}>Billable workflows</div>
+                  <div className="flex flex-col gap-2">
+                    {(onboardings[client.id] || []).filter((i) => i.billable).map((i) => (
+                      <div key={i.id} className="flex items-center justify-between text-sm py-1.5" style={{ borderBottom: `1px solid ${T.border}` }}>
+                        <div style={{ color: T.ink }}>{i.workflowName}{i.completedDate ? " (complete)" : ""}</div>
+                        <div className="font-bold" style={{ color: T.tealDark }}>${i.billableAmount || 0}</div>
+                      </div>
+                    ))}
+                    <div className="flex items-center justify-between text-sm pt-1.5 font-bold">
+                      <div style={{ color: T.ink }}>Total</div>
+                      <div style={{ color: T.tealDark }}>${(onboardings[client.id] || []).filter((i) => i.billable).reduce((s, i) => s + (i.billableAmount || 0), 0)}</div>
+                    </div>
+                  </div>
+                </Card>
+              )}
+
               <Card style={{ padding: 16 }}>
-                <div className="text-sm font-semibold mb-3" style={{ color: T.ink }}>Monthly hours</div>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="text-sm font-semibold" style={{ color: T.ink }}>Monthly hours</div>
+                  <select value={viewMonth} onChange={(e) => setViewMonth(e.target.value)}
+                    className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
+                    {monthsWithActivity(client.hours.log).map((m) => (
+                      <option key={m} value={m}>{m === currentMonth() ? "This month" : monthLabel(m)}</option>
+                    ))}
+                  </select>
+                </div>
                 <div className="flex flex-col gap-2 mb-3">
-                  {client.hours.log.filter((h) => h.date.slice(0, 7) === currentMonth()).map((h) => (
+                  {client.hours.log.filter((h) => h.date.slice(0, 7) === viewMonth).map((h) => (
                     <div key={h.id} className="flex items-center justify-between text-sm py-1.5" style={{ borderBottom: `1px solid ${T.border}` }}>
                       <div><span className="font-medium" style={{ color: T.ink }}>{h.member}</span><span className="ml-2" style={{ color: T.slate }}>{h.description}</span></div>
                       <div className="flex items-center gap-3 shrink-0"><span style={{ color: T.slate }}>{fmtDate(h.date)}</span><span className="font-bold" style={{ color: T.tealDark }}>{h.hours}h</span></div>
                     </div>
                   ))}
-                  {client.hours.log.filter((h) => h.date.slice(0, 7) === currentMonth()).length === 0 && <div className="text-xs" style={{ color: T.slateLight }}>No hours logged yet this month.</div>}
+                  {client.hours.log.filter((h) => h.date.slice(0, 7) === viewMonth).length === 0 && (
+                    <div className="text-xs" style={{ color: T.slateLight }}>No hours logged {viewMonth === currentMonth() ? "yet this month" : `for ${monthLabel(viewMonth)}`}.</div>
+                  )}
                 </div>
-                <div className="flex items-center gap-2">
-                  <select value={newHour.member} onChange={(e) => setNewHour({ ...newHour, member: e.target.value })}
-                    className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
-                    {TEAM.map((m) => <option key={m} value={m}>{m}</option>)}
-                  </select>
-                  <input placeholder="What was the work?" value={newHour.description} onChange={(e) => setNewHour({ ...newHour, description: e.target.value })}
-                    className="flex-1 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
-                  <input placeholder="Hrs" value={newHour.hours} onChange={(e) => setNewHour({ ...newHour, hours: e.target.value })}
-                    className="w-16 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
-                  <button onClick={addHour} className="text-xs font-semibold px-3 py-1.5 rounded-lg shrink-0" style={{ background: T.tealDark, color: "#fff" }}>Log</button>
-                </div>
-                {client.hours.log.some((h) => h.date.slice(0, 7) !== currentMonth()) && (
-                  <div className="mt-3 pt-3" style={{ borderTop: `1px solid ${T.border}` }}>
-                    <button onClick={() => setShowArchivedHours((v) => !v)} className="text-xs font-semibold" style={{ color: T.slate }}>
-                      {showArchivedHours ? "Hide" : "Show"} previous months ({client.hours.log.filter((h) => h.date.slice(0, 7) !== currentMonth()).length})
-                    </button>
-                    {showArchivedHours && (
-                      <div className="flex flex-col gap-2 mt-2">
-                        {client.hours.log.filter((h) => h.date.slice(0, 7) !== currentMonth()).map((h) => (
-                          <div key={h.id} className="flex items-center justify-between text-sm py-1.5" style={{ opacity: 0.6, borderBottom: `1px solid ${T.border}` }}>
-                            <div><span className="font-medium" style={{ color: T.ink }}>{h.member}</span><span className="ml-2" style={{ color: T.slate }}>{h.description}</span></div>
-                            <div className="flex items-center gap-3 shrink-0"><span style={{ color: T.slate }}>{fmtDate(h.date)}</span><span className="font-bold" style={{ color: T.slate }}>{h.hours}h</span></div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                {viewMonth === currentMonth() && (
+                  <div className="flex items-center gap-2">
+                    <select value={newHour.member} onChange={(e) => setNewHour({ ...newHour, member: e.target.value })}
+                      className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
+                      {TEAM.map((m) => <option key={m} value={m}>{m}</option>)}
+                    </select>
+                    <input placeholder="What was the work?" value={newHour.description} onChange={(e) => setNewHour({ ...newHour, description: e.target.value })}
+                      className="flex-1 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+                    <input placeholder="Hrs" value={newHour.hours} onChange={(e) => setNewHour({ ...newHour, hours: e.target.value })}
+                      className="w-16 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+                    <button onClick={addHour} className="text-xs font-semibold px-3 py-1.5 rounded-lg shrink-0" style={{ background: T.tealDark, color: "#fff" }}>Log</button>
                   </div>
                 )}
               </Card>
@@ -1799,9 +1838,9 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
                   <button onClick={() => removeReminder(r.id)}><Trash2 size={14} color={T.slateLight} /></button>
                 </Card>
               ))}
-              {client.reminders.length === 0 && <div className="text-xs" style={{ color: T.slateLight }}>No reminders yet.</div>}
+              {client.reminders.length === 0 && <div className="text-xs" style={{ color: T.slateLight }}>No tasks yet.</div>}
               <Card style={{ padding: 14 }} className="flex items-center gap-2 flex-wrap">
-                <input placeholder="Reminder" value={newReminder.text} onChange={(e) => setNewReminder({ ...newReminder, text: e.target.value })}
+                <input placeholder="Task" value={newReminder.text} onChange={(e) => setNewReminder({ ...newReminder, text: e.target.value })}
                   className="flex-1 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink, minWidth: 160 }} />
                 <input type="date" value={newReminder.date} onChange={(e) => setNewReminder({ ...newReminder, date: e.target.value })}
                   className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
@@ -3269,6 +3308,34 @@ function SalesView({ leads, convertLeadToClient }) {
     if (!window.confirm("Delete this lead? This can't be undone.")) return;
     deleteDoc(doc(db, "leads", id));
   };
+  const [uploadingFile, setUploadingFile] = useState({});
+  const uploadLeadFile = async (lead, file) => {
+    if (!file) return;
+    setUploadingFile((u) => ({ ...u, [lead.id]: true }));
+    try {
+      const path = `leads/${lead.id}/${Date.now()}-${file.name}`;
+      await uploadBytes(storageRef(storage, path), file);
+      const entry = { id: Date.now(), path, name: file.name, uploadedAt: today() };
+      await updateDoc(doc(db, "leads", lead.id), { files: [...(lead.files || []), entry] });
+    } catch (err) {
+      console.error("Lead file upload failed:", err);
+      alert(`Couldn't upload that file: ${err.message || err}`);
+    } finally {
+      setUploadingFile((u) => ({ ...u, [lead.id]: false }));
+    }
+  };
+  const viewLeadFile = async (path) => {
+    try {
+      const url = await getDownloadURL(storageRef(storage, path));
+      window.open(url, "_blank");
+    } catch (err) {
+      console.error("Couldn't open file:", err);
+      alert("Couldn't open that file.");
+    }
+  };
+  const removeLeadFile = (lead, fileId) => {
+    updateDoc(doc(db, "leads", lead.id), { files: (lead.files || []).filter((f) => f.id !== fileId) });
+  };
 
   const sendForm = (lead) => {
     const email = emailDrafts[lead.id];
@@ -3353,12 +3420,15 @@ function SalesView({ leads, convertLeadToClient }) {
                         <button onClick={() => deleteLead(l.id)} title="Delete lead"><Trash2 size={13} color={T.slateLight} /></button>
                       </div>
                     </div>
-                    <div className="text-xs mt-0.5" style={{ color: T.slate }}>{l.contact}</div>
+                    <input value={l.contact || ""} onChange={(e) => updateDoc(doc(db, "leads", l.id), { contact: e.target.value })} placeholder="Contact name"
+                      className="text-xs mt-0.5 w-full outline-none bg-transparent" style={{ color: T.slate }} />
+                    <input value={l.formEmail || ""} onChange={(e) => updateDoc(doc(db, "leads", l.id), { formEmail: e.target.value })} placeholder="Email"
+                      className="text-xs w-full outline-none bg-transparent" style={{ color: T.slate }} />
                     <div className="text-xs font-bold mt-1.5" style={{ color: T.tealDark }}>{l.value}</div>
 
                     {stage === "Won" && l.formStatus === "none" && (
                       <div className="mt-3 pt-3 flex flex-col gap-2" style={{ borderTop: `1px solid ${T.border}` }}>
-                        <input placeholder="Client email for sign-up form" value={emailDrafts[l.id] || ""} onChange={(e) => setEmailDrafts({ ...emailDrafts, [l.id]: e.target.value })}
+                        <input placeholder="Client email for sign-up form" value={emailDrafts[l.id] ?? l.formEmail ?? ""} onChange={(e) => setEmailDrafts({ ...emailDrafts, [l.id]: e.target.value })}
                           className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
                         <button onClick={() => sendForm(l)} className="flex items-center justify-center gap-1.5 text-xs font-semibold py-1.5 rounded-lg" style={{ background: T.tealDark, color: "#fff" }}>
                           <Mail size={12} /> Send sign-up form
@@ -3426,6 +3496,23 @@ function SalesView({ leads, convertLeadToClient }) {
                             </div>
                           )}
                           <button onClick={() => addNote(l.id)} className="text-[11px] font-semibold px-2 py-1.5 rounded-lg shrink-0" style={{ background: T.tealDark, color: "#fff" }}>Add</button>
+                        </div>
+
+                        <div className="flex flex-col gap-1.5 mt-2 pt-2" style={{ borderTop: `1px solid ${T.border}` }}>
+                          <div className="text-[11px] font-semibold" style={{ color: T.slate }}>Files & photos</div>
+                          {(l.files || []).map((f) => (
+                            <div key={f.id} className="flex items-center justify-between text-xs rounded-lg px-2 py-1.5" style={{ background: T.paperAlt }}>
+                              <button onClick={() => viewLeadFile(f.path)} className="truncate text-left flex-1" style={{ color: T.tealDark }} title={f.name}>{f.name}</button>
+                              <div className="flex items-center gap-2 shrink-0">
+                                <span style={{ color: T.slateLight }}>{fmtDate(f.uploadedAt)}</span>
+                                <button onClick={() => removeLeadFile(l, f.id)} title="Remove file"><Trash2 size={11} color={T.slateLight} /></button>
+                              </div>
+                            </div>
+                          ))}
+                          <label className="text-[11px] font-semibold px-2 py-1.5 rounded-lg cursor-pointer flex items-center justify-center gap-1.5" style={{ background: T.paperAlt, color: T.tealDark }}>
+                            <Upload size={11} /> {uploadingFile[l.id] ? "Uploading…" : "Attach file or photo"}
+                            <input type="file" className="hidden" disabled={uploadingFile[l.id]} onChange={(e) => uploadLeadFile(l, e.target.files?.[0])} />
+                          </label>
                         </div>
                       </div>
                     )}
@@ -3867,7 +3954,7 @@ function TasksView({ tasks, clients, onboardings, currentUser, goToClient, resel
 
       {reminderTasks.length > 0 && (
         <div className="flex flex-col gap-2">
-          <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: T.slate }}>From reminders</div>
+          <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: T.slate }}>From client tasks</div>
           {reminderTasks.map((t) => (
             <Card key={t.id} onClick={() => goToClient(t.clientId, "reminders")} style={{ padding: 14, borderLeft: `3px solid ${T.amber}`, cursor: "pointer" }} className="flex items-center justify-between hover:opacity-80">
               <div>
@@ -3877,7 +3964,7 @@ function TasksView({ tasks, clients, onboardings, currentUser, goToClient, resel
                   <span className="flex items-center gap-1" style={{ color: urgencyColor(t.dueDate) }}><Calendar size={10} /> {daysUntil(t.dueDate) < 0 ? `Overdue · ${fmtDate(t.dueDate)}` : fmtDate(t.dueDate)}</span>
                 </div>
               </div>
-              <Pill color={T.amber} bg={T.paperAlt}>Reminder</Pill>
+              <Pill color={T.amber} bg={T.paperAlt}>Client task</Pill>
             </Card>
           ))}
         </div>
@@ -4004,7 +4091,7 @@ function NotificationsBell({ notifications, dismissNotification, upcomingReminde
           {myReminders.length > 0 && (
             <>
               <div className="text-[11px] font-semibold uppercase tracking-wide px-4 pt-3 pb-1" style={{ color: T.slateLight, borderTop: active.length > 0 ? `1px solid ${T.border}` : "none" }}>
-                Reminders due within 2 weeks
+                Tasks due within 2 weeks
               </div>
               {myReminders.map((r) => (
                 <button key={r.id} onClick={() => openReminder(r)} className="w-full flex items-start justify-between gap-2 px-4 py-2.5 text-left" style={{ borderTop: `1px solid ${T.border}` }}>
@@ -4183,7 +4270,7 @@ function DashboardsView({ clients, tasks, touchpointBaselines, updateTouchpointB
               );
             })}
             <div className="text-[11px] mt-1" style={{ color: T.slateLight }}>
-              A client that falls short gets a reminder for the person above, in their Reminders list — it clears itself automatically once they're back on track. Checked whenever the app's open, not on an overnight schedule.
+              A client that falls short gets a task for the person above, in their client's Tasks tab — it clears itself automatically once they're back on track. Checked whenever the app's open, not on an overnight schedule.
             </div>
           </div>
         )}

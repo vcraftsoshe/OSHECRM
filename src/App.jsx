@@ -92,92 +92,6 @@ const defaultOnboardingTemplate = [
 ];
 
 /* ---------- Mock data ---------- */
-const initialClients = [
-  {
-    id: "bmc", name: "BMC Construction", legalName: "Brendan Murray Construction 2019 Ltd", logo: null,
-    contract: { start: "2024-02-01", renewal: "2027-02-01", value: "$24,000 / yr", plan: "Full H&S Retainer" },
-    billing: { contact: "Darryl Dawson", email: "accounts@bmcconstruction.co.nz", terms: "Monthly, 20th", status: "Current" },
-    billingType: "Hourly", billingSetupDone: true, profile: "Enterprise Client",
-    contacts: [
-      { id: 1, name: "Darryl Dawson", role: "Director", email: "darryl@bmcconstruction.co.nz", phone: "021 555 0110" },
-      { id: 2, name: "Site Manager — Applefields", role: "Site Contact", email: "applefields@bmcconstruction.co.nz", phone: "021 555 0192" },
-    ],
-    notes: [
-      { id: 1, author: "Sarah Thomas", date: "2026-07-14", text: "Sent updated task analyses for Applefields site, waiting on sign-off from site manager." },
-      { id: 2, author: "Judith Page", date: "2026-07-02", text: "Confirmed June monthly report received well, no changes requested." },
-    ],
-    reminders: [
-      { id: 1, text: "Send July monthly H&S report", date: "2026-08-05", recurring: "monthly", done: false, assignee: "Sophie" },
-      { id: 2, text: "OHSMS annual review due", date: "2026-09-01", recurring: "yearly", done: false, assignee: "Sophie" },
-    ],
-    ohsmsLastIssued: "2025-09-01", ohsmsDue: "2026-09-01",
-    extras: [
-      { id: 1, date: "2026-07-10", description: "One-off site audit for Applefields ahead of client visit", status: "Done", hours: 2 },
-      { id: 2, date: "2026-07-17", description: "Extra toolbox talk resource requested for new site", status: "In Progress", hours: 3 },
-    ],
-    hours: {
-      included: 12,
-      log: [
-        { id: 1, date: "2026-07-02", member: "Sophie", hours: 3, description: "June monthly report build" },
-        { id: 2, date: "2026-07-09", member: "Judith", hours: 2, description: "Data pull + checklist" },
-        { id: 3, date: "2026-07-15", member: "Sarah Thomas", hours: 4, description: "Site review write-ups" },
-        { id: 4, date: "2026-07-11", member: "—", hours: 2, description: "Extra: Applefields site audit" },
-      ],
-    },
-    users: { log: [{ id: 1, month: "2026-06", count: 14 }, { id: 2, month: "2026-07", count: 16 }] },
-    intake: null,
-  },
-  {
-    id: "radius", name: "Radius Care Applefields", legalName: "Radius Care Applefields Ltd", logo: null,
-    contract: { start: "2026-05-12", renewal: "2027-05-12", value: "$8,500 / yr", plan: "HSMP Build + Support" },
-    billing: { contact: "Finance Team", email: "finance@radiuscare.co.nz", terms: "Quarterly", status: "Current" },
-    billingType: "FlatFee", billingSetupDone: true, profile: "Standard Client",
-    contacts: [
-      { id: 1, name: "Finance Team", role: "Billing Contact", email: "finance@radiuscare.co.nz", phone: "" },
-      { id: 2, name: "Facility Manager", role: "Primary Contact", email: "facility@radiuscare.co.nz", phone: "021 555 0233" },
-    ],
-    notes: [{ id: 1, author: "Sophie", date: "2026-07-01", text: "HSMP delivered, org pyramid and hazard diagram signed off." }],
-    reminders: [{ id: 1, text: "Check in on HSMP rollout", date: "2026-08-01", recurring: "none", done: false, assignee: "Sophie" }],
-    ohsmsLastIssued: "2026-07-01", ohsmsDue: "2027-07-01",
-    extras: [], hours: { included: 0, log: [] },
-    users: { log: [{ id: 1, month: "2026-07", count: 5 }] },
-    intake: null,
-  },
-  {
-    id: "manaaki", name: "Manaaki Ora Trust", legalName: "Manaaki Ora Trust", logo: null,
-    contract: { start: "2025-11-01", renewal: "2026-11-01", value: "$6,000 / yr", plan: "Monthly Reporting" },
-    billing: { contact: "Trust Board", email: "admin@manaakiora.org.nz", terms: "Monthly, 1st", status: "Overdue" },
-    billingType: "SubscriptionHours", billingSetupDone: true, profile: "Hourly Client",
-    contacts: [{ id: 1, name: "Trust Board", role: "Billing Contact", email: "admin@manaakiora.org.nz", phone: "" }],
-    notes: [{ id: 1, author: "Sarah Thomas", date: "2026-06-28", text: "May report delivered, they'd like donut chart to include YoY comparison next time." }],
-    reminders: [{ id: 1, text: "Follow up on overdue invoice", date: "2026-07-22", recurring: "none", done: false, assignee: "Vanessa" }],
-    ohsmsLastIssued: "2026-01-15", ohsmsDue: "2026-08-15",
-    extras: [{ id: 1, date: "2026-06-20", description: "Requested YoY comparison added to donut chart", status: "Requested", hours: 1 }],
-    hours: { included: 6, log: [{ id: 1, date: "2026-06-25", member: "Sarah Thomas", hours: 5, description: "May report build" }] },
-    users: { log: [{ id: 1, month: "2026-07", count: 3 }] },
-    intake: null,
-  },
-  {
-    id: "coastal", name: "Coastal Build Group", legalName: "Coastal Build Group Ltd", logo: null,
-    contract: { start: "2025-03-01", renewal: "2026-03-01", value: "$4,200 / yr", plan: "Monthly Compliance Pack" },
-    billing: { contact: "Rangi Ropata", email: "accounts@coastalbuild.co.nz", terms: "Monthly, 1st", status: "Current" },
-    billingType: "FlatFee", billingSetupDone: true, profile: "Standard Client",
-    contacts: [{ id: 1, name: "Rangi Ropata", role: "Director", email: "rangi@coastalbuild.co.nz", phone: "" }],
-    notes: [], reminders: [], ohsmsLastIssued: "2025-09-01", ohsmsDue: "2026-09-01",
-    extras: [], hours: { included: 0, log: [{ id: 1, date: "2026-07-18", member: "Sophie", hours: 3, description: "Ad-hoc query support outside the usual pack" }] }, users: { log: [{ id: 1, month: "2026-07", count: 4 }] },
-    intake: null,
-  },
-  {
-    id: "primefencing", name: "Prime Fencing Ltd", legalName: "Prime Fencing Ltd", logo: null,
-    contract: { start: "2025-08-15", renewal: "2026-08-15", value: "$3,000 / yr", plan: "Monthly Compliance Pack" },
-    billing: { contact: "Aroha Ngata", email: "office@primefencing.co.nz", terms: "Monthly, 15th", status: "Current" },
-    billingType: "FlatFee", billingSetupDone: true, profile: "Standard Client",
-    contacts: [{ id: 1, name: "Aroha Ngata", role: "Office Manager", email: "aroha@primefencing.co.nz", phone: "" }],
-    notes: [], reminders: [], ohsmsLastIssued: "2025-08-15", ohsmsDue: "2026-08-15",
-    extras: [], hours: { included: 0, log: [] }, users: { log: [{ id: 1, month: "2026-07", count: 2 }] },
-    intake: null,
-  },
-];
 
 const initialLeads = [
   { id: 1, company: "Coastline Builders Ltd", contact: "Mike Herrera", value: "$14,000", stage: "New Lead", formEmail: null, formStatus: "none", notes: [] },
@@ -1122,6 +1036,11 @@ function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, wor
     setShowStarter(false);
   };
 
+  const removeOnboardingInstance = (instId) => {
+    if (!window.confirm("Remove this workflow from this client? Its progress won't be recoverable.")) return;
+    updateOnboardingsForClient(client.id, (clientList) => clientList.filter((i) => i.id !== instId));
+  };
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
@@ -1155,9 +1074,14 @@ function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, wor
                 <span className="text-sm font-semibold" style={{ color: T.ink }}>{inst.workflowName}</span>
                 <Pill color={T.amber} bg={T.paperAlt}>With {inst.steps[currentIdx].owner}</Pill>
               </div>
-              <button onClick={goToWorkflows} className="text-xs font-semibold px-3 py-1.5 rounded-lg" style={{ background: T.paperAlt, color: T.tealDark }}>
-                Edit this workflow
-              </button>
+              <div className="flex items-center gap-2">
+                <button onClick={goToWorkflows} className="text-xs font-semibold px-3 py-1.5 rounded-lg" style={{ background: T.paperAlt, color: T.tealDark }}>
+                  Edit this workflow
+                </button>
+                <button onClick={() => removeOnboardingInstance(inst.id)} title="Remove this workflow from this client">
+                  <Trash2 size={14} color={T.slateLight} />
+                </button>
+              </div>
             </div>
             <Card style={{ padding: 18 }}>
               <div className="flex flex-col gap-2">
@@ -1251,6 +1175,12 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
   const [noteDraft, setNoteDraft] = useState({ text: "", tags: [] });
   const [newReminder, setNewReminder] = useState({ text: "", date: "", recurring: "none", assignee: TEAM[0] });
   const [showAddClient, setShowAddClient] = useState(false);
+  // If the clients list is ever completely empty (freshly cleared, brand new install, or
+  // testing), fall straight into the Add Client form instead of letting the detail pane try
+  // to render around a client that doesn't exist — that's what was crashing before.
+  useEffect(() => {
+    if (clients.length === 0) setShowAddClient(true);
+  }, [clients.length]);
   const [newClientForm, setNewClientForm] = useState({
     name: "", legalName: "", plan: "", contractStart: "", contractRenewal: "",
     billingContact: "", billingEmail: "", billingTerms: "", billingStatus: "Current",
@@ -1404,7 +1334,7 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
             const dot = d < 0 ? T.coral : d <= 30 ? T.amber : T.tealDark;
             return (
               <button key={c.id} onClick={() => setSelectedId(c.id)} className="text-left p-3 rounded-xl transition-colors"
-                style={{ background: c.id === client.id ? T.paperAlt : T.card, border: `1px solid ${c.id === client.id ? T.tealDark : T.border}`, opacity: c.archived ? 0.6 : 1 }}>
+                style={{ background: c.id === client?.id ? T.paperAlt : T.card, border: `1px solid ${c.id === client?.id ? T.tealDark : T.border}`, opacity: c.archived ? 0.6 : 1 }}>
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-semibold" style={{ color: T.ink }}>{c.name}</span>
                   <span style={{ width: 8, height: 8, borderRadius: 999, background: dot }} />
@@ -3043,6 +2973,10 @@ function SystemsView({ clients, selectedId, setSelectedId, documentTemplates, sa
     setNewReissueMonth("");
   };
 
+  if (!client) {
+    return <div className="flex items-center justify-center h-full text-sm" style={{ color: T.slate }}>No clients yet — add one on the Clients tab first.</div>;
+  }
+
   return (
     <div className="flex h-full flex-col gap-4">
       <div className="flex rounded-lg p-1 w-fit" style={{ background: T.paperAlt }}>
@@ -3331,6 +3265,10 @@ function SalesView({ leads, convertLeadToClient }) {
   const [newLead, setNewLead] = useState({ company: "", contact: "", value: "" });
 
   const setStage = (id, stage) => updateDoc(doc(db, "leads", id), { stage });
+  const deleteLead = (id) => {
+    if (!window.confirm("Delete this lead? This can't be undone.")) return;
+    deleteDoc(doc(db, "leads", id));
+  };
 
   const sendForm = (lead) => {
     const email = emailDrafts[lead.id];
@@ -3407,10 +3345,13 @@ function SalesView({ leads, convertLeadToClient }) {
                   <Card key={l.id} style={{ padding: 12, borderTop: `4px solid ${meta.color}`, borderTopLeftRadius: 10, borderTopRightRadius: 10, boxShadow: "0 1px 3px rgba(21,36,35,0.06)" }}>
                     <div className="flex items-center justify-between">
                       <div className="text-sm font-semibold" style={{ color: T.ink }}>{l.company}</div>
-                      <select value={l.stage} onChange={(e) => setStage(l.id, e.target.value)}
-                        className="text-[11px] px-1.5 py-1 rounded-md outline-none" style={{ border: `1px solid ${T.border}`, color: T.slate, background: T.paperAlt }}>
-                        {stageOrder.map((s) => <option key={s} value={s}>{s}</option>)}
-                      </select>
+                      <div className="flex items-center gap-1.5">
+                        <select value={l.stage} onChange={(e) => setStage(l.id, e.target.value)}
+                          className="text-[11px] px-1.5 py-1 rounded-md outline-none" style={{ border: `1px solid ${T.border}`, color: T.slate, background: T.paperAlt }}>
+                          {stageOrder.map((s) => <option key={s} value={s}>{s}</option>)}
+                        </select>
+                        <button onClick={() => deleteLead(l.id)} title="Delete lead"><Trash2 size={13} color={T.slateLight} /></button>
+                      </div>
                     </div>
                     <div className="text-xs mt-0.5" style={{ color: T.slate }}>{l.contact}</div>
                     <div className="text-xs font-bold mt-1.5" style={{ color: T.tealDark }}>{l.value}</div>
@@ -5387,23 +5328,6 @@ export default function App() {
     );
     return unsub;
   }, []);
-  useEffect(() => {
-    (async () => {
-      try {
-        const snap = await getDocs(collection(db, "clients"));
-        if (snap.empty) {
-          await Promise.all(
-            initialClients.map((c) => {
-              const { id, ...data } = c;
-              return setDoc(doc(db, "clients", id), data);
-            })
-          );
-        }
-      } catch (err) {
-        console.error("Client seed failed (likely a Firestore permissions issue):", err);
-      }
-    })();
-  }, []);
   // Leads now live in Firestore, same pattern as clients: live subscription plus a
   // one-time seed of the mock data using the same ids so nothing else breaks.
   const [leads, setLeads] = useState([]);
@@ -5482,7 +5406,7 @@ export default function App() {
     setSelectedReseller(resellerId);
     setModule("resellers");
   };
-  const [selectedClient, setSelectedClient] = useState(initialClients[0].id);
+  const [selectedClient, setSelectedClient] = useState("");
   const [clientTabRequest, setClientTabRequest] = useState({ tab: null, nonce: 0 });
   const goToClient = (clientId, tab) => {
     setSelectedClient(clientId);

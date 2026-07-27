@@ -1228,9 +1228,6 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
   const [showArchived, setShowArchived] = useState(false);
   const [viewMonth, setViewMonth] = useState(currentMonth());
   useEffect(() => { setViewMonth(currentMonth()); }, [client?.id]);
-  const [xeroMonth, setXeroMonth] = useState(currentMonth());
-  useEffect(() => { setXeroMonth(currentMonth()); }, [client?.id]);
-  const canSeeXero = ["sophie", "vanessa"].includes((currentUser || "").trim().toLowerCase());
   const visibleClients = clients.filter((c) => (showArchived ? c.archived : !c.archived));
 
   const archiveClient = (id) => updateDoc(doc(db, "clients", id), { archived: true });
@@ -1495,11 +1492,11 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
             {[
               { id: "overview", label: "Overview", icon: Building2 },
               { id: "contract", label: "Contract", icon: CreditCard },
-              { id: "billing", label: "Billing", icon: ClipboardList },
+              { id: "billing", label: "Activity", icon: ClipboardList },
               { id: "onboarding", label: "Workflows", icon: ListChecks },
               { id: "notes", label: "Notes", icon: StickyNote },
               { id: "reminders", label: "Tasks", icon: Bell },
-            ].filter((t) => t.id !== "billing" || canSeeXero).map((t) => (
+            ].map((t) => (
               <button key={t.id} onClick={() => setTab(t.id)} className="flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium -mb-px whitespace-nowrap"
                 style={{ color: tab === t.id ? T.tealDark : T.slate, borderBottom: tab === t.id ? `2px solid ${T.tealDark}` : "2px solid transparent" }}>
                 <t.icon size={14} /> {t.label}
@@ -1674,153 +1671,8 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
             </Card>
           )}
 
-          {tab === "billing" && canSeeXero && (
+          {tab === "billing" && (
             <div className="flex flex-col gap-4">
-              {client.addedToXero ? (
-                <Card style={{ padding: "10px 16px" }} className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 text-xs" style={{ color: T.tealDark }}>
-                    <CheckCircle2 size={14} /> Added to Xero {client.addedToXeroDate ? `on ${fmtDate(client.addedToXeroDate)}` : ""}
-                  </div>
-                  <button onClick={() => updateDoc(doc(db, "clients", client.id), { addedToXero: false, addedToXeroDate: null })}
-                    className="text-[11px] font-semibold" style={{ color: T.slateLight }}>Undo</button>
-                </Card>
-              ) : (
-                <Card style={{ padding: 16 }}>
-                  <div className="text-sm font-semibold mb-1" style={{ color: T.ink }}>New client — Xero setup</div>
-                  <div className="text-[11px] mb-3" style={{ color: T.slateLight }}>Everything needed to add {client.name} as a new contact in Xero.</div>
-                  <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm mb-3">
-                    <div><span style={{ color: T.slateLight }}>Legal name</span><div style={{ color: T.ink, fontWeight: 600 }}>{client.legalName || client.name}</div></div>
-                    <div><span style={{ color: T.slateLight }}>Trading name</span><div style={{ color: T.ink, fontWeight: 600 }}>{client.name}</div></div>
-                    <div><span style={{ color: T.slateLight }}>Contact name</span><div style={{ color: T.ink, fontWeight: 600 }}>{client.billing?.contact || "—"}</div></div>
-                    <div><span style={{ color: T.slateLight }}>Contact email</span><div style={{ color: T.ink, fontWeight: 600 }}>{client.billing?.email || "—"}</div></div>
-                    <div><span style={{ color: T.slateLight }}>Contact phone</span><div style={{ color: T.ink, fontWeight: 600 }}>{(client.contacts || []).find((c) => c.name === client.billing?.contact)?.phone || (client.contacts || [])[0]?.phone || "—"}</div></div>
-                    <div><span style={{ color: T.slateLight }}>Payment terms</span><div style={{ color: T.ink, fontWeight: 600 }}>{client.billing?.terms || "—"}</div></div>
-                    <div><span style={{ color: T.slateLight }}>Plan</span><div style={{ color: T.ink, fontWeight: 600 }}>{billingTypeMeta[client.billingType || "FlatFee"].label}</div></div>
-                    <div><span style={{ color: T.slateLight }}>Contract value</span><div style={{ color: T.ink, fontWeight: 600 }}>{client.contract?.value || "—"}</div></div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => {
-                        const phone = (client.contacts || []).find((c) => c.name === client.billing?.contact)?.phone || (client.contacts || [])[0]?.phone || "—";
-                        const lines = [
-                          `New client for Xero: ${client.name}`,
-                          `Legal name: ${client.legalName || client.name}`,
-                          `Trading name: ${client.name}`,
-                          `Contact: ${client.billing?.contact || "—"}`,
-                          `Email: ${client.billing?.email || "—"}`,
-                          `Phone: ${phone}`,
-                          `Payment terms: ${client.billing?.terms || "—"}`,
-                          `Plan: ${billingTypeMeta[client.billingType || "FlatFee"].label}`,
-                          `Contract value: ${client.contract?.value || "—"}`,
-                        ];
-                        navigator.clipboard.writeText(lines.join("\n"))
-                          .then(() => alert("Copied — paste this into Xero when creating the new contact."))
-                          .catch(() => alert("Couldn't copy to clipboard — your browser may have blocked it."));
-                      }}
-                      className="text-xs font-semibold px-3 py-1.5 rounded-lg flex items-center gap-1.5" style={{ background: T.tealDark, color: "#fff" }}>
-                      <ClipboardList size={13} /> Copy new client details
-                    </button>
-                    <button onClick={() => updateDoc(doc(db, "clients", client.id), { addedToXero: true, addedToXeroDate: today() })}
-                      className="text-xs font-semibold px-3 py-1.5 rounded-lg flex items-center gap-1.5" style={{ background: T.paperAlt, color: T.tealDark }}>
-                      <CheckCircle2 size={13} /> Mark as added to Xero
-                    </button>
-                  </div>
-                </Card>
-              )}
-              <div className="flex items-center justify-between">
-                <select value={xeroMonth} onChange={(e) => setXeroMonth(e.target.value)}
-                  className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
-                  {monthsWithActivity(client.hours.log).map((m) => (
-                    <option key={m} value={m}>{m === currentMonth() ? "This month" : monthLabel(m)}</option>
-                  ))}
-                </select>
-                    <button
-                      onClick={() => {
-                        const hoursThisMonth = client.hours.log.filter((h) => h.date.slice(0, 7) === xeroMonth);
-                        const extrasThisMonth = client.extras.filter((e) => e.date.slice(0, 7) === xeroMonth);
-                        const totalHours = hoursThisMonth.reduce((s, h) => s + h.hours, 0);
-                        const usersThisMonth = client.users.log.find((u) => u.month === xeroMonth || u.month === monthLabel(xeroMonth));
-                        const lines = [
-                          `${client.legalName || client.name} — ${xeroMonth === currentMonth() ? "This month" : monthLabel(xeroMonth)}`,
-                          `Billing contact: ${client.billing?.contact || "—"} (${client.billing?.email || "—"})`,
-                          `Billing terms: ${client.billing?.terms || "—"} · Status: ${client.billing?.status || "—"}`,
-                          `Plan: ${billingTypeMeta[client.billingType || "FlatFee"].label} · Contract value: ${client.contract?.value || "—"}`,
-                          "",
-                          `Hours logged: ${totalHours}h (${client.hours.included || 0}h included)`,
-                          ...hoursThisMonth.map((h) => `  • ${fmtDate(h.date)} — ${h.member} — ${h.description} — ${h.hours}h`),
-                          "",
-                          `Extras: ${extrasThisMonth.length}`,
-                          ...extrasThisMonth.map((e) => `  • ${fmtDate(e.date)} — ${e.description} — ${e.status} — ${e.hours}h`),
-                          "",
-                          `App users this month: ${usersThisMonth?.count ?? "—"}`,
-                        ];
-                        navigator.clipboard.writeText(lines.join("\n"))
-                          .then(() => alert("Copied — paste this into Xero."))
-                          .catch(() => alert("Couldn't copy to clipboard — your browser may have blocked it."));
-                      }}
-                      className="text-xs font-semibold px-3 py-1.5 rounded-lg flex items-center gap-1.5" style={{ background: T.tealDark, color: "#fff" }}>
-                      <ClipboardList size={13} /> Copy for Xero
-                    </button>
-                  </div>
-
-                  <Card style={{ padding: 16 }}>
-                    <div className="text-sm font-semibold mb-2" style={{ color: T.ink }}>Billing contact</div>
-                    <div className="text-sm" style={{ color: T.ink }}>{client.billing?.contact || "—"}</div>
-                    <div className="text-xs" style={{ color: T.slate }}>{client.billing?.email || "—"}</div>
-                    <div className="text-xs mt-2" style={{ color: T.slate }}>Terms: {client.billing?.terms || "—"} · Status: {client.billing?.status || "—"}</div>
-                    <div className="text-xs mt-1" style={{ color: T.slate }}>Plan: {billingTypeMeta[client.billingType || "FlatFee"].label} · Contract value: {client.contract?.value || "—"}</div>
-                  </Card>
-
-                  <Card style={{ padding: 16 }}>
-                    <div className="text-sm font-semibold mb-3" style={{ color: T.ink }}>
-                      Hours — {xeroMonth === currentMonth() ? "this month" : monthLabel(xeroMonth)}
-                    </div>
-                    <div className="flex flex-col gap-2">
-                      {client.hours.log.filter((h) => h.date.slice(0, 7) === xeroMonth).map((h) => (
-                        <div key={h.id} className="flex items-center justify-between text-sm py-1.5" style={{ borderBottom: `1px solid ${T.border}` }}>
-                          <div><span className="font-medium" style={{ color: T.ink }}>{h.member}</span><span className="ml-2" style={{ color: T.slate }}>{h.description}</span></div>
-                          <div className="flex items-center gap-3 shrink-0"><span style={{ color: T.slate }}>{fmtDate(h.date)}</span><span className="font-bold" style={{ color: T.tealDark }}>{h.hours}h</span></div>
-                        </div>
-                      ))}
-                      {client.hours.log.filter((h) => h.date.slice(0, 7) === xeroMonth).length === 0 && <div className="text-xs" style={{ color: T.slateLight }}>Nothing logged.</div>}
-                      <div className="flex items-center justify-between text-sm pt-1.5 font-bold">
-                        <div style={{ color: T.ink }}>Total</div>
-                        <div style={{ color: T.tealDark }}>{client.hours.log.filter((h) => h.date.slice(0, 7) === xeroMonth).reduce((s, h) => s + h.hours, 0)}h</div>
-                      </div>
-                    </div>
-                  </Card>
-
-                  <Card style={{ padding: 16 }}>
-                    <div className="text-sm font-semibold mb-3" style={{ color: T.ink }}>
-                      Extras — {xeroMonth === currentMonth() ? "this month" : monthLabel(xeroMonth)}
-                    </div>
-                    <div className="flex flex-col gap-2">
-                      {client.extras.filter((e) => e.date.slice(0, 7) === xeroMonth).map((e) => (
-                        <div key={e.id} className="flex items-center justify-between text-sm py-1.5" style={{ borderBottom: `1px solid ${T.border}` }}>
-                          <div style={{ color: T.ink }}>{e.description}</div>
-                          <div className="flex items-center gap-3 shrink-0"><Pill color={T.amber} bg={T.paperAlt}>{e.status}</Pill><span className="font-bold" style={{ color: T.tealDark }}>{e.hours}h</span></div>
-                        </div>
-                      ))}
-                      {client.extras.filter((e) => e.date.slice(0, 7) === xeroMonth).length === 0 && <div className="text-xs" style={{ color: T.slateLight }}>None this month.</div>}
-                    </div>
-                  </Card>
-
-              <Card style={{ padding: 16 }}>
-                <div className="text-sm font-semibold mb-1" style={{ color: T.ink }}>Billing summary — all clients</div>
-                <div className="text-[11px] mb-3" style={{ color: T.slateLight }}>Hours logged per client, {xeroMonth === currentMonth() ? "this month" : monthLabel(xeroMonth)}.</div>
-                <div className="flex flex-col gap-1.5">
-                  {clients.filter((c) => !c.archived).map((c) => {
-                    const hrs = (c.hours?.log || []).filter((h) => h.date.slice(0, 7) === xeroMonth).reduce((s, h) => s + h.hours, 0);
-                    return (
-                      <div key={c.id} className="flex items-center justify-between text-sm py-1" style={{ borderBottom: `1px solid ${T.border}` }}>
-                        <button onClick={() => setSelectedId(c.id)} className="text-left" style={{ color: c.id === client.id ? T.tealDark : T.ink, fontWeight: c.id === client.id ? 700 : 400 }}>{c.name}</button>
-                        <span className="font-bold" style={{ color: hrs > 0 ? T.tealDark : T.slateLight }}>{hrs}h</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              </Card>
-
               <div className="flex items-center gap-2">
                 <Pill color={billingTypeMeta[client.billingType || "FlatFee"].color} bg={T.paperAlt}>
                   {billingTypeMeta[client.billingType || "FlatFee"].label}
@@ -3931,17 +3783,47 @@ function BillingOverview({ clients, resellers }) {
       {newClients.length > 0 && (
         <Card style={{ padding: 16, borderLeft: `3px solid ${T.amber}` }}>
           <div className="text-sm font-semibold mb-1" style={{ color: T.ink }}>New clients — set up for billing</div>
-          <div className="text-xs mb-3" style={{ color: T.slate }}>Came through the sign-up form this month and still need adding in Xero. Clear each once it's done.</div>
-          <div className="flex flex-col gap-2">
-            {newClients.map((c) => (
-              <div key={c.id} className="flex items-center justify-between py-1.5" style={{ borderBottom: `1px solid ${T.border}` }}>
-                <div>
-                  <span className="text-sm font-medium" style={{ color: T.ink }}>{c.name}</span>
-                  <span className="ml-2 text-xs" style={{ color: T.slateLight }}>{c.billing.contact} &middot; {c.billing.email}</span>
+          <div className="text-xs mb-3" style={{ color: T.slate }}>Came through the sign-up form this month and still need adding in Xero. Everything needed to create the contact is below — clear each once it's done.</div>
+          <div className="flex flex-col gap-3">
+            {newClients.map((c) => {
+              const phone = (c.contacts || []).find((ct) => ct.name === c.billing?.contact)?.phone || (c.contacts || [])[0]?.phone || "—";
+              return (
+                <div key={c.id} className="pb-3" style={{ borderBottom: `1px solid ${T.border}` }}>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm font-semibold" style={{ color: T.ink }}>{c.name}</span>
+                    <button onClick={() => markBillingSetUp(c.id)} className="text-xs font-semibold px-3 py-1.5 rounded-lg shrink-0" style={{ background: T.tealDark, color: "#fff" }}>Added to Xero</button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs mb-2">
+                    <div><span style={{ color: T.slateLight }}>Legal name: </span><span style={{ color: T.ink, fontWeight: 600 }}>{c.legalName || c.name}</span></div>
+                    <div><span style={{ color: T.slateLight }}>Contact: </span><span style={{ color: T.ink, fontWeight: 600 }}>{c.billing?.contact || "—"}</span></div>
+                    <div><span style={{ color: T.slateLight }}>Email: </span><span style={{ color: T.ink, fontWeight: 600 }}>{c.billing?.email || "—"}</span></div>
+                    <div><span style={{ color: T.slateLight }}>Phone: </span><span style={{ color: T.ink, fontWeight: 600 }}>{phone}</span></div>
+                    <div><span style={{ color: T.slateLight }}>Payment terms: </span><span style={{ color: T.ink, fontWeight: 600 }}>{c.billing?.terms || "—"}</span></div>
+                    <div><span style={{ color: T.slateLight }}>Plan: </span><span style={{ color: T.ink, fontWeight: 600 }}>{billingTypeMeta[c.billingType || "FlatFee"].label}</span></div>
+                    <div><span style={{ color: T.slateLight }}>Contract value: </span><span style={{ color: T.ink, fontWeight: 600 }}>{c.contract?.value || "—"}</span></div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      const lines = [
+                        `New client for Xero: ${c.name}`,
+                        `Legal name: ${c.legalName || c.name}`,
+                        `Contact: ${c.billing?.contact || "—"}`,
+                        `Email: ${c.billing?.email || "—"}`,
+                        `Phone: ${phone}`,
+                        `Payment terms: ${c.billing?.terms || "—"}`,
+                        `Plan: ${billingTypeMeta[c.billingType || "FlatFee"].label}`,
+                        `Contract value: ${c.contract?.value || "—"}`,
+                      ];
+                      navigator.clipboard.writeText(lines.join("\n"))
+                        .then(() => alert("Copied — paste this into Xero when creating the new contact."))
+                        .catch(() => alert("Couldn't copy to clipboard — your browser may have blocked it."));
+                    }}
+                    className="text-[11px] font-semibold px-2.5 py-1.5 rounded-lg flex items-center gap-1.5" style={{ background: T.paperAlt, color: T.tealDark }}>
+                    <ClipboardList size={12} /> Copy details
+                  </button>
                 </div>
-                <button onClick={() => markBillingSetUp(c.id)} className="text-xs font-semibold px-3 py-1.5 rounded-lg shrink-0" style={{ background: T.tealDark, color: "#fff" }}>Added to Xero</button>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </Card>
       )}
@@ -5556,6 +5438,11 @@ export default function App() {
       }
     })();
   }, []);
+  // Billing/Xero access — Sophie and Vanessa only. Case-insensitive/trimmed since
+  // currentUser comes from a Firestore lookup (see above) that could plausibly not match
+  // an exact "Sophie"/"Vanessa" string (casing, whitespace, or a missing team doc falling
+  // back to a raw email).
+  const canSeeBilling = ["sophie", "vanessa"].includes((currentUser || "").trim().toLowerCase());
   // Clients now live in Firestore. On first run (empty collection) we seed the
   // sample data you've been testing with, using the same ids ("bmc", "radius", etc.)
   // so everything else that references those ids keeps working.
@@ -6120,7 +6007,7 @@ export default function App() {
         <NavItem icon={Users} label="Clients" active={module === "clients"} onClick={() => setModule("clients")} />
         <NavItem icon={Layers} label="Systems" active={module === "systems"} onClick={() => setModule("systems")} />
         <NavItem icon={TrendingUp} label="Sales" active={module === "sales"} onClick={() => setModule("sales")} />
-        <NavItem icon={ClipboardList} label="Billing" active={module === "billing"} onClick={() => setModule("billing")} />
+        {canSeeBilling && <NavItem icon={ClipboardList} label="Billing" active={module === "billing"} onClick={() => setModule("billing")} />}
         <NavItem icon={LayoutDashboard} label="Dashboards" active={module === "dashboards"} onClick={() => setModule("dashboards")} />
         <NavItem icon={Store} label="Resellers" active={module === "resellers"} onClick={() => setModule("resellers")} />
         <NavItem icon={ListChecks} label="Workflows" active={module === "workflows"} onClick={() => setModule("workflows")} />
@@ -6159,7 +6046,7 @@ export default function App() {
           )}
           {module === "systems" && <SystemsView clients={clients} selectedId={selectedClient} setSelectedId={setSelectedClient} documentTemplates={documentTemplates} saveDocumentTemplate={saveDocumentTemplate} systemReviewLog={systemReviewLog} addSystemReviewLogEntry={addSystemReviewLogEntry} customErpItems={customErpItems} addCustomErpItem={addCustomErpItem} />}
           {module === "sales" && <SalesView leads={leads} convertLeadToClient={convertLeadToClient} />}
-          {module === "billing" && <BillingOverview clients={clients} resellers={resellers} />}
+          {module === "billing" && canSeeBilling && <BillingOverview clients={clients} resellers={resellers} />}
           {module === "dashboards" && <DashboardsView clients={clients} tasks={tasks} touchpointBaselines={touchpointBaselines} updateTouchpointBaseline={updateTouchpointBaseline} />}
           {module === "workflows" && <WorkflowsView workflows={workflows} />}
           {module === "resellers" && <ResellersView resellers={resellers} selectedId={selectedReseller} setSelectedId={setSelectedReseller} />}

@@ -1230,7 +1230,7 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
   useEffect(() => { setViewMonth(currentMonth()); }, [client?.id]);
   const [xeroMonth, setXeroMonth] = useState(currentMonth());
   useEffect(() => { setXeroMonth(currentMonth()); }, [client?.id]);
-  const canSeeXero = currentUser === "Sophie" || currentUser === "Vanessa";
+  const canSeeXero = ["sophie", "vanessa"].includes((currentUser || "").trim().toLowerCase());
   const visibleClients = clients.filter((c) => (showArchived ? c.archived : !c.archived));
 
   const archiveClient = (id) => updateDoc(doc(db, "clients", id), { archived: true });

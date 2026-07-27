@@ -1054,11 +1054,12 @@ function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, wor
   // this month" and Monthly Hours list already read from), keyed by a fixed id derived from
   // the instance so changing the hours updates that same entry instead of creating another.
   const setInstanceBillable = (inst, billable, hours) => {
-    updateOnboardingsForClient(client.id, (clientList) => clientList.map((i) => (i.id === inst.id ? { ...i, billable, billableHours: hours } : i)));
+    const safeHours = hours == null ? 0 : hours;
+    updateOnboardingsForClient(client.id, (clientList) => clientList.map((i) => (i.id === inst.id ? { ...i, billable, billableHours: safeHours } : i)));
     const logId = "wf-billable-" + inst.id;
     const withoutOld = (client.hours?.log || []).filter((h) => h.id !== logId);
-    const nextLog = billable && hours
-      ? [...withoutOld, { id: logId, date: inst.completedDate || today(), member: "—", hours: Number(hours) || 0, description: `Billable: ${inst.workflowName}` }]
+    const nextLog = billable && safeHours
+      ? [...withoutOld, { id: logId, date: inst.completedDate || today(), member: "—", hours: Number(safeHours) || 0, description: `Billable: ${inst.workflowName}` }]
       : withoutOld;
     updateDoc(doc(db, "clients", client.id), { hours: { ...client.hours, log: nextLog } });
   };
@@ -4551,24 +4552,23 @@ function MobileQuickView({ clients, currentUser, goToFullApp }) {
    Recommended Actions) and a construction-site client (Toolbox Talks, Permits, Site Reviews
    & Observations, Incidents & Near Misses, Task Analyses, Sign-In & Visitor Log, Corrective
    Actions). Add more templates here as real examples come in. */
-const REPORT_TEMPLATES = {
-  "Consultancy client (e.g. Manaaki Ora Trust style)": [
-    "Highlights",
-    "Incidents and Near Misses",
-    "Hui and Health & Safety Meetings",
-    "Trends and Observations",
-    "Recommended Actions",
-  ],
-  "Construction site client (e.g. BMC style)": [
-    "Toolbox Talks",
-    "Permits",
-    "Site Reviews & Observations",
-    "Incidents & Near Misses",
-    "Task Analyses",
-    "Sign-In & Visitor Log",
-    "Corrective Actions",
-  ],
-};
+// Starter data only — seeded into the "reportTemplates" Firestore collection once, the
+// first time it's empty. After that, templates are edited live in the app (see the
+// "Manage templates" panel in ReportsView) — this constant is never read again.
+const initialReportTemplates = [
+  {
+    id: "tmpl-consultancy", name: "Consultancy client (e.g. Manaaki Ora Trust style)",
+    sections: ["Highlights", "Incidents and Near Misses", "Hui and Health & Safety Meetings", "Trends and Observations", "Recommended Actions"],
+  },
+  {
+    id: "tmpl-construction", name: "Construction site client (e.g. BMC style)",
+    sections: ["Toolbox Talks", "Permits", "Site Reviews & Observations", "Incidents & Near Misses", "Task Analyses", "Sign-In & Visitor Log", "Corrective Actions"],
+  },
+  {
+    id: "tmpl-weekly", name: "Weekly reporting",
+    sections: ["Toolbox Talks", "Incidents & Near Misses", "Site Activity", "Actions for Next Week"],
+  },
+];
 
 // Minimal dependency-free CSV parser — handles quoted fields (including embedded commas
 // and escaped "" quotes) since OSHE app exports are likely to have commas inside free-text
@@ -4611,8 +4611,8 @@ function truncateToWidth(text, font, size, width) {
   return t + "…";
 }
 
-// Suggested CSV column shapes for the section titles that come out of the two built-in
-// REPORT_TEMPLATES presets, keyed lowercase so custom-cased titles still match. Anything not
+// Suggested CSV column shapes for the section titles that come out of the built-in
+// starter templates, keyed lowercase so custom-cased titles still match. Anything not
 // in here (custom sections) just gets a generic "any CSV works" note — first row is always
 // treated as headers regardless.
 const SECTION_CSV_GUIDE = {
@@ -4627,6 +4627,8 @@ const SECTION_CSV_GUIDE = {
   "hui and health & safety meetings": ["Meeting Type", "Service / Ropu", "Date", "Venue", "Next Meeting"],
   "trends and observations": ["Theme", "Description"],
   "recommended actions": ["Priority", "Recommendation", "Detail"],
+  "site activity": ["Date", "Site", "Activity", "Notes"],
+  "actions for next week": ["Action", "Assigned To", "Due Date"],
 };
 function guideForSection(title) { return SECTION_CSV_GUIDE[(title || "").trim().toLowerCase()] || null; }
 
@@ -4922,7 +4924,7 @@ async function downloadMonthlyReportPdf({ client, monthYear, sections, highlight
   URL.revokeObjectURL(url);
 }
 
-function ReportsView({ clients }) {
+function ReportsView({ clients, reportTemplates, addReportTemplate, renameReportTemplate, deleteReportTemplate, addTemplateSection, removeTemplateSection }) {
   const [selectedId, setSelectedId] = useState(clients[0]?.id || "");
   const client = clients.find((c) => c.id === selectedId) || clients[0];
   const [monthYear, setMonthYear] = useState(currentMonthYear());
@@ -4934,6 +4936,9 @@ function ReportsView({ clients }) {
   const [newSectionTitle, setNewSectionTitle] = useState("");
   const [downloading, setDownloading] = useState(false);
   const [csvChecklistOpen, setCsvChecklistOpen] = useState(false);
+  const [templatesOpen, setTemplatesOpen] = useState(false);
+  const [newTemplateName, setNewTemplateName] = useState("");
+  const [newTemplateSectionDrafts, setNewTemplateSectionDrafts] = useState({});
 
   useEffect(() => {
     if (!client) return;
@@ -4971,8 +4976,9 @@ function ReportsView({ clients }) {
   };
   const save = (nextSections) => persist({ sections: nextSections });
 
-  const applyTemplate = (templateName) => {
-    const titles = REPORT_TEMPLATES[templateName] || [];
+  const applyTemplate = (templateId) => {
+    const tmpl = reportTemplates.find((t) => t.id === templateId);
+    const titles = tmpl?.sections || [];
     save(titles.map((title) => ({ id: "sec" + Date.now() + Math.random().toString(36).slice(2, 6), title, comment: "", csvFileName: null, csvHeaders: [], csvData: [], highlightNumber: "", highlightLabel: "", chartType: "none", chartColumn: "", chartValueColumn: "", showTable: true })));
   };
 
@@ -4985,8 +4991,27 @@ function ReportsView({ clients }) {
   const removeSection = (id) => save(sections.filter((s) => s.id !== id));
   const updateSection = (id, fields) => save(sections.map((s) => (s.id === id ? { ...s, ...fields } : s)));
 
-  const handleCsvUpload = (id, file) => {
+  const handleCsvUpload = async (id, file) => {
     if (!file) return;
+    const ext = file.name.split(".").pop().toLowerCase();
+    if (ext === "xlsx" || ext === "xls") {
+      try {
+        const XLSX = await importWithReloadOnStaleChunk(() => import("xlsx"));
+        const buffer = await file.arrayBuffer();
+        const workbook = XLSX.read(buffer, { type: "array" });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: "" });
+        const headers = (rows[0] || []).map((h) => String(h));
+        const data = rows.slice(1)
+          .filter((row) => row.some((v) => String(v ?? "").trim() !== ""))
+          .map((row) => headers.map((_, i) => String(row[i] ?? "")));
+        updateSection(id, { csvFileName: file.name, csvHeaders: headers, csvData: data });
+      } catch (err) {
+        console.error("Excel import failed:", err);
+        alert(`Couldn't read that Excel file: ${err.message || err}`);
+      }
+      return;
+    }
     const reader = new FileReader();
     reader.onload = (e) => {
       const { headers, data } = parseCsv(String(e.target.result || ""));
@@ -5027,17 +5052,62 @@ function ReportsView({ clients }) {
             <select defaultValue="" onChange={(e) => { if (e.target.value) applyTemplate(e.target.value); e.target.value = ""; }}
               className="text-sm px-3 py-2 rounded-lg outline-none" style={{ background: T.card, border: `1px solid ${T.border}`, color: T.ink }}>
               <option value="">Choose a template…</option>
-              {Object.keys(REPORT_TEMPLATES).map((name) => <option key={name} value={name}>{name}</option>)}
+              {reportTemplates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
             </select>
           </div>
         </div>
+      </Card>
+
+      <Card style={{ padding: "10px 16px" }}>
+        <button onClick={() => setTemplatesOpen((o) => !o)} className="w-full flex items-center justify-between text-left">
+          <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: T.slate }}>Manage templates ({reportTemplates.length})</span>
+          <ChevronDown size={14} color={T.slateLight} style={{ transform: templatesOpen ? "rotate(180deg)" : "none" }} />
+        </button>
+        {templatesOpen && (
+          <div className="flex flex-col gap-3 mt-3">
+            {reportTemplates.map((t) => (
+              <div key={t.id} className="rounded-lg p-3" style={{ background: T.paperAlt }}>
+                <div className="flex items-center gap-2 mb-2">
+                  <input value={t.name} onChange={(e) => renameReportTemplate(t.id, e.target.value)}
+                    className="flex-1 text-sm font-semibold px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink, background: T.card }} />
+                  <button onClick={() => deleteReportTemplate(t.id)} title="Delete template"><Trash2 size={14} color={T.slateLight} /></button>
+                </div>
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  {t.sections.map((s) => (
+                    <span key={s} className="text-xs px-2 py-1 rounded-full flex items-center gap-1.5" style={{ background: T.card, color: T.ink }}>
+                      {s}
+                      <button onClick={() => removeTemplateSection(t.id, s)} title="Remove section from template" style={{ color: T.slateLight }}>×</button>
+                    </span>
+                  ))}
+                  {t.sections.length === 0 && <span className="text-xs" style={{ color: T.slateLight }}>No sections yet — add one below.</span>}
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <input value={newTemplateSectionDrafts[t.id] || ""} onChange={(e) => setNewTemplateSectionDrafts((d) => ({ ...d, [t.id]: e.target.value }))}
+                    placeholder="New section name…" onKeyDown={(e) => { if (e.key === "Enter") { addTemplateSection(t.id, newTemplateSectionDrafts[t.id] || ""); setNewTemplateSectionDrafts((d) => ({ ...d, [t.id]: "" })); } }}
+                    className="flex-1 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink, background: T.card }} />
+                  <button onClick={() => { addTemplateSection(t.id, newTemplateSectionDrafts[t.id] || ""); setNewTemplateSectionDrafts((d) => ({ ...d, [t.id]: "" })); }}
+                    className="text-xs font-semibold px-2.5 py-1.5 rounded-lg shrink-0" style={{ background: T.tealDark, color: "#fff" }}>Add</button>
+                </div>
+              </div>
+            ))}
+            <div className="flex items-center gap-1.5 pt-1">
+              <input value={newTemplateName} onChange={(e) => setNewTemplateName(e.target.value)} placeholder="New template name…"
+                onKeyDown={(e) => { if (e.key === "Enter") { addReportTemplate(newTemplateName); setNewTemplateName(""); } }}
+                className="flex-1 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+              <button onClick={() => { addReportTemplate(newTemplateName); setNewTemplateName(""); }}
+                className="text-xs font-semibold px-2.5 py-1.5 rounded-lg shrink-0 flex items-center gap-1" style={{ background: T.tealDark, color: "#fff" }}>
+                <Plus size={12} /> New template
+              </button>
+            </div>
+          </div>
+        )}
       </Card>
 
       {sections.length > 0 && (
         <Card style={{ padding: "10px 16px" }}>
           <button onClick={() => setCsvChecklistOpen((o) => !o)} className="w-full flex items-center justify-between text-left">
             <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: T.slate }}>
-              CSVs needed for {monthLabel} ({sections.filter((s) => s.csvHeaders?.length > 0).length}/{sections.length} uploaded)
+              Data needed for {monthLabel} ({sections.filter((s) => s.csvHeaders?.length > 0).length}/{sections.length} uploaded)
             </span>
             <ChevronDown size={14} color={T.slateLight} style={{ transform: csvChecklistOpen ? "rotate(180deg)" : "none" }} />
           </button>
@@ -5057,7 +5127,7 @@ function ReportsView({ clients }) {
                         <span style={{ color: T.coral }}> — needed</span>
                       )}
                       <div style={{ color: T.slateLight }}>
-                        {guide ? `Suggested columns: ${guide.join(", ")}` : "Any CSV works — the first row is treated as column headers."}
+                        {guide ? `Suggested columns: ${guide.join(", ")}` : "Any CSV or Excel file works — the first row is treated as column headers."}
                       </div>
                     </div>
                   </div>
@@ -5104,8 +5174,8 @@ function ReportsView({ clients }) {
 
               <div className="flex items-center gap-3 mb-3">
                 <label className="text-xs font-semibold px-3 py-1.5 rounded-lg cursor-pointer flex items-center gap-1.5" style={{ background: T.paperAlt, color: T.tealDark }}>
-                  <Upload size={13} /> {s.csvFileName ? "Replace CSV" : "Drop in CSV"}
-                  <input type="file" accept=".csv,text/csv" className="hidden" onChange={(e) => handleCsvUpload(s.id, e.target.files?.[0])} />
+                  <Upload size={13} /> {s.csvFileName ? "Replace file" : "Drop in CSV or Excel"}
+                  <input type="file" accept=".csv,text/csv,.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" className="hidden" onChange={(e) => handleCsvUpload(s.id, e.target.files?.[0])} />
                 </label>
                 {s.csvFileName && (
                   <span className="text-xs" style={{ color: T.slateLight }}>{s.csvFileName} — {s.csvData?.length || 0} row{s.csvData?.length === 1 ? "" : "s"}</span>
@@ -5820,6 +5890,45 @@ export default function App() {
     })();
   }, []);
 
+  // Report templates — same "collection of named, editable lists" shape as workflows, just
+  // for the Reports tab's "Start from a template" picker. Editable live in the app now
+  // (see ReportsView's "Manage templates" panel) instead of being hardcoded.
+  const [reportTemplates, setReportTemplates] = useState([]);
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "reportTemplates"), (snap) => setReportTemplates(snap.docs.map((d) => ({ id: d.id, ...d.data() }))), (err) => console.error("Report templates subscription failed:", err));
+    return unsub;
+  }, []);
+  useEffect(() => {
+    (async () => {
+      try {
+        const snap = await getDocs(collection(db, "reportTemplates"));
+        if (snap.empty) await Promise.all(initialReportTemplates.map((t) => { const { id, ...data } = t; return setDoc(doc(db, "reportTemplates", id), data); }));
+      } catch (err) { console.error("Report template seed failed (likely a Firestore permissions issue):", err); }
+    })();
+  }, []);
+  const addReportTemplate = (name) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    setDoc(doc(db, "reportTemplates", "tmpl" + Date.now()), { name: trimmed, sections: [] });
+  };
+  const renameReportTemplate = (id, name) => updateDoc(doc(db, "reportTemplates", id), { name });
+  const deleteReportTemplate = (id) => {
+    if (!window.confirm("Delete this template? Reports already built from it won't be affected.")) return;
+    deleteDoc(doc(db, "reportTemplates", id));
+  };
+  const addTemplateSection = (id, sectionName) => {
+    const trimmed = sectionName.trim();
+    if (!trimmed) return;
+    const t = reportTemplates.find((x) => x.id === id);
+    if (!t || t.sections.includes(trimmed)) return;
+    updateDoc(doc(db, "reportTemplates", id), { sections: [...t.sections, trimmed] });
+  };
+  const removeTemplateSection = (id, sectionName) => {
+    const t = reportTemplates.find((x) => x.id === id);
+    if (!t) return;
+    updateDoc(doc(db, "reportTemplates", id), { sections: t.sections.filter((s) => s !== sectionName) });
+  };
+
   // Onboardings — one Firestore doc per client, holding that client's list of onboarding instances.
   // Kept as a { [clientId]: [...] } shape in local state to match every existing read site.
   const initialOnboardings = {
@@ -6051,7 +6160,7 @@ export default function App() {
           {module === "workflows" && <WorkflowsView workflows={workflows} />}
           {module === "resellers" && <ResellersView resellers={resellers} selectedId={selectedReseller} setSelectedId={setSelectedReseller} />}
           {module === "tasks" && <TasksView tasks={tasks} clients={clients} onboardings={onboardings} currentUser={currentUser} goToClient={goToClient} resellers={resellers} goToReseller={goToReseller} />}
-          {module === "reports" && <ReportsView clients={clients} />}
+          {module === "reports" && <ReportsView clients={clients} reportTemplates={reportTemplates} addReportTemplate={addReportTemplate} renameReportTemplate={renameReportTemplate} deleteReportTemplate={deleteReportTemplate} addTemplateSection={addTemplateSection} removeTemplateSection={removeTemplateSection} />}
           {module === "schedule" && <ScheduleView tasks={tasks} clients={clients} onboardings={onboardings} scheduleBlocks={scheduleBlocks} addScheduleBlock={addScheduleBlock} removeScheduleBlock={removeScheduleBlock} goToClient={goToClient} />}
         </div>
       </div>

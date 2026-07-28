@@ -4704,7 +4704,7 @@ function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, wor
 // OHSMS review reminder always has this shape: fires 30 days before the actual due date
 // (an early-warning buffer, not the due date itself), yearly, assigned to Jo.
 function ohsmsAnnualReminder(dueDate) {
-  return { id: "ohsms-annual-review", text: "OHSMS annual review due", date: addDays(dueDate, -30), recurring: "yearly", done: false, assignee: "Jo" };
+  return { id: "ohsms-annual-review", text: "OHSMS annual review due", date: addDays(dueDate, -30), recurring: "yearly", done: false, assignee: "Jo", estHours: 0.5 };
 }
 function upsertOhsmsReminder(reminders, dueDate) {
   const reminder = ohsmsAnnualReminder(dueDate);
@@ -4724,7 +4724,7 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
   const [newUserCount, setNewUserCount] = useState("");
   const [newContact, setNewContact] = useState({ name: "", role: "", email: "", phone: "" });
   const [noteDraft, setNoteDraft] = useState({ text: "", tags: [] });
-  const [newReminder, setNewReminder] = useState({ text: "", date: "", recurring: "none", assignee: TEAM[0] });
+  const [newReminder, setNewReminder] = useState({ text: "", date: "", recurring: "none", assignee: TEAM[0], estHours: "" });
   const [showAddClient, setShowAddClient] = useState(false);
   // If the clients list is ever completely empty (freshly cleared, brand new install, or
   // testing), fall straight into the Add Client form instead of letting the detail pane try
@@ -4759,6 +4759,33 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
     const { id, ...fields } = updated;
     updateDoc(doc(db, "clients", client.id), fields);
   };
+
+  const [uploadingClientFile, setUploadingClientFile] = useState(false);
+  const uploadClientFile = async (file) => {
+    if (!file) return;
+    setUploadingClientFile(true);
+    try {
+      const path = `client-files/${client.id}/${Date.now()}-${file.name}`;
+      await uploadBytes(storageRef(storage, path), file);
+      const entry = { id: Date.now(), path, name: file.name, uploadedAt: today() };
+      updateClient((c) => ({ ...c, files: [...(c.files || []), entry] }));
+    } catch (err) {
+      console.error("Client file upload failed:", err);
+      alert(`Couldn't upload that file: ${err.message || err}`);
+    } finally {
+      setUploadingClientFile(false);
+    }
+  };
+  const viewClientFile = async (path) => {
+    try {
+      const url = await getDownloadURL(storageRef(storage, path));
+      window.open(url, "_blank");
+    } catch (err) {
+      console.error("Couldn't open file:", err);
+      alert("Couldn't open that file.");
+    }
+  };
+  const removeClientFile = (fileId) => updateClient((c) => ({ ...c, files: (c.files || []).filter((f) => f.id !== fileId) }));
 
   const addClient = async () => {
     if (!newClientForm.name.trim()) return;
@@ -4841,8 +4868,8 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
   const withOhsmsReminder = (c, dueDate) => ({ ...c, reminders: upsertOhsmsReminder(c.reminders, dueDate) });
   const addReminder = () => {
     if (!newReminder.text.trim() || !newReminder.date) return;
-    updateClient((c) => ({ ...c, reminders: [...c.reminders, { id: Date.now(), ...newReminder, done: false }] }));
-    setNewReminder({ text: "", date: "", recurring: "none", assignee: TEAM[0] });
+    updateClient((c) => ({ ...c, reminders: [...c.reminders, { id: Date.now(), ...newReminder, estHours: newReminder.estHours ? Number(newReminder.estHours) : 0, done: false }] }));
+    setNewReminder({ text: "", date: "", recurring: "none", assignee: TEAM[0], estHours: "" });
   };
   // Completing a reminder does three things: marks it done (so it shows crossed out),
   // logs a note so it counts as a client touchpoint on the dashboard heatmap, and — if it's
@@ -4868,7 +4895,14 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
       return { ...c, reminders, notes };
     });
   };
-  const removeReminder = (id) => updateClient((c) => ({ ...c, reminders: c.reminders.filter((r) => r.id !== id) }));
+  const removeReminder = (id) => updateClient((c) => {
+    const patch = { reminders: c.reminders.filter((r) => r.id !== id) };
+    // Deleting the auto-generated touchpoint check-in specifically means "not now" — without
+    // this, the Dashboards reconciliation effect would just recreate it on the very next
+    // pass since the underlying "below target" condition is still true.
+    if (id === "touchpoint-baseline-" + c.id) patch.touchpointSnoozedUntil = addDays(today(), 30);
+    return { ...c, ...patch };
+  });
 
   const dueIn = daysUntil(client.ohsmsDue);
   const urgency = dueIn < 0 ? { label: "Overdue", color: T.coral } : dueIn <= 30 ? { label: `Due in ${dueIn}d`, color: T.amber } : { label: "On track", color: T.tealDark };
@@ -5316,6 +5350,26 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
           {tab === "notes" && (
             <div className="flex flex-col gap-3">
               <Card style={{ padding: 14 }}>
+                <div className="text-sm font-semibold mb-2" style={{ color: T.ink }}>Files & emails</div>
+                <div className="flex flex-col gap-1.5 mb-2">
+                  {(client.files || []).map((f) => (
+                    <div key={f.id} className="flex items-center justify-between text-xs rounded-lg px-2.5 py-1.5" style={{ background: T.paperAlt }}>
+                      <button onClick={() => viewClientFile(f.path)} className="truncate text-left flex-1" style={{ color: T.tealDark }} title={f.name}>{f.name}</button>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span style={{ color: T.slateLight }}>{fmtDate(f.uploadedAt)}</span>
+                        <button onClick={() => removeClientFile(f.id)} title="Remove file"><Trash2 size={12} color={T.slateLight} /></button>
+                      </div>
+                    </div>
+                  ))}
+                  {(client.files || []).length === 0 && <div className="text-xs" style={{ color: T.slateLight }}>Nothing uploaded yet.</div>}
+                </div>
+                <label className="text-xs font-semibold px-3 py-1.5 rounded-lg cursor-pointer inline-flex items-center gap-1.5" style={{ background: T.paperAlt, color: T.tealDark }}>
+                  <Upload size={13} /> {uploadingClientFile ? "Uploading…" : "Upload file or email"}
+                  <input type="file" className="hidden" disabled={uploadingClientFile} onChange={(e) => uploadClientFile(e.target.files?.[0])} />
+                </label>
+                <div className="text-[11px] mt-1.5" style={{ color: T.slateLight }}>Any file type — save an email as a .eml/.msg/PDF first if you're uploading correspondence.</div>
+              </Card>
+              <Card style={{ padding: 14 }}>
                 <textarea placeholder="Write a client note..." rows={2} value={noteDraft.text} onChange={(e) => setNoteDraft({ ...noteDraft, text: e.target.value })}
                   className="w-full text-sm outline-none resize-none bg-transparent" style={{ color: T.ink }} />
                 <div className="flex items-center justify-between mt-2">
@@ -5362,7 +5416,13 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
                       </div>
                     </div>
                   </div>
-                  <button onClick={() => removeReminder(r.id)}><Trash2 size={14} color={T.slateLight} /></button>
+                  <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                    <input type="number" min="0" step="0.25" value={r.estHours || ""}
+                      onChange={(e) => updateClient((c) => ({ ...c, reminders: c.reminders.map((x) => (x.id === r.id ? { ...x, estHours: e.target.value ? Number(e.target.value) : 0 } : x)) }))}
+                      placeholder="hrs" title="Estimated hours — counts toward Schedule workload"
+                      className="w-14 text-xs px-1.5 py-1 rounded-lg outline-none text-center" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+                    <button onClick={() => removeReminder(r.id)}><Trash2 size={14} color={T.slateLight} /></button>
+                  </div>
                 </Card>
               ))}
               {client.reminders.length === 0 && <div className="text-xs" style={{ color: T.slateLight }}>No tasks yet.</div>}
@@ -5371,6 +5431,9 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
                   className="flex-1 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink, minWidth: 160 }} />
                 <input type="date" value={newReminder.date} onChange={(e) => setNewReminder({ ...newReminder, date: e.target.value })}
                   className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+                <input type="number" min="0" step="0.25" placeholder="hrs" value={newReminder.estHours} onChange={(e) => setNewReminder({ ...newReminder, estHours: e.target.value })}
+                  title="Estimated hours — counts toward Schedule workload"
+                  className="w-16 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
                 <select value={newReminder.assignee} onChange={(e) => setNewReminder({ ...newReminder, assignee: e.target.value })}
                   className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
                   {TEAM.map((m) => <option key={m} value={m}>{m}</option>)}
@@ -7420,10 +7483,15 @@ function TasksView({ tasks, clients, onboardings, currentUser, goToClient, resel
   const [person, setPerson] = useState(currentUser || TEAM[0]);
   const [draft, setDraft] = useState({ title: "", priority: "Medium", clientId: "", dueDate: "", estHours: "" });
 
+  // Nothing should sit in a task list just because it exists somewhere with a due date a
+  // year out — only show it once it's actually coming up, or if it never had a due date to
+  // begin with (nothing to judge "coming up" against, so those always show).
+  const isComingUpOrUndated = (dueDate) => !dueDate || daysUntil(dueDate) <= 14;
+
   const resellerTasks = useMemo(() => {
     const out = [];
     resellers.forEach((r) => {
-      r.tasks.filter((t) => !t.done && t.assignee === person).forEach((t) => {
+      r.tasks.filter((t) => !t.done && t.assignee === person && isComingUpOrUndated(t.date)).forEach((t) => {
         out.push({ id: `res-${r.id}-${t.id}`, title: t.text, resellerId: r.id, resellerName: r.name, dueDate: t.date });
       });
     });
@@ -7438,7 +7506,7 @@ function TasksView({ tasks, clients, onboardings, currentUser, goToClient, resel
         const currentIdx = inst.steps.findIndex((s) => !s.done);
         if (currentIdx === -1) return;
         const step = inst.steps[currentIdx];
-        if (step.owner === person) out.push({ id: `ob-${inst.id}-${step.id}`, title: step.title, clientId: c.id, clientName: c.name, workflowName: inst.workflowName, dueDate: step.dueDate, isOnboarding: true });
+        if (step.owner === person && isComingUpOrUndated(step.dueDate)) out.push({ id: `ob-${inst.id}-${step.id}`, title: step.title, clientId: c.id, clientName: c.name, workflowName: inst.workflowName, dueDate: step.dueDate, isOnboarding: true });
       });
     });
     return out;
@@ -7447,7 +7515,9 @@ function TasksView({ tasks, clients, onboardings, currentUser, goToClient, resel
   const reminderTasks = useMemo(() => {
     const out = [];
     clients.forEach((c) => {
-      c.reminders.filter((r) => !r.done && r.assignee === person).forEach((r) => {
+      // A reminder a year out (e.g. an OHSMS annual review) shouldn't sit in someone's task
+      // list for the next twelve months — only surface it once it's genuinely coming up.
+      c.reminders.filter((r) => !r.done && r.assignee === person && isComingUpOrUndated(r.date)).forEach((r) => {
         out.push({ id: `rem-${c.id}-${r.id}`, title: r.text, clientId: c.id, clientName: c.name, dueDate: r.date });
       });
     });
@@ -7455,7 +7525,7 @@ function TasksView({ tasks, clients, onboardings, currentUser, goToClient, resel
   }, [clients, person]);
 
   const myTasksAll = tasks.filter((t) => t.assignee === person);
-  const activeTasks = myTasksAll.filter((t) => !t.done);
+  const activeTasks = myTasksAll.filter((t) => !t.done && isComingUpOrUndated(t.dueDate));
   const completedTasks = myTasksAll.filter((t) => t.done);
   const [showCompletedTasks, setShowCompletedTasks] = useState(false);
 
@@ -8863,6 +8933,11 @@ function gatherWorkloadItems(person, tasks, onboardings, clients, scheduleBlocks
         }
       });
     });
+    (c.reminders || []).forEach((r) => {
+      if (r.assignee === person && !r.done && r.date && r.date >= start && r.date < end) {
+        items.push({ type: "reminder", title: r.text, date: r.date, hours: r.estHours || 0, clientId: c.id, clientName: c.name });
+      }
+    });
   });
   scheduleBlocks.filter((b) => b.assignee === person).forEach((b) => {
     if (b.repeat && b.repeat !== "none") {
@@ -8936,10 +9011,10 @@ function ScheduleView({ tasks, clients, onboardings, scheduleBlocks, addSchedule
                 {items.map((item, i) => (
                   <div key={i} className="flex items-center justify-between text-xs py-1.5 px-2 rounded-lg" style={{ background: T.paperAlt }}>
                     <div className="flex items-center gap-2 min-w-0">
-                      <Pill color={item.type === "task" ? T.tealDark : item.type === "workflow" ? T.blue : T.amber} bg={T.card}>
-                        {item.type === "task" ? "Task" : item.type === "workflow" ? "Workflow" : item.repeat === "daily" ? "Daily" : item.repeat === "weekly" ? "Weekly" : "Booked"}
+                      <Pill color={item.type === "task" ? T.tealDark : item.type === "workflow" ? T.blue : item.type === "reminder" ? "#8B6BA8" : T.amber} bg={T.card}>
+                        {item.type === "task" ? "Task" : item.type === "workflow" ? "Workflow" : item.type === "reminder" ? "Reminder" : item.repeat === "daily" ? "Daily" : item.repeat === "weekly" ? "Weekly" : "Booked"}
                       </Pill>
-                      <button onClick={() => item.clientId && goToClient(item.clientId, item.type === "workflow" ? "onboarding" : "overview")}
+                      <button onClick={() => item.clientId && goToClient(item.clientId, item.type === "workflow" ? "onboarding" : item.type === "reminder" ? "reminders" : "overview")}
                         className="truncate text-left" disabled={!item.clientId} style={{ color: T.ink, cursor: item.clientId ? "pointer" : "default" }} title={item.title}>
                         {item.title}{item.clientName ? ` — ${item.clientName}` : ""}
                       </button>
@@ -9226,6 +9301,14 @@ export default function App() {
   // reused). Back on track → auto-resolve that reminder rather than leaving it stale. This
   // only runs while the app is open in a browser, there's no backend cron doing this
   // overnight — it catches up next time anyone's looking at the app.
+  //
+  // Two guards on top of the basic threshold check:
+  // - hasAnyHistory: a client with zero logged hours/notes ever (freshly migrated, or a
+  //   brand new client nobody's touched yet) hasn't "gone quiet" — there's nothing to have
+  //   gone quiet from. Only clients with at least some real history get checked.
+  // - touchpointSnoozedUntil: deleting the reminder (see removeReminder) sets this 30 days
+  //   out, so a deliberate dismissal actually sticks instead of being recreated on the very
+  //   next pass because the underlying shortfall is still true.
   useEffect(() => {
     if (Object.keys(touchpointBaselines).length === 0) return;
     clients.filter((c) => !c.archived).forEach((client) => {
@@ -9236,15 +9319,22 @@ export default function App() {
       const count = recentTouchpointCount(client, periodDays, tasks);
       const fixedId = "touchpoint-baseline-" + client.id;
       const existing = (client.reminders || []).find((r) => r.id === fixedId);
-      if (count < target && !existing) {
+      const hasAnyHistory = (client.hours?.log?.length > 0) || (client.notes?.length > 0);
+      const snoozed = client.touchpointSnoozedUntil && client.touchpointSnoozedUntil > today();
+      if (count < target && !existing && hasAnyHistory && !snoozed) {
         const reminder = {
-          id: fixedId, done: false, recurring: "none", assignee: baseline.assignee || TEAM[0],
+          id: fixedId, done: false, recurring: "none", assignee: baseline.assignee || TEAM[0], estHours: 0.25,
           text: `Touchpoint check-in needed for ${client.name} — only ${count} in the last ${periodDays} days (target ${target})`,
           date: today(),
         };
         updateDoc(doc(db, "clients", client.id), { reminders: [...(client.reminders || []), reminder] });
       } else if (count >= target && existing && !existing.done) {
         updateDoc(doc(db, "clients", client.id), { reminders: client.reminders.map((r) => (r.id === fixedId ? { ...r, done: true } : r)) });
+      } else if (!hasAnyHistory && existing) {
+        // Cleans up any of these that got created before the hasAnyHistory guard existed —
+        // e.g. the 67 freshly migrated clients, which had zero history and so should never
+        // have been flagged as "gone quiet" in the first place.
+        updateDoc(doc(db, "clients", client.id), { reminders: client.reminders.filter((r) => r.id !== fixedId) });
       }
     });
   }, [clients, tasks, touchpointBaselines]);

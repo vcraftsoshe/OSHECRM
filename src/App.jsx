@@ -5,7 +5,7 @@ import {
   ClipboardList, Layers, Circle, CheckCircle2, Image as ImageIcon,
   Repeat, Trash2, ListChecks, ListTodo, Mail, ArrowUpRight, Store, LayoutDashboard, ChevronDown, Smartphone, FileText, CalendarClock, MessageCircle
 } from "lucide-react";
-import { collection, doc, onSnapshot, updateDoc, setDoc, getDocs, getDoc, deleteDoc } from "firebase/firestore";
+import { collection, doc, onSnapshot, updateDoc, setDoc, getDocs, getDoc, deleteDoc, arrayUnion } from "firebase/firestore";
 import { signOut } from "firebase/auth";
 import { ref as storageRef, getDownloadURL, uploadBytes } from "firebase/storage";
 import { db, auth, storage } from "./firebase";
@@ -4779,6 +4779,10 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
   const deleteClientPermanently = async (id) => {
     try {
       await deleteDoc(doc(db, "clients", id));
+      // If this was one of the batch-imported clients, record it so the reconciliation
+      // effect that adds any "missing" imported clients doesn't mistake this deliberate
+      // deletion for "never imported yet" and recreate it fresh.
+      setDoc(doc(db, "meta", "deletedImports"), { clientIds: arrayUnion(id) }, { merge: true }).catch((err) => console.error("Couldn't record deletion tombstone:", err));
       if (id === client.id) {
         const next = clients.find((c) => c.id !== id);
         if (next) setSelectedId(next.id);
@@ -6936,6 +6940,7 @@ function SalesView({ leads, convertLeadToClient }) {
   const setStage = (id, stage) => updateDoc(doc(db, "leads", id), { stage });
   const deleteLead = (id) => {
     deleteDoc(doc(db, "leads", id));
+    setDoc(doc(db, "meta", "deletedImports"), { leadIds: arrayUnion(id) }, { merge: true }).catch((err) => console.error("Couldn't record deletion tombstone:", err));
   };
   const [uploadingFile, setUploadingFile] = useState({});
   const uploadLeadFile = async (lead, file) => {
@@ -9146,6 +9151,17 @@ export default function App() {
   // Clients live in Firestore — no auto-seeding happens anymore (that was removed once
   // real clients existed; see HANDOFF history if that's ever confusing).
   const [clients, setClients] = useState([]);
+  // Deletion tombstone — the "add whichever of the imported batch isn't already there" checks
+  // (both for clients and leads, below) can't tell "never imported" from "was imported, then
+  // deliberately deleted" just by id existence. This records anything actually deleted so
+  // those checks know to leave it alone instead of recreating it fresh on the next pass.
+  const [deletedImportIds, setDeletedImportIds] = useState({ clientIds: [], leadIds: [] });
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, "meta", "deletedImports"), (snap) => {
+      setDeletedImportIds(snap.exists() ? { clientIds: snap.data().clientIds || [], leadIds: snap.data().leadIds || [] } : { clientIds: [], leadIds: [] });
+    }, (err) => console.error("Deleted-imports tombstone subscription failed:", err));
+    return unsub;
+  }, []);
   const [clientsLoaded, setClientsLoaded] = useState(false);
   const [clientsError, setClientsError] = useState(null);
   useEffect(() => {
@@ -9166,17 +9182,19 @@ export default function App() {
   // Adds the real client migration (importedClientsMigration, above) by fixed id — only
   // once the live snapshot has actually loaded, same safe pattern as the leads import:
   // never fires against a still-loading empty array, only ever adds whichever clients
-  // aren't already present, and never overwrites an existing client with the same id.
+  // aren't already present, never overwrites an existing client with the same id, and
+  // never recreates one that was deliberately deleted (see deletedImportIds above).
   useEffect(() => {
     if (!clientsLoaded) return;
     const existingIds = new Set(clients.map((c) => c.id));
+    const deletedIds = new Set(deletedImportIds.clientIds);
     importedClientsMigration.forEach((c) => {
-      if (!existingIds.has(c.id)) {
+      if (!existingIds.has(c.id) && !deletedIds.has(c.id)) {
         const { id, ...data } = c;
         setDoc(doc(db, "clients", id), data);
       }
     });
-  }, [clientsLoaded, clients]);
+  }, [clientsLoaded, clients, deletedImportIds]);
   // Backfill: if any of the migrated clients above already got created (an earlier paste
   // of this file, before ohsmsDue/the reminder were computed for the migration), this
   // patches just that gap in — only for clients from the migration batch that have a known
@@ -9221,18 +9239,19 @@ export default function App() {
   // Adds the real imported pipeline (importedLeads, above) by fixed id — only once the
   // live snapshot has actually loaded (leadsLoaded), so this never mistakes "still
   // loading" for "doesn't exist yet" and overwrites something someone's since edited in
-  // the app. Only ever adds whichever of the 36 aren't already present; never touches the
-  // rest of the leads collection.
+  // the app. Only ever adds whichever of the 36 aren't already present, never touches the
+  // rest of the leads collection, and never recreates one that was deliberately deleted.
   useEffect(() => {
     if (!leadsLoaded) return;
     const existingIds = new Set(leads.map((l) => l.id));
+    const deletedIds = new Set(deletedImportIds.leadIds);
     importedLeads.forEach((l) => {
-      if (!existingIds.has(l.id)) {
+      if (!existingIds.has(l.id) && !deletedIds.has(l.id)) {
         const { id, ...data } = l;
         setDoc(doc(db, "leads", id), data);
       }
     });
-  }, [leadsLoaded, leads]);
+  }, [leadsLoaded, leads, deletedImportIds]);
   // My Tasks — real Firestore collection, one doc per task.
   const [tasks, setTasks] = useState([]);
   useEffect(() => {

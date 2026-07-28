@@ -4523,6 +4523,33 @@ function Card({ children, style, className, ...rest }) {
   return <div className={"rounded-xl " + (className || "")} style={{ background: T.card, border: `1px solid ${T.border}`, ...style }} {...rest}>{children}</div>;
 }
 
+// A real in-app "are you sure" instead of window.confirm() — browsers silently suppress
+// native confirm() after several fire in quick succession (Chrome shows a "prevent this
+// page from creating additional dialogs" checkbox; once ticked, every future confirm()
+// call just returns false instantly with zero dialog and zero error), which looks exactly
+// like a broken delete button. This can't be suppressed the same way since it's just app UI.
+function ConfirmButton({ onConfirm, title, icon: Icon = Trash2, iconSize = 14, iconColor, confirmText = "Delete?" }) {
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    if (!armed) return undefined;
+    const t = setTimeout(() => setArmed(false), 4000);
+    return () => clearTimeout(t);
+  }, [armed]);
+  if (armed) {
+    return (
+      <span className="inline-flex items-center gap-1.5">
+        <button onClick={() => { setArmed(false); onConfirm(); }} className="text-[11px] font-semibold px-2 py-1 rounded-lg" style={{ background: T.coral, color: "#fff" }}>{confirmText}</button>
+        <button onClick={() => setArmed(false)} className="text-[11px] font-semibold px-1.5" style={{ color: T.slateLight }}>Cancel</button>
+      </span>
+    );
+  }
+  return (
+    <button onClick={() => setArmed(true)} title={title}>
+      <Icon size={iconSize} color={iconColor || T.slateLight} />
+    </button>
+  );
+}
+
 /* ---------- Onboarding (lives on the client record) ---------- */
 function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, workflows, pushNotification, goToWorkflows }) {
   const [pickerWorkflowId, setPickerWorkflowId] = useState(workflows.find((w) => w.isDefault)?.id || workflows[0]?.id);
@@ -4557,7 +4584,6 @@ function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, wor
   };
 
   const removeOnboardingInstance = (instId) => {
-    if (!window.confirm("Remove this workflow from this client? Its progress won't be recoverable.")) return;
     updateOnboardingsForClient(client.id, (clientList) => clientList.filter((i) => i.id !== instId));
   };
 
@@ -4613,9 +4639,7 @@ function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, wor
                 <button onClick={goToWorkflows} className="text-xs font-semibold px-3 py-1.5 rounded-lg" style={{ background: T.paperAlt, color: T.tealDark }}>
                   Edit this workflow
                 </button>
-                <button onClick={() => removeOnboardingInstance(inst.id)} title="Remove this workflow from this client">
-                  <Trash2 size={14} color={T.slateLight} />
-                </button>
+                <ConfirmButton onConfirm={() => removeOnboardingInstance(inst.id)} title="Remove this workflow from this client" iconSize={14} />
               </div>
             </div>
             <div className="flex items-center gap-2 text-xs" style={{ color: T.slate }}>
@@ -4753,7 +4777,6 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
   const archiveClient = (id) => updateDoc(doc(db, "clients", id), { archived: true });
   const unarchiveClient = (id) => updateDoc(doc(db, "clients", id), { archived: false });
   const deleteClientPermanently = async (id) => {
-    if (!window.confirm("Permanently delete this client? This can't be undone.")) return;
     try {
       await deleteDoc(doc(db, "clients", id));
       if (id === client.id) {
@@ -5049,7 +5072,7 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
               ) : (
                 <button onClick={() => archiveClient(client.id)} className="text-xs font-semibold px-2.5 py-1.5 rounded-lg" style={{ background: T.paperAlt, color: T.slate }}>Archive</button>
               )}
-              <button onClick={() => deleteClientPermanently(client.id)} title="Delete permanently"><Trash2 size={15} color={T.slateLight} /></button>
+              <ConfirmButton onConfirm={() => deleteClientPermanently(client.id)} title="Delete permanently" iconSize={15} />
             </div>
           </div>
           <div className="flex gap-1 mt-5 border-b overflow-x-auto" style={{ borderColor: T.border }}>
@@ -6912,7 +6935,6 @@ function SalesView({ leads, convertLeadToClient }) {
 
   const setStage = (id, stage) => updateDoc(doc(db, "leads", id), { stage });
   const deleteLead = (id) => {
-    if (!window.confirm("Delete this lead? This can't be undone.")) return;
     deleteDoc(doc(db, "leads", id));
   };
   const [uploadingFile, setUploadingFile] = useState({});
@@ -7024,7 +7046,7 @@ function SalesView({ leads, convertLeadToClient }) {
                           className="text-[11px] px-1.5 py-1 rounded-md outline-none" style={{ border: `1px solid ${T.border}`, color: T.slate, background: T.paperAlt }}>
                           {stageOrder.map((s) => <option key={s} value={s}>{s}</option>)}
                         </select>
-                        <button onClick={() => deleteLead(l.id)} title="Delete lead"><Trash2 size={13} color={T.slateLight} /></button>
+                        <ConfirmButton onConfirm={() => deleteLead(l.id)} title="Delete lead" iconSize={13} />
                       </div>
                     </div>
                     <input value={l.contact || ""} onChange={(e) => updateDoc(doc(db, "leads", l.id), { contact: e.target.value })} placeholder="Contact name"
@@ -7157,12 +7179,16 @@ function ResellersView({ resellers, selectedId, setSelectedId }) {
 
   const archiveReseller = (id) => updateDoc(doc(db, "resellers", id), { archived: true });
   const unarchiveReseller = (id) => updateDoc(doc(db, "resellers", id), { archived: false });
-  const deleteResellerPermanently = (id) => {
-    if (!window.confirm("Permanently delete this reseller? This can't be undone.")) return;
-    deleteDoc(doc(db, "resellers", id));
-    if (id === reseller.id) {
-      const next = resellers.find((r) => r.id !== id);
-      if (next) setSelectedId(next.id);
+  const deleteResellerPermanently = async (id) => {
+    try {
+      await deleteDoc(doc(db, "resellers", id));
+      if (id === reseller.id) {
+        const next = resellers.find((r) => r.id !== id);
+        if (next) setSelectedId(next.id);
+      }
+    } catch (err) {
+      console.error("Reseller delete failed:", err);
+      alert(`Couldn't delete this reseller: ${err.message || err}`);
     }
   };
 
@@ -7241,7 +7267,7 @@ function ResellersView({ resellers, selectedId, setSelectedId }) {
               ) : (
                 <button onClick={() => archiveReseller(reseller.id)} className="text-xs font-semibold px-2.5 py-1.5 rounded-lg" style={{ background: T.paperAlt, color: T.slate }}>Archive</button>
               )}
-              <button onClick={() => deleteResellerPermanently(reseller.id)} title="Delete permanently"><Trash2 size={15} color={T.slateLight} /></button>
+              <ConfirmButton onConfirm={() => deleteResellerPermanently(reseller.id)} title="Delete permanently" iconSize={15} />
             </div>
           </div>
           <div className="grid grid-cols-2 gap-4 mt-4">
@@ -8669,7 +8695,7 @@ function ReportsView({ clients, reportTemplates, addReportTemplate, renameReport
                 <div className="flex items-center gap-2 mb-2">
                   <input value={t.name} onChange={(e) => renameReportTemplate(t.id, e.target.value)}
                     className="flex-1 text-sm font-semibold px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink, background: T.card }} />
-                  <button onClick={() => deleteReportTemplate(t.id)} title="Delete template"><Trash2 size={14} color={T.slateLight} /></button>
+                  <ConfirmButton onConfirm={() => deleteReportTemplate(t.id)} title="Delete template" iconSize={14} />
                 </div>
                 <div className="flex flex-wrap gap-1.5 mb-2">
                   {t.sections.map((s) => (
@@ -9557,7 +9583,6 @@ export default function App() {
   };
   const renameReportTemplate = (id, name) => updateDoc(doc(db, "reportTemplates", id), { name });
   const deleteReportTemplate = (id) => {
-    if (!window.confirm("Delete this template? Reports already built from it won't be affected.")) return;
     deleteDoc(doc(db, "reportTemplates", id));
   };
   const addTemplateSection = (id, sectionName) => {

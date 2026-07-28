@@ -93,14 +93,6 @@ const defaultOnboardingTemplate = [
 
 /* ---------- Mock data ---------- */
 
-const initialLeads = [
-  { id: 1, company: "Coastline Builders Ltd", contact: "Mike Herrera", value: "$14,000", stage: "New Lead", formEmail: null, formStatus: "none", notes: [] },
-  { id: 2, company: "Northline Civil", contact: "Priya Nair", value: "$9,500", stage: "Contacted", formEmail: null, formStatus: "none", notes: [] },
-  { id: 3, company: "Foundation Plus", contact: "Tane Walker", value: "$18,000", stage: "Proposal Sent", formEmail: null, formStatus: "none", notes: [{ id: 1, text: "Wants a walk-through of the OHSMS builder before signing.", date: "2026-07-16" }] },
-  { id: 4, company: "Summit Roofing Co", contact: "Grace Liu", value: "$5,000", stage: "Won", formEmail: "grace@summitroofing.co.nz", formStatus: "sent", notes: [] },
-  { id: 5, company: "Harbour Fitout", contact: "Dana Reid", value: "$7,200", stage: "Lost", formEmail: null, formStatus: "none", notes: [{ id: 1, text: "Went with a competitor on price.", date: "2026-07-05" }] },
-];
-
 // Real pipeline data from the 2026-07-26 OSHE Sales Leads export (ClickUp), added directly
 // rather than through any upload UI. Deterministic ids ("lead-import-N") so the seeding
 // effect further down can add any missing ones without ever duplicating on a repeat load —
@@ -890,6 +882,3526 @@ const importedLeads = [
         "date": "2026-07-27"
       }
     ]
+  }
+];
+
+// Real client list from the 2026-07-28 CRM_Client_Migration_All_Data export (the "Clients"
+// sheet only — Needs Review / Confirmed Aliases were intentionally skipped). Ids are
+// slugified from each client's Name column (e.g. "BMC" -> "bmc"), so if any of these happen
+// to collide with a client that already exists live (most likely candidates: "bmc" and
+// "manaaki-ora-trust", both of which were in early demo/seed data at one point), the
+// reconciliation effect further down skips it rather than overwriting real data — it never
+// touches a client id that's already present.
+const importedClientsMigration = [
+  {
+    "id": "alpha-waikato-ltd",
+    "name": "Alpha Waikato Ltd",
+    "legalName": "Alpha Interiors Waikato",
+    "logo": null,
+    "contract": {
+      "start": null,
+      "renewal": null,
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "accounts.waikato@alphainteriors.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 1,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Migration note: 30 users",
+        "tags": []
+      }
+    ],
+    "reminders": [],
+    "contacts": [],
+    "ohsmsLastIssued": null,
+    "ohsmsDue": null,
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "black-and-white-plumbing-ltd",
+    "name": "Black and White Plumbing Ltd",
+    "legalName": "Black And White Plumbing Ltd",
+    "logo": null,
+    "contract": {
+      "start": "2026-02-01",
+      "renewal": "2027-02-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "chris@blackandwhiteplumbing.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 1,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Migration note: Up to 5 users",
+        "tags": []
+      },
+      {
+        "id": 2,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Address: 11/24 Halyard Place, Te Atat\u016b Peninsula, Auckland 0610, New Zealand",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2027-01-02",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [
+      {
+        "id": 1,
+        "name": "",
+        "role": "Primary Contact",
+        "email": "chris@blackandwhiteplumbing.co.nz",
+        "phone": "+64 22 615 0234"
+      }
+    ],
+    "ohsmsLastIssued": "2026-02-01",
+    "ohsmsDue": "2027-02-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "blackhouse-group",
+    "name": "Blackhouse Group",
+    "legalName": "Allan Winter C/O William Orrick Blackhouse Group",
+    "logo": null,
+    "contract": {
+      "start": "2021-06-14",
+      "renewal": null,
+      "value": "",
+      "plan": "Per project engagement"
+    },
+    "billing": {
+      "contact": "",
+      "email": "will@blackhousegroup.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [],
+    "reminders": [],
+    "contacts": [
+      {
+        "id": 1,
+        "name": "",
+        "role": "Primary Contact",
+        "email": "will@blackhousegroup.co.nz",
+        "phone": ""
+      }
+    ],
+    "ohsmsLastIssued": null,
+    "ohsmsDue": null,
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "blackrock-drilling-limited",
+    "name": "Blackrock Drilling Limited",
+    "legalName": "Blackrock Drilling Limited",
+    "logo": null,
+    "contract": {
+      "start": "2026-02-01",
+      "renewal": "2027-02-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "accounts@blackrockdrilling.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 1,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Migration note: Up to 5 users",
+        "tags": []
+      },
+      {
+        "id": 2,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Address: 63 Beachwater Drive, Papamoa Beach, Papamoa 3118, New Zealand",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2027-01-02",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [
+      {
+        "id": 1,
+        "name": "",
+        "role": "Primary Contact",
+        "email": "joe@blackrockdrilling.co.nz",
+        "phone": "+64 274 903 431"
+      }
+    ],
+    "ohsmsLastIssued": "2026-02-01",
+    "ohsmsDue": "2027-02-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "bmc",
+    "name": "BMC",
+    "legalName": "Brendan Murray Construction",
+    "logo": null,
+    "contract": {
+      "start": "2025-09-03",
+      "renewal": null,
+      "value": "",
+      "plan": "Full support "
+    },
+    "billing": {
+      "contact": "",
+      "email": "accounts@bmc.net.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "SubscriptionHours",
+    "billingSetupDone": true,
+    "profile": "Enterprise Client",
+    "notes": [],
+    "reminders": [],
+    "contacts": [],
+    "ohsmsLastIssued": null,
+    "ohsmsDue": null,
+    "extras": [],
+    "hours": {
+      "included": 80,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "bowen-plumbing-gas-fitting",
+    "name": "Bowen Plumbing & Gas Fitting",
+    "legalName": "Bowen Plumbing & Gas Laying",
+    "logo": null,
+    "contract": {
+      "start": null,
+      "renewal": null,
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "office@bowenplumbing.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [],
+    "reminders": [],
+    "contacts": [],
+    "ohsmsLastIssued": null,
+    "ohsmsDue": null,
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "bower",
+    "name": "Bower",
+    "legalName": "Tremain",
+    "logo": null,
+    "contract": {
+      "start": "2025-08-01",
+      "renewal": "2026-08-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "accounts@bower.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2026-07-02",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [],
+    "ohsmsLastIssued": "2025-08-01",
+    "ohsmsDue": "2026-08-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "buildwizer",
+    "name": "Buildwizer",
+    "legalName": "Build Wizer NZ Limited",
+    "logo": null,
+    "contract": {
+      "start": null,
+      "renewal": null,
+      "value": "",
+      "plan": "Sole trader"
+    },
+    "billing": {
+      "contact": "",
+      "email": "buildwizer4@gmail.com",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 1,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Migration note: Sole trader",
+        "tags": []
+      }
+    ],
+    "reminders": [],
+    "contacts": [],
+    "ohsmsLastIssued": null,
+    "ohsmsDue": null,
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "civil-agri-development",
+    "name": "Civil & Agri Development",
+    "legalName": "Civil & Agri Developments Group Ltd",
+    "logo": null,
+    "contract": {
+      "start": "2026-05-01",
+      "renewal": "2027-05-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "Sean Cuff",
+      "email": "civil.agridevelopment@gmail.com",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2027-04-01",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [
+      {
+        "id": 1,
+        "name": "Sean Cuff",
+        "role": "Primary Contact",
+        "email": "civil.agridevelopment@gmail.com",
+        "phone": ""
+      }
+    ],
+    "ohsmsLastIssued": "2026-05-01",
+    "ohsmsDue": "2027-05-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "colin-amrein-contracting",
+    "name": "Colin Amrein Contracting",
+    "legalName": "Colin Amerin Contracting Limited",
+    "logo": null,
+    "contract": {
+      "start": "2025-09-01",
+      "renewal": "2026-09-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "info@excavatorsbop.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 1,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Migration note: Up to 20 users",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2026-08-02",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [
+      {
+        "id": 1,
+        "name": "",
+        "role": "Primary Contact",
+        "email": "info@excavatorsbop.co.nz",
+        "phone": ""
+      }
+    ],
+    "ohsmsLastIssued": "2025-09-01",
+    "ohsmsDue": "2026-09-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "d-b-construction-2025-ltd",
+    "name": "D&B Construction (2025) Ltd",
+    "legalName": "DandB Construction (2025) Ltd",
+    "logo": null,
+    "contract": {
+      "start": "2026-03-01",
+      "renewal": "2027-03-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "taryn@dandb.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 1,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Migration note: Up to 20 users, OHSMS",
+        "tags": []
+      },
+      {
+        "id": 2,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Address: 16 Tyne Street, Mount Maunganui 3116, New Zealand",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2027-01-30",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [
+      {
+        "id": 1,
+        "name": "",
+        "role": "Primary Contact",
+        "email": "taryn@dandb.co.nz",
+        "phone": "+64 21 188 1595"
+      }
+    ],
+    "ohsmsLastIssued": "2026-03-01",
+    "ohsmsDue": "2027-03-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "ddl-gcl",
+    "name": "DDL/GCL",
+    "legalName": "Good Rick Contracting and Duyvestyn Trenching & Drainage Ltd",
+    "logo": null,
+    "contract": {
+      "start": "2024-02-01",
+      "renewal": "2027-02-01",
+      "value": "",
+      "plan": "Houred Client, full support "
+    },
+    "billing": {
+      "contact": "",
+      "email": "admin@ddl.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "SubscriptionHours",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 1,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Migration note: 37 users",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2027-01-02",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [],
+    "ohsmsLastIssued": "2026-02-01",
+    "ohsmsDue": "2027-02-01",
+    "extras": [],
+    "hours": {
+      "included": 20,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "dent-builders-limited",
+    "name": "Dent Builders Limited",
+    "legalName": "Dent Builders",
+    "logo": null,
+    "contract": {
+      "start": null,
+      "renewal": null,
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "martin@dentbuilders.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 1,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Migration note: Up to 5 users, OHSMS",
+        "tags": []
+      }
+    ],
+    "reminders": [],
+    "contacts": [],
+    "ohsmsLastIssued": null,
+    "ohsmsDue": null,
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "dynamic-plumbing-works",
+    "name": "Dynamic Plumbing Works",
+    "legalName": "Dynamic Plumbing Works",
+    "logo": null,
+    "contract": {
+      "start": "2025-08-01",
+      "renewal": "2026-08-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "accounts@dpw.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 1,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Migration note: Up to 20 users plus 10 additional",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2026-07-02",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [],
+    "ohsmsLastIssued": "2025-08-01",
+    "ohsmsDue": "2026-08-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "east-coast-civil",
+    "name": "East Coast Civil",
+    "legalName": "East Coast Civil",
+    "logo": null,
+    "contract": {
+      "start": "2025-10-01",
+      "renewal": "2026-10-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "mike@eastcoastcivil.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 1,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Migration note: Up to 5 users",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2026-09-01",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [],
+    "ohsmsLastIssued": "2025-10-01",
+    "ohsmsDue": "2026-10-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "geo-data-solutions",
+    "name": "Geo Data Solutions",
+    "legalName": "Geo Data Solutions",
+    "logo": null,
+    "contract": {
+      "start": null,
+      "renewal": null,
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "Accounts@gdsnz.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [],
+    "reminders": [],
+    "contacts": [],
+    "ohsmsLastIssued": null,
+    "ohsmsDue": null,
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "gh-roofing",
+    "name": "GH Roofing",
+    "legalName": "GH Roofing",
+    "logo": null,
+    "contract": {
+      "start": null,
+      "renewal": null,
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "accounts@ghroofing.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 1,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Migration note: Up to 20 plus 24 additional app users",
+        "tags": []
+      }
+    ],
+    "reminders": [],
+    "contacts": [],
+    "ohsmsLastIssued": null,
+    "ohsmsDue": null,
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "homes-for-living-construction-limited",
+    "name": "Homes for Living Construction Limited",
+    "legalName": "Homes for Living Construction Limited",
+    "logo": null,
+    "contract": {
+      "start": "2025-08-01",
+      "renewal": "2026-08-01",
+      "value": "",
+      "plan": "Hour Client, full support"
+    },
+    "billing": {
+      "contact": "",
+      "email": "hflaccounts@hflcl.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 1,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Migration note: Hourly",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2026-07-02",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [],
+    "ohsmsLastIssued": "2025-08-01",
+    "ohsmsDue": "2026-08-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "jam-group",
+    "name": "JAM Group",
+    "legalName": "JAM Group",
+    "logo": null,
+    "contract": {
+      "start": "2026-05-01",
+      "renewal": "2027-05-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "accounts@jamltd.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 1,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Migration note: Up to 20 users",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2027-04-01",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [],
+    "ohsmsLastIssued": "2026-05-01",
+    "ohsmsDue": "2027-05-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "just-cabins",
+    "name": "Just Cabins",
+    "legalName": "Just Cabins",
+    "logo": null,
+    "contract": {
+      "start": "2026-05-01",
+      "renewal": "2027-05-01",
+      "value": "",
+      "plan": "Hour Client, full support"
+    },
+    "billing": {
+      "contact": "",
+      "email": "accounts@justcabins.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 1,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Migration note: 73 additional users",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2027-04-01",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [],
+    "ohsmsLastIssued": "2026-05-01",
+    "ohsmsDue": "2027-05-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "kaiaka-electrical",
+    "name": "Kaiaka Electrical",
+    "legalName": "Kaiaka Electrical Services Limited",
+    "logo": null,
+    "contract": {
+      "start": "2026-05-01",
+      "renewal": "2027-05-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "kaiakaelectrical@gmail.com",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 1,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Migration note: Up to 5 users",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2027-04-01",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [],
+    "ohsmsLastIssued": "2026-05-01",
+    "ohsmsDue": "2027-05-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "kiwi-kerb",
+    "name": "Kiwi Kerb",
+    "legalName": "HighMac Civil",
+    "logo": null,
+    "contract": {
+      "start": "2026-01-01",
+      "renewal": "2027-01-01",
+      "value": "",
+      "plan": "Hour Client, full support"
+    },
+    "billing": {
+      "contact": "",
+      "email": "admin@highmaccivil.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 1,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Migration note: Under 20 users, in system as HighMac",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2026-12-02",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [],
+    "ohsmsLastIssued": "2026-01-01",
+    "ohsmsDue": "2027-01-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "kohanga-rakau-housing",
+    "name": "Kohanga Rakau Housing",
+    "legalName": "Owhata KR Housing LP",
+    "logo": null,
+    "contract": {
+      "start": "2024-06-01",
+      "renewal": "2025-06-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "accounts@owhata2b7trust.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2025-05-02",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [],
+    "ohsmsLastIssued": "2024-06-01",
+    "ohsmsDue": "2025-06-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "ks-construction-services-limited",
+    "name": "KS Construction Services Limited",
+    "legalName": "K S Construction Services",
+    "logo": null,
+    "contract": {
+      "start": "2026-07-01",
+      "renewal": "2027-07-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "kscon.ltd@gmail.com",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 1,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Migration note: Up to 10 users",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2027-06-01",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [],
+    "ohsmsLastIssued": "2026-07-01",
+    "ohsmsDue": "2027-07-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "landscape-developments",
+    "name": "Landscape Developments",
+    "legalName": "Landscape Developments",
+    "logo": null,
+    "contract": {
+      "start": "2024-05-01",
+      "renewal": "2027-05-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "info@landevnz.com",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 1,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Migration note: System and app",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2027-04-01",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [],
+    "ohsmsLastIssued": "2026-05-01",
+    "ohsmsDue": "2027-05-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "letts",
+    "name": "Letts",
+    "legalName": "Letts Construction",
+    "logo": null,
+    "contract": {
+      "start": "2021-05-01",
+      "renewal": "2027-05-01",
+      "value": "",
+      "plan": "Up to 20 users, hours may include additional users"
+    },
+    "billing": {
+      "contact": "",
+      "email": "karen@letts.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "SubscriptionHours",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 1,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Migration note: Up to 20 users, hours may include additional users",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2027-04-01",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [
+      {
+        "id": 1,
+        "name": "",
+        "role": "Primary Contact",
+        "email": "sean@letts.co.nz",
+        "phone": ""
+      }
+    ],
+    "ohsmsLastIssued": "2026-05-01",
+    "ohsmsDue": "2027-05-01",
+    "extras": [],
+    "hours": {
+      "included": 20,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "maketu-r-nanga",
+    "name": "Maketu R\u016bnanga",
+    "legalName": "Te Runanga o Ngati Whakaue ki Maketu",
+    "logo": null,
+    "contract": {
+      "start": "2024-04-01",
+      "renewal": "2027-04-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "kaitautoko@maketu-runanga.iwi.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 1,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Migration note: Up to 20 users",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2027-03-02",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [],
+    "ohsmsLastIssued": "2026-04-01",
+    "ohsmsDue": "2027-04-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "manaaki-ora-trust",
+    "name": "Manaaki Ora Trust",
+    "legalName": "MANAAKI ORA TRUST - Te Rito o Manaaki Ora",
+    "logo": null,
+    "contract": {
+      "start": "2025-09-01",
+      "renewal": "2026-09-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "lwhiu@manaakiora.org.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 1,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Migration note: Up to 150 users",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2026-08-02",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [],
+    "ohsmsLastIssued": "2025-09-01",
+    "ohsmsDue": "2026-09-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "mount-auto-electrical",
+    "name": "Mount Auto Electrical",
+    "legalName": "Mount Auto Electrical Ltd",
+    "logo": null,
+    "contract": {
+      "start": "2026-03-01",
+      "renewal": "2027-03-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "admin@mael.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 1,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Migration note: Up to 20 users",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2027-01-30",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [],
+    "ohsmsLastIssued": "2026-03-01",
+    "ohsmsDue": "2027-03-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "n-a-s-construction",
+    "name": "N.A.S Construction",
+    "legalName": "NAS Construction",
+    "logo": null,
+    "contract": {
+      "start": "2026-02-01",
+      "renewal": "2027-02-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "office@nasconstruction.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 1,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Migration note: Up to 5 users",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2027-01-02",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [],
+    "ohsmsLastIssued": "2026-02-01",
+    "ohsmsDue": "2027-02-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "newline",
+    "name": "Newline",
+    "legalName": "Stein",
+    "logo": null,
+    "contract": {
+      "start": "2020-06-01",
+      "renewal": "2027-06-01",
+      "value": "",
+      "plan": "5 hours, full support"
+    },
+    "billing": {
+      "contact": "",
+      "email": "accounts@newline.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "SubscriptionHours",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 1,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Migration note: Up to 10 users",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2027-05-02",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [
+      {
+        "id": 1,
+        "name": "",
+        "role": "Primary Contact",
+        "email": "ashley.clare@newline.co.nz",
+        "phone": ""
+      }
+    ],
+    "ohsmsLastIssued": "2026-06-01",
+    "ohsmsDue": "2027-06-01",
+    "extras": [],
+    "hours": {
+      "included": 5,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "owhata",
+    "name": "Owhata",
+    "legalName": "Owhata KR Housing LP",
+    "logo": null,
+    "contract": {
+      "start": "2023-06-01",
+      "renewal": "2025-06-01",
+      "value": "",
+      "plan": "Check in quaretly to see if any site reviews needed for projects"
+    },
+    "billing": {
+      "contact": "",
+      "email": "accounts@owhata2b7trust.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "SubscriptionHours",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2025-05-02",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [],
+    "ohsmsLastIssued": "2024-06-01",
+    "ohsmsDue": "2025-06-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "p3-earthworks",
+    "name": "P3 Earthworks",
+    "legalName": "Chad Empson",
+    "logo": null,
+    "contract": {
+      "start": "2026-04-01",
+      "renewal": "2027-04-01",
+      "value": "",
+      "plan": "Check this one - think company handoff, can be deleted?"
+    },
+    "billing": {
+      "contact": "",
+      "email": "accounts@p3earthworks.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 1,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Migration note: System and app",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2027-03-02",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [],
+    "ohsmsLastIssued": "2026-04-01",
+    "ohsmsDue": "2027-04-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "pauanui-canals-management",
+    "name": "Pauanui Canals Management",
+    "legalName": "Pauanui Canals Management Limited",
+    "logo": null,
+    "contract": {
+      "start": "2026-01-01",
+      "renewal": "2027-01-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested - needs training "
+    },
+    "billing": {
+      "contact": "Luana Reece",
+      "email": "admin@pauanuicanals.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 2,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Address: 3 Reweti Drive, Whitianga 3510, New Zealand",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2026-12-02",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [
+      {
+        "id": 1,
+        "name": "Luana Reece",
+        "role": "Primary Contact",
+        "email": "admin@pauanuicanals.co.nz",
+        "phone": "+64 27 225 1144"
+      }
+    ],
+    "ohsmsLastIssued": "2026-01-01",
+    "ohsmsDue": "2027-01-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "perry-geotech",
+    "name": "Perry Geotech",
+    "legalName": "Perry Geotech Limited",
+    "logo": null,
+    "contract": {
+      "start": "2026-05-01",
+      "renewal": "2027-05-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "office@perrygeotech.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "SubscriptionHours",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 1,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Migration note: Not listed",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2027-04-01",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [],
+    "ohsmsLastIssued": "2026-05-01",
+    "ohsmsDue": "2027-05-01",
+    "extras": [],
+    "hours": {
+      "included": 20,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "pope-electrical",
+    "name": "Pope Electrical",
+    "legalName": "Pope Electrical",
+    "logo": null,
+    "contract": {
+      "start": "2026-05-01",
+      "renewal": "2027-05-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "accounts@popes.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 1,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Migration note: 20 users",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2027-04-01",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [],
+    "ohsmsLastIssued": "2026-05-01",
+    "ohsmsDue": "2027-05-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "porter-homes",
+    "name": "Porter Homes",
+    "legalName": "Porter Homes",
+    "logo": null,
+    "contract": {
+      "start": "2026-01-01",
+      "renewal": "2027-01-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "brett@porterhomes.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 1,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Migration note: Up to 5 users and OHSMS",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2026-12-02",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [],
+    "ohsmsLastIssued": "2026-01-01",
+    "ohsmsDue": "2027-01-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "pro-drill",
+    "name": "Pro Drill",
+    "legalName": "Pro-Drill (Auck) Ltd",
+    "logo": null,
+    "contract": {
+      "start": "2025-09-23",
+      "renewal": "2026-10-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "lyn@prodrill.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 1,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Migration note: 30 users",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2026-09-01",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [],
+    "ohsmsLastIssued": "2025-10-01",
+    "ohsmsDue": "2026-10-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "rescom",
+    "name": "Rescom",
+    "legalName": "Rescom Limited",
+    "logo": null,
+    "contract": {
+      "start": null,
+      "renewal": null,
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [],
+    "reminders": [],
+    "contacts": [],
+    "ohsmsLastIssued": null,
+    "ohsmsDue": null,
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "reside-builders",
+    "name": "Reside Builders",
+    "legalName": "Reside Construction",
+    "logo": null,
+    "contract": {
+      "start": "2019-05-01",
+      "renewal": "2026-05-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "accounts@reside.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 1,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Migration note: Up to 20 users",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2026-04-01",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [],
+    "ohsmsLastIssued": "2025-05-01",
+    "ohsmsDue": "2026-05-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "sabre-construction",
+    "name": "Sabre Construction",
+    "legalName": "Sabre Construction Limited",
+    "logo": null,
+    "contract": {
+      "start": "2020-05-01",
+      "renewal": "2026-05-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "acc@sabreconstruction.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 1,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Migration note: 91 users across all Sabre entities",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2026-04-01",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [],
+    "ohsmsLastIssued": "2025-05-01",
+    "ohsmsDue": "2026-05-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "santafe",
+    "name": "SantaFe",
+    "legalName": "Santa Fe Shutters Limited",
+    "logo": null,
+    "contract": {
+      "start": "2025-09-01",
+      "renewal": "2026-09-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "payables@santafe.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 1,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Migration note: Under 20 users",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2026-08-02",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [],
+    "ohsmsLastIssued": "2025-09-01",
+    "ohsmsDue": "2026-09-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "sayles-exterior-cleaning",
+    "name": "Sayles Exterior Cleaning",
+    "legalName": "Sayles Exterior Cleaning",
+    "logo": null,
+    "contract": {
+      "start": "2026-03-01",
+      "renewal": "2027-03-01",
+      "value": "",
+      "plan": "Sole trader"
+    },
+    "billing": {
+      "contact": "",
+      "email": "admin@exteriorclean.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 1,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Migration note: Sole trader",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2027-01-30",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [],
+    "ohsmsLastIssued": "2026-03-01",
+    "ohsmsDue": "2027-03-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "stroud-homes",
+    "name": "Stroud Homes",
+    "legalName": "stroud Homes",
+    "logo": null,
+    "contract": {
+      "start": "2024-10-01",
+      "renewal": "2026-10-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "lisa.mcmah@stroudhomes.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 1,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Migration note: Up to 20 users, OHSMS",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2026-09-01",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [],
+    "ohsmsLastIssued": "2025-10-01",
+    "ohsmsDue": "2026-10-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "tilyard-plumbing",
+    "name": "Tilyard Plumbing",
+    "legalName": "Tiyard Plumbing Limited",
+    "logo": null,
+    "contract": {
+      "start": "2026-05-01",
+      "renewal": "2027-05-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "accounts@tilyards.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 1,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Migration note: 23 users",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2027-04-01",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [],
+    "ohsmsLastIssued": "2026-05-01",
+    "ohsmsDue": "2027-05-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "tirau-earthmovers-limited",
+    "name": "Tirau Earthmovers Limited",
+    "legalName": "Tirau Earthmovers Limited",
+    "logo": null,
+    "contract": {
+      "start": "2020-05-01",
+      "renewal": "2027-05-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "accounts@tem.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 1,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Migration note: Up to 20 plus 12 additional users",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2027-04-01",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [],
+    "ohsmsLastIssued": "2026-05-01",
+    "ohsmsDue": "2027-05-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "topdrill",
+    "name": "Topdrill",
+    "legalName": "Topdrill Limited",
+    "logo": null,
+    "contract": {
+      "start": "2025-12-01",
+      "renewal": "2026-12-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "greg@topdrill.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 1,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Migration note: App and system",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2026-11-01",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [],
+    "ohsmsLastIssued": "2025-12-01",
+    "ohsmsDue": "2026-12-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "wild-chix",
+    "name": "Wild Chix",
+    "legalName": "Wild Chix",
+    "logo": null,
+    "contract": {
+      "start": "2026-03-01",
+      "renewal": "2027-03-01",
+      "value": "",
+      "plan": "Sole Trader"
+    },
+    "billing": {
+      "contact": "",
+      "email": "info@wildchix.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 1,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Migration note: 1 user, OHSMS",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2027-01-30",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [],
+    "ohsmsLastIssued": "2026-03-01",
+    "ohsmsDue": "2027-03-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "wolf-pack-construction",
+    "name": "Wolf Pack Construction",
+    "legalName": "Wolfpack Construction",
+    "logo": null,
+    "contract": {
+      "start": "2026-04-01",
+      "renewal": "2027-04-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "accounts@wpconstruction.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 1,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Migration note: Up to 20 users, 1 hour",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2027-03-02",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [],
+    "ohsmsLastIssued": "2026-04-01",
+    "ohsmsDue": "2027-04-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "the-hunters-club",
+    "name": "The Hunters Club",
+    "legalName": "The Hunters Club",
+    "logo": null,
+    "contract": {
+      "start": "2026-03-01",
+      "renewal": "2027-03-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "admin@thehuntersclub.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 1,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Migration note: Up to 5 users",
+        "tags": []
+      },
+      {
+        "id": 2,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Address: 88 Rangitane Loop Road, Kerikeri 0294, New Zealand",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2027-01-30",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [
+      {
+        "id": 1,
+        "name": "",
+        "role": "Primary Contact",
+        "email": "admin@thehuntersclub.co.nz",
+        "phone": "+64 21 240 9969"
+      }
+    ],
+    "ohsmsLastIssued": "2026-03-01",
+    "ohsmsDue": "2027-03-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "readyset-concrete-waikato-ready-mix",
+    "name": "ReadySet Concrete (Waikato Ready Mix)",
+    "legalName": "ReadySet Concrete Limited",
+    "logo": null,
+    "contract": {
+      "start": "2026-08-28",
+      "renewal": "2027-08-28",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "office@wrmc.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 1,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Migration note: Up to 20 users",
+        "tags": []
+      }
+    ],
+    "reminders": [],
+    "contacts": [],
+    "ohsmsLastIssued": null,
+    "ohsmsDue": null,
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "fresha-export-limited",
+    "name": "Fresha Export Limited",
+    "legalName": "Fresha Export Limited",
+    "logo": null,
+    "contract": {
+      "start": "2020-07-01",
+      "renewal": "2027-07-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "accounts@fresha.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2027-06-01",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [],
+    "ohsmsLastIssued": "2026-07-01",
+    "ohsmsDue": "2027-07-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "jt-plumbing-drainage-gas",
+    "name": "JT Plumbing Drainage & Gas",
+    "legalName": "JT Plumbing",
+    "logo": null,
+    "contract": {
+      "start": "2018-05-01",
+      "renewal": "2027-05-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "admin@jtplumbing.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 2,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Address: 25B Nature Place, Greerton, Tauranga 3112, New Zealand",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2027-04-01",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [
+      {
+        "id": 1,
+        "name": "",
+        "role": "Primary Contact",
+        "email": "admin@jtplumbing.co.nz",
+        "phone": "+64 7 578 4479"
+      }
+    ],
+    "ohsmsLastIssued": "2026-05-01",
+    "ohsmsDue": "2027-05-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "wellington-continuous-spouting",
+    "name": "Wellington Continuous Spouting",
+    "legalName": "Wellington Continuous Spouting",
+    "logo": null,
+    "contract": {
+      "start": "2026-05-01",
+      "renewal": "2027-05-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "Tim.jones@continuous.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 2,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Address: 2/1 Prosser Street, Elsdon, Porirua 5022, New Zealand",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2027-04-01",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [
+      {
+        "id": 1,
+        "name": "",
+        "role": "Primary Contact",
+        "email": "Tim.jones@continuous.co.nz",
+        "phone": "+64 21 385 600"
+      }
+    ],
+    "ohsmsLastIssued": "2026-05-01",
+    "ohsmsDue": "2027-05-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "buildwells-builders-limited",
+    "name": "BuildWells Builders Limited",
+    "legalName": "BuildWells Builders Limited",
+    "logo": null,
+    "contract": {
+      "start": "2026-07-01",
+      "renewal": "2027-07-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "nick@buildwells.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 2,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Address: 2 Pump Lane, Whitby, Porirua 5024, New Zealand",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2027-06-01",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [
+      {
+        "id": 1,
+        "name": "",
+        "role": "Primary Contact",
+        "email": "nick@buildwells.co.nz",
+        "phone": "+64 20 4166 7685"
+      }
+    ],
+    "ohsmsLastIssued": "2026-07-01",
+    "ohsmsDue": "2027-07-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "silvertree-biomass-solutions-ltd",
+    "name": "Silvertree Biomass Solutions Ltd",
+    "legalName": "Silvertree Biomass Solutions Ltd",
+    "logo": null,
+    "contract": {
+      "start": "2026-05-01",
+      "renewal": "2027-05-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "admin@silvertree.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 2,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Address: 3 Coolgardie Close, Papamoa 3118, New Zealand",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2027-04-01",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [
+      {
+        "id": 1,
+        "name": "",
+        "role": "Primary Contact",
+        "email": "chad@silvertree.co.nz",
+        "phone": "+64 27 800 7747"
+      }
+    ],
+    "ohsmsLastIssued": "2026-05-01",
+    "ohsmsDue": "2027-05-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "dt-air-ltd",
+    "name": "DT Air Ltd",
+    "legalName": "DT Air",
+    "logo": null,
+    "contract": {
+      "start": "2026-06-01",
+      "renewal": "2027-06-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "admin@dtair.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 2,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Address: 2 Bellbird Rise, Pyes Pa, Tauranga 3112, New Zealand",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2027-05-02",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [
+      {
+        "id": 1,
+        "name": "",
+        "role": "Primary Contact",
+        "email": "dave@dtair.co.nz",
+        "phone": "+64 27 222 0330"
+      }
+    ],
+    "ohsmsLastIssued": "2026-06-01",
+    "ohsmsDue": "2027-06-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "air-control-systems-ltd",
+    "name": "Air Control Systems Ltd",
+    "legalName": "Air Control Systems Ltd",
+    "logo": null,
+    "contract": {
+      "start": "2026-05-01",
+      "renewal": "2027-05-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "invoices@aircontrol.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 2,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Address: Unit 1/25 Maru Street, Mount Maunganui 3116, New Zealand",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2027-04-01",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [
+      {
+        "id": 1,
+        "name": "",
+        "role": "Primary Contact",
+        "email": "invoices@completeeletricalservices.co.nz",
+        "phone": "+64 27 577 1226"
+      }
+    ],
+    "ohsmsLastIssued": "2026-05-01",
+    "ohsmsDue": "2027-05-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "asap-vac",
+    "name": "ASAP Vac",
+    "legalName": "ASAP Vac",
+    "logo": null,
+    "contract": {
+      "start": "2026-05-01",
+      "renewal": "2027-05-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "admin@asapvac.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 2,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Address: 9 Hallfield Drive, Ohoka 7692, New Zealand",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2027-04-01",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [
+      {
+        "id": 1,
+        "name": "",
+        "role": "Primary Contact",
+        "email": "chris@asapvac.com",
+        "phone": "+64 21 650 609"
+      }
+    ],
+    "ohsmsLastIssued": "2026-05-01",
+    "ohsmsDue": "2027-05-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "goldtex-interiors-limited",
+    "name": "Goldtex Interiors Limited",
+    "legalName": "GOLDTEX INTERIORS LIMITED",
+    "logo": null,
+    "contract": {
+      "start": "2026-05-01",
+      "renewal": "2027-05-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "invoices@completeelectricalservices.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 2,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Address: Unit 1/25 Maru Street, Mount Maunganui 3116, New Zealand",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2027-04-01",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [
+      {
+        "id": 1,
+        "name": "",
+        "role": "Primary Contact",
+        "email": "invoices@completeelectricalservices.co.nz",
+        "phone": "+64 27 577 1226"
+      }
+    ],
+    "ohsmsLastIssued": "2026-05-01",
+    "ohsmsDue": "2027-05-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "coastal-hvac",
+    "name": "Coastal HVAC",
+    "legalName": "Coastal HVAC",
+    "logo": null,
+    "contract": {
+      "start": "2026-05-01",
+      "renewal": "2027-05-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "office@coastalhvac.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 2,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Address: Unit 1/25 Maru Street, Mount Maunganui 3116, New Zealand",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2027-04-01",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [
+      {
+        "id": 1,
+        "name": "",
+        "role": "Primary Contact",
+        "email": "office@coastalhvac.co.nz",
+        "phone": "+64 27 577 1226"
+      }
+    ],
+    "ohsmsLastIssued": "2026-05-01",
+    "ohsmsDue": "2027-05-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "complete-electrical-services",
+    "name": "Complete Electrical Services",
+    "legalName": "Complete Electrical Services",
+    "logo": null,
+    "contract": {
+      "start": "2026-05-01",
+      "renewal": "2027-05-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "invoices@completeelectricalservices.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 2,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Address: Unit 1/25 Maru Street, Mount Maunganui 3116, New Zealand",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2027-04-01",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [
+      {
+        "id": 1,
+        "name": "",
+        "role": "Primary Contact",
+        "email": "invoices@completeelectricalservices.co.nz",
+        "phone": "+64 27 577 1226"
+      }
+    ],
+    "ohsmsLastIssued": "2026-05-01",
+    "ohsmsDue": "2027-05-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "pv-solar-systems",
+    "name": "PV Solar Systems",
+    "legalName": "PV Solar Systems",
+    "logo": null,
+    "contract": {
+      "start": "2026-05-01",
+      "renewal": "2027-05-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "Invoices@pvsolarsystems.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 2,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Address: Unit 1/25 Maru Street, Mount Maunganui 3116, New Zealand",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2027-04-01",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [
+      {
+        "id": 1,
+        "name": "",
+        "role": "Primary Contact",
+        "email": "Invoices@pvsolarsystems.co.nz",
+        "phone": "+64 27 577 1226"
+      }
+    ],
+    "ohsmsLastIssued": "2026-05-01",
+    "ohsmsDue": "2027-05-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "neo-build-limited",
+    "name": "Neo Build Limited",
+    "legalName": "Neo Build Limited",
+    "logo": null,
+    "contract": {
+      "start": "2026-06-01",
+      "renewal": "2027-06-01",
+      "value": "",
+      "plan": "10 hours included in set up"
+    },
+    "billing": {
+      "contact": "",
+      "email": "admin@neobuild.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 2,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Address: 9C/8 Henry Rose Place, Albany, Auckland 0632, New Zealand",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2027-05-02",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [
+      {
+        "id": 1,
+        "name": "",
+        "role": "Primary Contact",
+        "email": "admin@neobuild.co.nz",
+        "phone": "+64 21 907 443"
+      }
+    ],
+    "ohsmsLastIssued": "2026-06-01",
+    "ohsmsDue": "2027-06-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "effective-electrical-ltd",
+    "name": "Effective Electrical Ltd",
+    "legalName": "Effective Electrical Ltd",
+    "logo": null,
+    "contract": {
+      "start": "2026-07-01",
+      "renewal": "2027-07-01",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "connor@effectiveelectrical.co.nz",
+      "terms": "20th of following month",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [
+      {
+        "id": 2,
+        "author": "Import",
+        "date": "2026-07-28",
+        "text": "Address: 9 Duncan Street, Sumner, Christchurch 8081, New Zealand",
+        "tags": []
+      }
+    ],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2027-06-01",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [
+      {
+        "id": 1,
+        "name": "",
+        "role": "Primary Contact",
+        "email": "connor@effectiveelectrical.co.nz",
+        "phone": "+1 201 555 2013"
+      }
+    ],
+    "ohsmsLastIssued": "2026-07-01",
+    "ohsmsDue": "2027-07-01",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "link-electrical",
+    "name": "Link Electrical",
+    "legalName": "Link Electrical ",
+    "logo": null,
+    "contract": {
+      "start": "2018-06-17",
+      "renewal": "2027-07-17",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "",
+      "terms": "",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2027-05-18",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [],
+    "ohsmsLastIssued": "2026-06-17",
+    "ohsmsDue": "2027-06-17",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
+  },
+  {
+    "id": "ace-drywall-tauranga",
+    "name": "Ace Drywall Tauranga",
+    "legalName": "Ace Drywall Tauranga ",
+    "logo": null,
+    "contract": {
+      "start": "2026-05-26",
+      "renewal": "2027-05-26",
+      "value": "",
+      "plan": "Flat fee client, support as needed/requested"
+    },
+    "billing": {
+      "contact": "",
+      "email": "",
+      "terms": "",
+      "status": "Current"
+    },
+    "billingType": "FlatFee",
+    "billingSetupDone": true,
+    "profile": "Standard Client",
+    "notes": [],
+    "reminders": [
+      {
+        "id": "ohsms-annual-review",
+        "text": "OHSMS annual review due",
+        "date": "2027-04-26",
+        "recurring": "yearly",
+        "done": false,
+        "assignee": "Jo"
+      }
+    ],
+    "contacts": [],
+    "ohsmsLastIssued": "2026-05-26",
+    "ohsmsDue": "2027-05-26",
+    "extras": [],
+    "hours": {
+      "included": 0,
+      "log": []
+    },
+    "users": {
+      "log": []
+    },
+    "intake": null
   }
 ];
 
@@ -5513,9 +9025,8 @@ export default function App() {
   // an exact "Sophie"/"Vanessa" string (casing, whitespace, or a missing team doc falling
   // back to a raw email).
   const canSeeBilling = ["sophie", "vanessa"].includes((currentUser || "").trim().toLowerCase());
-  // Clients now live in Firestore. On first run (empty collection) we seed the
-  // sample data you've been testing with, using the same ids ("bmc", "radius", etc.)
-  // so everything else that references those ids keeps working.
+  // Clients live in Firestore — no auto-seeding happens anymore (that was removed once
+  // real clients existed; see HANDOFF history if that's ever confusing).
   const [clients, setClients] = useState([]);
   const [clientsLoaded, setClientsLoaded] = useState(false);
   const [clientsError, setClientsError] = useState(null);
@@ -5534,6 +9045,38 @@ export default function App() {
     );
     return unsub;
   }, []);
+  // Adds the real client migration (importedClientsMigration, above) by fixed id — only
+  // once the live snapshot has actually loaded, same safe pattern as the leads import:
+  // never fires against a still-loading empty array, only ever adds whichever clients
+  // aren't already present, and never overwrites an existing client with the same id.
+  useEffect(() => {
+    if (!clientsLoaded) return;
+    const existingIds = new Set(clients.map((c) => c.id));
+    importedClientsMigration.forEach((c) => {
+      if (!existingIds.has(c.id)) {
+        const { id, ...data } = c;
+        setDoc(doc(db, "clients", id), data);
+      }
+    });
+  }, [clientsLoaded, clients]);
+  // Backfill: if any of the migrated clients above already got created (an earlier paste
+  // of this file, before ohsmsDue/the reminder were computed for the migration), this
+  // patches just that gap in — only for clients from the migration batch that have a known
+  // OHSMS Last Issued date but are missing the due date, never touches anything else about
+  // them, and is a no-op forever after the first time it catches up.
+  useEffect(() => {
+    if (!clientsLoaded) return;
+    const migrationById = Object.fromEntries(importedClientsMigration.map((c) => [c.id, c]));
+    clients.forEach((c) => {
+      const src = migrationById[c.id];
+      if (src && c.ohsmsLastIssued && !c.ohsmsDue && src.ohsmsDue) {
+        updateDoc(doc(db, "clients", c.id), {
+          ohsmsDue: src.ohsmsDue,
+          reminders: upsertOhsmsReminder(c.reminders, src.ohsmsDue),
+        });
+      }
+    });
+  }, [clientsLoaded, clients]);
   // Leads now live in Firestore, same pattern as clients: live subscription plus a
   // one-time seed of the mock data using the same ids so nothing else breaks.
   const [leads, setLeads] = useState([]);
@@ -5546,23 +9089,17 @@ export default function App() {
     );
     return unsub;
   }, []);
+  // One-time cleanup: the app used to seed 5 fictional placeholder leads (fixed ids "1"-"5")
+  // into a fresh, empty collection — since real leads have since been imported, this removes
+  // any of those specific placeholders that made it in before that stopped happening. Only
+  // ever touches those 5 exact ids, never anything else, and only once the real snapshot has
+  // loaded (same leadsLoaded gate as the real import below, for the same reason).
   useEffect(() => {
-    (async () => {
-      try {
-        const snap = await getDocs(collection(db, "leads"));
-        if (snap.empty) {
-          await Promise.all(
-            initialLeads.map((l) => {
-              const { id, ...data } = l;
-              return setDoc(doc(db, "leads", String(id)), data);
-            })
-          );
-        }
-      } catch (err) {
-        console.error("Lead seed failed (likely a Firestore permissions issue):", err);
-      }
-    })();
-  }, []);
+    if (!leadsLoaded) return;
+    ["1", "2", "3", "4", "5"].forEach((id) => {
+      if (leads.some((l) => l.id === id)) deleteDoc(doc(db, "leads", id));
+    });
+  }, [leadsLoaded, leads]);
   // Adds the real imported pipeline (importedLeads, above) by fixed id — only once the
   // live snapshot has actually loaded (leadsLoaded), so this never mistakes "still
   // loading" for "doesn't exist yet" and overwrites something someone's since edited in

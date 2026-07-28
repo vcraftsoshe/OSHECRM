@@ -4741,16 +4741,28 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
   const [showArchived, setShowArchived] = useState(false);
   const [viewMonth, setViewMonth] = useState(currentMonth());
   useEffect(() => { setViewMonth(currentMonth()); }, [client?.id]);
-  const visibleClients = clients.filter((c) => (showArchived ? c.archived : !c.archived));
+  const [clientSearch, setClientSearch] = useState("");
+  const visibleClients = clients
+    .filter((c) => (showArchived ? c.archived : !c.archived))
+    .filter((c) => {
+      const q = clientSearch.trim().toLowerCase();
+      if (!q) return true;
+      return c.name.toLowerCase().includes(q) || (c.legalName || "").toLowerCase().includes(q);
+    });
 
   const archiveClient = (id) => updateDoc(doc(db, "clients", id), { archived: true });
   const unarchiveClient = (id) => updateDoc(doc(db, "clients", id), { archived: false });
-  const deleteClientPermanently = (id) => {
+  const deleteClientPermanently = async (id) => {
     if (!window.confirm("Permanently delete this client? This can't be undone.")) return;
-    deleteDoc(doc(db, "clients", id));
-    if (id === client.id) {
-      const next = clients.find((c) => c.id !== id);
-      if (next) setSelectedId(next.id);
+    try {
+      await deleteDoc(doc(db, "clients", id));
+      if (id === client.id) {
+        const next = clients.find((c) => c.id !== id);
+        if (next) setSelectedId(next.id);
+      }
+    } catch (err) {
+      console.error("Client delete failed:", err);
+      alert(`Couldn't delete this client: ${err.message || err}${err.code === "permission-denied" ? "\n\nThis usually means the Firestore security rules don't allow deleting from the \"clients\" collection — that needs fixing in the Firebase console, not in the app itself." : ""}`);
     }
   };
 
@@ -4912,7 +4924,8 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
       <div className="w-72 shrink-0 flex flex-col gap-3">
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg" style={{ background: T.paperAlt }}>
           <Search size={15} color={T.slate} />
-          <input placeholder="Search clients" className="bg-transparent text-sm outline-none w-full" style={{ color: T.ink }} />
+          <input placeholder="Search clients" value={clientSearch} onChange={(e) => setClientSearch(e.target.value)}
+            className="bg-transparent text-sm outline-none w-full" style={{ color: T.ink }} />
         </div>
         <div className="flex flex-col gap-2 overflow-y-auto">
           {visibleClients.map((c) => {
@@ -4929,7 +4942,11 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
               </button>
             );
           })}
-          {visibleClients.length === 0 && <div className="text-xs text-center py-4" style={{ color: T.slateLight }}>{showArchived ? "No archived clients." : "No clients yet."}</div>}
+          {visibleClients.length === 0 && (
+            <div className="text-xs text-center py-4" style={{ color: T.slateLight }}>
+              {clientSearch.trim() ? `No clients match "${clientSearch.trim()}".` : showArchived ? "No archived clients." : "No clients yet."}
+            </div>
+          )}
         </div>
         {!showAddClient && (
           <button onClick={() => setShowAddClient(true)} className="flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold mt-1" style={{ background: T.charcoal, color: T.teal }}>

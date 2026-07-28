@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
 import {
   Users, TrendingUp, Bell, Building2, CreditCard, StickyNote,
-  ChevronRight, Plus, Check, Upload, Calendar, X, Search,
+  ChevronRight, ChevronLeft, Plus, Check, Upload, Calendar, X, Search, Clock,
   ClipboardList, Layers, Circle, CheckCircle2, Image as ImageIcon,
   Repeat, Trash2, ListChecks, ListTodo, Mail, ArrowUpRight, Store, LayoutDashboard, ChevronDown, Smartphone, FileText, CalendarClock, MessageCircle
 } from "lucide-react";
@@ -7173,6 +7173,8 @@ function ResellersView({ resellers, selectedId, setSelectedId }) {
   const [newTask, setNewTask] = useState({ text: "", assignee: TEAM[0] });
   const [showArchived, setShowArchived] = useState(false);
   const visibleResellers = resellers.filter((r) => (showArchived ? r.archived : !r.archived));
+  const [resellerMonth, setResellerMonth] = useState(currentMonth());
+  const [downloadingResellerPdf, setDownloadingResellerPdf] = useState(false);
 
   const updateReseller = (fn) => {
     const updated = fn(reseller);
@@ -7181,6 +7183,27 @@ function ResellersView({ resellers, selectedId, setSelectedId }) {
   };
   const latestUsers = (c) => c.users.log[c.users.log.length - 1]?.count ?? 0;
   const totalUsers = reseller.clients.reduce((s, c) => s + latestUsers(c), 0);
+  const resellerMonthsAvailable = (() => {
+    const set = new Set();
+    reseller.clients.forEach((c) => (c.users.log || []).forEach((u) => set.add(u.month)));
+    set.add(currentMonth());
+    return [...set].sort().reverse();
+  })();
+  const usersForMonth = (c, monthYear) => {
+    const entry = [...(c.users.log || [])].reverse().find((u) => u.month === monthYear);
+    return entry ? entry.count : 0;
+  };
+  const downloadResellerUsagePdf = async () => {
+    setDownloadingResellerPdf(true);
+    try {
+      await downloadResellerPdf({ reseller, monthYear: resellerMonth, usersForMonth });
+    } catch (err) {
+      console.error("Reseller PDF generation failed:", err);
+      alert(`Couldn't generate the PDF: ${err.message || err}`);
+    } finally {
+      setDownloadingResellerPdf(false);
+    }
+  };
 
   const archiveReseller = (id) => updateDoc(doc(db, "resellers", id), { archived: true });
   const unarchiveReseller = (id) => updateDoc(doc(db, "resellers", id), { archived: false });
@@ -7267,6 +7290,14 @@ function ResellersView({ resellers, selectedId, setSelectedId }) {
             <div className="text-lg font-bold" style={{ color: T.ink }}>{reseller.name}</div>
             <div className="flex items-center gap-2">
               <Pill color={T.tealDark} bg={T.paperAlt}>{totalUsers} users this month</Pill>
+              <select value={resellerMonth} onChange={(e) => setResellerMonth(e.target.value)}
+                className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
+                {resellerMonthsAvailable.map((m) => <option key={m} value={m}>{m === currentMonth() ? "This month" : monthLabel(m)}</option>)}
+              </select>
+              <button onClick={downloadResellerUsagePdf} disabled={downloadingResellerPdf}
+                className="text-xs font-semibold px-2.5 py-1.5 rounded-lg flex items-center gap-1.5" style={{ background: T.paperAlt, color: T.tealDark, opacity: downloadingResellerPdf ? 0.6 : 1 }}>
+                <ClipboardList size={12} /> {downloadingResellerPdf ? "Generating…" : "Download as PDF"}
+              </button>
               {reseller.archived ? (
                 <button onClick={() => unarchiveReseller(reseller.id)} className="text-xs font-semibold px-2.5 py-1.5 rounded-lg" style={{ background: T.paperAlt, color: T.tealDark }}>Unarchive</button>
               ) : (
@@ -7369,6 +7400,134 @@ function ResellersView({ resellers, selectedId, setSelectedId }) {
 }
 
 /* ---------- Billing overview (all clients) ---------- */
+/* ---------- Hours (billable-work tracking, weekly + monthly) ----------
+   Pulls billable hours from the same two places the Activity tab and Billing already read
+   from — client.hours.log (which already includes billable workflow hours, since those get
+   written straight into the log when a workflow's marked billable) and client.extras. Both
+   get merged into one list of dated entries per client, then bucketed by day (weekly view)
+   or summed for the month (monthly view). Visible to everyone — unlike Billing, which is
+   Sophie/Vanessa only — since this is the "how are we tracking" view Jo and Judith need. */
+function startOfWeek(dateStr) {
+  const d = new Date(dateStr + "T00:00:00");
+  const day = d.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  d.setDate(d.getDate() + diff);
+  return d.toISOString().slice(0, 10);
+}
+function getBillableEntries(client) {
+  const hoursEntries = (client.hours?.log || []).map((h) => ({ date: h.date, hours: h.hours }));
+  const extrasEntries = (client.extras || []).map((e) => ({ date: e.date, hours: e.hours }));
+  return [...hoursEntries, ...extrasEntries];
+}
+function weeklyTargetFor(client) {
+  return client.hours?.included > 0 ? Math.round((client.hours.included / 4.345) * 10) / 10 : null;
+}
+
+function HoursView({ clients }) {
+  const [view, setView] = useState("weekly");
+  const [weekStart, setWeekStart] = useState(startOfWeek(today()));
+  const [monthYear, setMonthYear] = useState(currentMonth());
+
+  const trackedClients = clients.filter((c) => !c.archived && (c.billingType || "FlatFee") !== "FlatFee");
+  const days = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
+  const dayHeaderLabel = (d) => new Date(d + "T00:00:00").toLocaleDateString("en-NZ", { weekday: "short" });
+
+  const monthsAvailable = (() => {
+    const set = new Set();
+    trackedClients.forEach((c) => (c.hours?.log || []).forEach((h) => set.add(h.date.slice(0, 7))));
+    set.add(currentMonth());
+    return [...set].sort().reverse();
+  })();
+
+  return (
+    <div className="flex flex-col gap-4">
+      <Card style={{ padding: "10px 16px" }}>
+        <div className="flex items-center gap-4 flex-wrap">
+          <div className="flex rounded-lg p-1" style={{ background: T.paperAlt }}>
+            <button onClick={() => setView("weekly")} className="text-xs font-semibold px-4 py-1.5 rounded-md"
+              style={{ background: view === "weekly" ? T.card : "transparent", color: view === "weekly" ? T.tealDark : T.slate }}>Weekly</button>
+            <button onClick={() => setView("monthly")} className="text-xs font-semibold px-4 py-1.5 rounded-md"
+              style={{ background: view === "monthly" ? T.card : "transparent", color: view === "monthly" ? T.tealDark : T.slate }}>Monthly</button>
+          </div>
+          {view === "weekly" ? (
+            <div className="flex items-center gap-2">
+              <button onClick={() => setWeekStart(addDays(weekStart, -7))}><ChevronLeft size={16} color={T.slate} /></button>
+              <span className="text-sm font-semibold" style={{ color: T.ink }}>{fmtDate(days[0])} – {fmtDate(days[6])}</span>
+              <button onClick={() => setWeekStart(addDays(weekStart, 7))}><ChevronRight size={16} color={T.slate} /></button>
+              {weekStart !== startOfWeek(today()) && (
+                <button onClick={() => setWeekStart(startOfWeek(today()))} className="text-xs font-semibold ml-1" style={{ color: T.tealDark }}>This week</button>
+              )}
+            </div>
+          ) : (
+            <select value={monthYear} onChange={(e) => setMonthYear(e.target.value)}
+              className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
+              {monthsAvailable.map((m) => <option key={m} value={m}>{m === currentMonth() ? "This month" : monthLabel(m)}</option>)}
+            </select>
+          )}
+        </div>
+      </Card>
+
+      {view === "weekly" ? (
+        <Card style={{ padding: 16, overflowX: "auto" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "180px repeat(7, 72px) 96px", gap: 4, minWidth: 760 }}>
+            <div />
+            {days.map((d) => (
+              <div key={d} className="text-center">
+                <div className="text-[10px] font-semibold" style={{ color: T.slateLight }}>{dayHeaderLabel(d)}</div>
+                <div className="text-[10px]" style={{ color: T.slateLight }}>{fmtDate(d).replace(/ \d{4}$/, "")}</div>
+              </div>
+            ))}
+            <div className="text-[10px] text-center font-semibold self-center" style={{ color: T.slateLight }}>Total / target</div>
+
+            {trackedClients.map((c) => {
+              const entries = getBillableEntries(c);
+              const dayTotals = days.map((d) => entries.filter((e) => e.date === d).reduce((s, e) => s + e.hours, 0));
+              const weekTotal = Math.round(dayTotals.reduce((s, v) => s + v, 0) * 100) / 100;
+              const target = weeklyTargetFor(c);
+              const overUnder = target !== null ? Math.round((weekTotal - target) * 10) / 10 : null;
+              const totalColor = overUnder === null ? T.ink : overUnder < 0 ? T.coral : T.tealDark;
+              return (
+                <React.Fragment key={c.id}>
+                  <div className="text-xs font-medium py-2 truncate" style={{ color: T.ink }} title={c.name}>{c.name}</div>
+                  {dayTotals.map((v, i) => (
+                    <div key={i} className="text-xs text-center py-2" style={{ color: v > 0 ? T.ink : T.border }}>{v > 0 ? v : "—"}</div>
+                  ))}
+                  <div className="text-center py-2">
+                    <div className="text-xs font-bold" style={{ color: totalColor }}>{weekTotal}h{target !== null ? ` / ${target}h` : ""}</div>
+                    {overUnder !== null && <div className="text-[10px]" style={{ color: totalColor }}>{overUnder > 0 ? `+${overUnder}h ahead` : overUnder < 0 ? `${overUnder}h behind` : "on pace"}</div>}
+                  </div>
+                </React.Fragment>
+              );
+            })}
+          </div>
+          {trackedClients.length === 0 && <div className="text-xs py-3" style={{ color: T.slateLight }}>No hourly or subscription+hours clients to track.</div>}
+        </Card>
+      ) : (
+        <Card style={{ padding: 0 }}>
+          <div className="grid text-xs font-semibold uppercase tracking-wide px-4 py-3" style={{ gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr", color: T.slate, borderBottom: `1px solid ${T.border}` }}>
+            <div>Client</div><div>Hours logged</div><div>Included</div><div>Over / under</div><div>Status</div>
+          </div>
+          {trackedClients.map((c) => {
+            const logged = Math.round(getBillableEntries(c).filter((e) => e.date.slice(0, 7) === monthYear).reduce((s, e) => s + e.hours, 0) * 100) / 100;
+            const included = c.hours?.included || 0;
+            const diff = included > 0 ? Math.round((logged - included) * 10) / 10 : null;
+            return (
+              <div key={c.id} className="grid items-center px-4 py-3 text-sm" style={{ gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr", borderBottom: `1px solid ${T.border}` }}>
+                <div style={{ color: T.ink }} className="font-medium">{c.name}</div>
+                <div style={{ color: T.ink }}>{logged}h</div>
+                <div style={{ color: T.slate }}>{included > 0 ? `${included}h` : "—"}</div>
+                <div style={{ color: diff === null ? T.slateLight : diff < 0 ? T.coral : T.tealDark }}>{diff === null ? "—" : diff > 0 ? `+${diff}h` : `${diff}h`}</div>
+                <div><Pill color={c.billing?.status === "Overdue" ? T.coral : T.tealDark} bg={T.paperAlt}>{c.billing?.status || "Current"}</Pill></div>
+              </div>
+            );
+          })}
+          {trackedClients.length === 0 && <div className="text-xs px-4 py-3" style={{ color: T.slateLight }}>No hourly or subscription+hours clients to track.</div>}
+        </Card>
+      )}
+    </div>
+  );
+}
+
 function BillingOverview({ clients, resellers }) {
   const [showFlatFee, setShowFlatFee] = useState(false);
   const newClients = clients.filter((c) => c.billingSetupDone === false);
@@ -8308,6 +8467,67 @@ function pieSlicePoints(cx, cy, r, angleStart, angleEnd) {
 // manual override was entered), then each section as a real table from its CSV data
 // followed by its comment/narrative — matching the shape of the real OSHE monthly reports
 // (numbers-grid header, charcoal section bars, table + narrative pairing per section).
+// Builds a simple usage statement for one reseller — their clients and how many users each
+// had that month — so they've got something concrete to work from for their own billing.
+async function downloadResellerPdf({ reseller, monthYear, usersForMonth }) {
+  const { PDFDocument, StandardFonts, rgb } = await importWithReloadOnStaleChunk(() => import("pdf-lib"));
+  const ink = rgb(0.08, 0.14, 0.13);
+  const slate = rgb(0.36, 0.45, 0.45);
+  const teal = rgb(0.04, 0.68, 0.63);
+  const charcoal = rgb(0.06, 0.20, 0.16);
+  const pageWidth = 595, pageHeight = 842, margin = 50;
+  const maxWidth = pageWidth - margin * 2;
+  const bandHeight = 74;
+
+  const pdfDoc = await PDFDocument.create();
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const monthLbl = monthYear === currentMonth() ? monthLabel(currentMonth()) : monthLabel(monthYear);
+
+  let page = pdfDoc.addPage([pageWidth, pageHeight]);
+  page.drawRectangle({ x: 0, y: pageHeight - bandHeight, width: pageWidth, height: bandHeight, color: charcoal });
+  page.drawText("RESELLER CLIENT USAGE", { x: margin, y: pageHeight - 30, size: 9, font: boldFont, color: teal });
+  page.drawText(`${reseller.name} — ${monthLbl}`, { x: margin, y: pageHeight - 52, size: 16, font: boldFont, color: rgb(1, 1, 1) });
+
+  let y = pageHeight - bandHeight - 40;
+  const rows = reseller.clients.map((c) => ({ name: c.name, users: usersForMonth(c, monthYear) }));
+  const totalUsers = rows.reduce((s, r) => s + r.users, 0);
+
+  page.drawText(`${rows.length} client${rows.length === 1 ? "" : "s"} · ${totalUsers} total user${totalUsers === 1 ? "" : "s"} to bill`, { x: margin, y, size: 11, font, color: slate });
+  y -= 34;
+
+  const colWidths = [maxWidth - 140, 140];
+  page.drawRectangle({ x: margin, y: y - 22, width: maxWidth, height: 22, color: rgb(0.93, 0.96, 0.95) });
+  page.drawText("Client", { x: margin + 8, y: y - 16, size: 9, font: boldFont, color: teal });
+  page.drawText("Users", { x: margin + colWidths[0] + 8, y: y - 16, size: 9, font: boldFont, color: teal });
+  y -= 22;
+
+  rows.forEach((r, i) => {
+    if (y < margin + 40) { page = pdfDoc.addPage([pageWidth, pageHeight]); y = pageHeight - margin; }
+    const rowH = 22;
+    if (i % 2 === 1) page.drawRectangle({ x: margin, y: y - rowH, width: maxWidth, height: rowH, color: rgb(0.97, 0.98, 0.98) });
+    page.drawText(r.name, { x: margin + 8, y: y - rowH + 7, size: 10, font, color: ink });
+    page.drawText(String(r.users), { x: margin + colWidths[0] + 8, y: y - rowH + 7, size: 10, font: boldFont, color: teal });
+    page.drawLine({ start: { x: margin, y: y - rowH }, end: { x: margin + maxWidth, y: y - rowH }, thickness: 0.5, color: rgb(0.9, 0.9, 0.9) });
+    y -= rowH;
+  });
+
+  const pageCount = pdfDoc.getPageCount();
+  for (let p = 0; p < pageCount; p++) {
+    const pg = pdfDoc.getPage(p);
+    pg.drawText(`Prepared by OSHE Limited for ${reseller.name} — ${monthLbl}`, { x: margin, y: 24, size: 8, font, color: slate });
+  }
+
+  const bytes = await pdfDoc.save();
+  const blob = new Blob([bytes], { type: "application/pdf" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${reseller.name.replace(/\s+/g, "_")}-Usage-${monthYear}.pdf`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 async function downloadMonthlyReportPdf({ client, monthYear, sections, highlights, focusNextMonth, createdBy }) {
   const { PDFDocument, StandardFonts, rgb } = await importWithReloadOnStaleChunk(() => import("pdf-lib"));
   const ink = rgb(0.08, 0.14, 0.13);
@@ -9804,6 +10024,7 @@ export default function App() {
         <NavItem icon={Users} label="Clients" active={module === "clients"} onClick={() => setModule("clients")} />
         <NavItem icon={Layers} label="Systems" active={module === "systems"} onClick={() => setModule("systems")} />
         <NavItem icon={TrendingUp} label="Sales" active={module === "sales"} onClick={() => setModule("sales")} />
+        <NavItem icon={Clock} label="Hours" active={module === "hours"} onClick={() => setModule("hours")} />
         {canSeeBilling && <NavItem icon={ClipboardList} label="Billing" active={module === "billing"} onClick={() => setModule("billing")} />}
         <NavItem icon={LayoutDashboard} label="Dashboards" active={module === "dashboards"} onClick={() => setModule("dashboards")} />
         <NavItem icon={Store} label="Resellers" active={module === "resellers"} onClick={() => setModule("resellers")} />
@@ -9824,7 +10045,7 @@ export default function App() {
         <div className="flex items-center justify-between px-8 py-5" style={{ borderBottom: `1px solid ${T.border}` }}>
           <div>
             <div className="text-xl font-bold" style={{ color: T.ink }}>
-              {{ clients: "Clients", systems: "Systems", sales: "Sales", billing: "Billing", workflows: "Workflows", resellers: "Resellers", tasks: "My Tasks", dashboards: "Dashboards", reports: "Reports", schedule: "Schedule" }[module]}
+              {{ clients: "Clients", systems: "Systems", sales: "Sales", billing: "Billing", workflows: "Workflows", resellers: "Resellers", tasks: "My Tasks", dashboards: "Dashboards", reports: "Reports", schedule: "Schedule", hours: "Hours" }[module]}
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -9843,6 +10064,7 @@ export default function App() {
           )}
           {module === "systems" && <SystemsView clients={clients} selectedId={selectedClient} setSelectedId={setSelectedClient} documentTemplates={documentTemplates} saveDocumentTemplate={saveDocumentTemplate} systemReviewLog={systemReviewLog} addSystemReviewLogEntry={addSystemReviewLogEntry} customErpItems={customErpItems} addCustomErpItem={addCustomErpItem} />}
           {module === "sales" && <SalesView leads={leads} convertLeadToClient={convertLeadToClient} />}
+          {module === "hours" && <HoursView clients={clients} />}
           {module === "billing" && canSeeBilling && <BillingOverview clients={clients} resellers={resellers} />}
           {module === "dashboards" && <DashboardsView clients={clients} tasks={tasks} touchpointBaselines={touchpointBaselines} updateTouchpointBaseline={updateTouchpointBaseline} />}
           {module === "workflows" && <WorkflowsView workflows={workflows} />}

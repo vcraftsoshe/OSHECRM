@@ -7175,6 +7175,20 @@ function ResellersView({ resellers, selectedId, setSelectedId }) {
   const visibleResellers = resellers.filter((r) => (showArchived ? r.archived : !r.archived));
   const [resellerMonth, setResellerMonth] = useState(currentMonth());
   const [downloadingResellerPdf, setDownloadingResellerPdf] = useState(false);
+  // Local draft, synced from the reseller record only when the selected reseller changes —
+  // typing updates this immediately so it feels responsive, while the Firestore write
+  // happens in the background. Binding the input's value straight to the prop (as it was
+  // before) meant the displayed text only updated once the write round-tripped back through
+  // onSnapshot, which is exactly what made it feel like keystrokes weren't registering.
+  const [contactDraft, setContactDraft] = useState({ email: "", phone: "", emailToClone: "" });
+  useEffect(() => {
+    setContactDraft({ email: reseller.contactEmail || "", phone: reseller.contactPhone || "", emailToClone: reseller.emailToClone || "" });
+  }, [reseller.id]);
+  const setContactField = (field, value) => {
+    setContactDraft((d) => ({ ...d, [field]: value }));
+    const dbField = field === "email" ? "contactEmail" : field === "phone" ? "contactPhone" : "emailToClone";
+    updateReseller((r) => ({ ...r, [dbField]: value }));
+  };
 
   const updateReseller = (fn) => {
     const updated = fn(reseller);
@@ -7308,17 +7322,21 @@ function ResellersView({ resellers, selectedId, setSelectedId }) {
           </div>
           <div className="grid grid-cols-2 gap-4 mt-4">
             <div>
-              <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: T.slate }}>Contact email</div>
-              <input value={reseller.contactEmail} onChange={(e) => updateReseller((r) => ({ ...r, contactEmail: e.target.value }))}
-                className="text-sm mt-1 w-full outline-none rounded-lg px-1 -ml-1" style={{ color: T.ink, border: "1px solid transparent" }}
-                onFocus={(ev) => (ev.target.style.border = `1px solid ${T.border}`)} onBlur={(ev) => (ev.target.style.border = "1px solid transparent")} />
+              <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: T.slate }}>Contact email</div>
+              <input value={contactDraft.email} onChange={(e) => setContactField("email", e.target.value)} placeholder="Add contact email"
+                className="text-sm w-full outline-none rounded-lg px-2 py-1.5" style={{ color: T.ink, border: `1px solid ${T.border}` }} />
             </div>
             <div>
-              <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: T.slate }}>Contact phone</div>
-              <input value={reseller.contactPhone} onChange={(e) => updateReseller((r) => ({ ...r, contactPhone: e.target.value }))}
-                className="text-sm mt-1 w-full outline-none rounded-lg px-1 -ml-1" style={{ color: T.ink, border: "1px solid transparent" }}
-                onFocus={(ev) => (ev.target.style.border = `1px solid ${T.border}`)} onBlur={(ev) => (ev.target.style.border = "1px solid transparent")} />
+              <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: T.slate }}>Contact phone</div>
+              <input value={contactDraft.phone} onChange={(e) => setContactField("phone", e.target.value)} placeholder="Add contact phone"
+                className="text-sm w-full outline-none rounded-lg px-2 py-1.5" style={{ color: T.ink, border: `1px solid ${T.border}` }} />
             </div>
+          </div>
+          <div className="mt-4">
+            <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: T.slate }}>Email to clone</div>
+            <textarea value={contactDraft.emailToClone} onChange={(e) => setContactField("emailToClone", e.target.value)} rows={4}
+              placeholder="A reusable email draft for this reseller — write it once here to have on hand."
+              className="text-sm w-full outline-none rounded-lg px-2 py-1.5 resize-y" style={{ color: T.ink, border: `1px solid ${T.border}` }} />
           </div>
         </Card>
 

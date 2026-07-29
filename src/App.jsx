@@ -5360,6 +5360,7 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
           {visibleClients.map((c) => {
             const d = daysUntil(c.ohsmsDue);
             const dot = d < 0 ? T.coral : d <= 30 ? T.amber : T.tealDark;
+            const fromNztg = (c.intake?.hearAboutUs || "").toLowerCase().includes("nztg");
             return (
               <button key={c.id} onClick={() => setSelectedId(c.id)} className="text-left p-3 rounded-xl transition-colors"
                 style={{ background: c.id === client?.id ? T.paperAlt : T.card, border: `1px solid ${c.id === client?.id ? T.tealDark : T.border}`, opacity: c.archived ? 0.6 : 1 }}>
@@ -5367,7 +5368,10 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
                   <span className="text-sm font-semibold" style={{ color: T.ink }}>{c.name}</span>
                   <span style={{ width: 8, height: 8, borderRadius: 999, background: dot }} />
                 </div>
-                <div className="text-xs mt-1" style={{ color: T.slate }}>{c.contract.plan}</div>
+                <div className="text-xs mt-1 flex items-center gap-1.5" style={{ color: T.slate }}>
+                  {c.contract.plan}
+                  {fromNztg && <Pill color={T.blue} bg={T.paperAlt}>NZTG</Pill>}
+                </div>
               </button>
             );
           })}
@@ -5468,7 +5472,10 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
         <Card style={{ padding: "20px 24px" }}>
           <div className="flex items-center justify-between">
             <div>
-              <div className="text-lg font-bold" style={{ color: T.ink }}>{client.name}</div>
+              <div className="text-lg font-bold flex items-center gap-2" style={{ color: T.ink }}>
+                {client.name}
+                {(client.intake?.hearAboutUs || "").toLowerCase().includes("nztg") && <Pill color={T.blue} bg={T.paperAlt}>NZTG</Pill>}
+              </div>
               <div className="text-sm" style={{ color: T.slate }}>{client.legalName}</div>
             </div>
             <div className="flex items-center gap-2">
@@ -6448,7 +6455,7 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
     }
     drawCenteredOn(page, "EMERGENCY RESPONSE PLAN", 21, boldFont, charcoal, cy);
     cy -= 24;
-    drawCenteredOn(page, client.name, 13, boldFont, rgb(0.2, 0.28, 0.28), cy);
+    drawCenteredOn(page, displayName, 13, boldFont, rgb(0.2, 0.28, 0.28), cy);
     cy -= 18;
     const issueDate = today();
     drawCenteredOn(page, `Issued: ${fmtDate(issueDate)}  ·  Review Date: ${fmtDate(addDays(issueDate, 365))}`, 9, font, slate, cy);
@@ -6460,15 +6467,15 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
     const drawContentHeader = (pg) => {
       pg.drawLine({ start: { x: margin, y: pageHeight - headerHeight + 8 }, end: { x: pageWidth - margin, y: pageHeight - headerHeight + 8 }, thickness: 0.75, color: rgb(0.85, 0.85, 0.85) });
       pg.drawText("EMERGENCY RESPONSE PLAN", { x: margin, y: pageHeight - 22, size: 8, font: boldFont, color: teal });
-      const nw = boldFont.widthOfTextAtSize(client.name, 8);
-      pg.drawText(client.name, { x: pageWidth - margin - nw, y: pageHeight - 22, size: 8, font: boldFont, color: slate });
+      const nw = boldFont.widthOfTextAtSize(displayName, 8);
+      pg.drawText(displayName, { x: pageWidth - margin - nw, y: pageHeight - 22, size: 8, font: boldFont, color: slate });
     };
     const newPage = () => { page = pdfDoc.addPage([pageWidth, pageHeight]); drawContentHeader(page); y = pageHeight - topGap; };
 
     // Numbers/contacts are stored as editable "Label: value" template text (same Templates
     // tab as everything else) — parsed into table rows here rather than a separate data
     // format, so changing e.g. the Hospital number is just editing that line of text.
-    const parseRows = (raw) => (raw || "").replaceAll("The Company", client.name).split("\n\n").map((p) => p.trim()).filter(Boolean)
+    const parseRows = (raw) => (raw || "").replaceAll("The Company", displayName).split("\n\n").map((p) => p.trim()).filter(Boolean)
       .map((p) => { const idx = p.indexOf(":"); return idx > 0 ? { label: p.slice(0, idx).trim(), value: p.slice(idx + 1).trim() } : null; })
       .filter(Boolean);
     const numberRows = parseRows(documentTemplates[templateKey("erp", "Emergency Contact Numbers")]);
@@ -6540,7 +6547,7 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
     const fullPageHeight = pageHeight - topGap - margin;
     emergencyLabels.forEach((label) => {
       const raw = documentTemplates[templateKey("erp", label)] || "";
-      const content = raw.replaceAll("The Company", client.name) || `No template text written yet for "${label}".`;
+      const content = raw.replaceAll("The Company", displayName) || `No template text written yet for "${label}".`;
       const paragraphs = content.split("\n\n").map((p) => {
         const { heading, body } = splitHeading(p);
         const bodyLines = wrapBodyWithBullets(body, maxWidth);
@@ -6585,7 +6592,7 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${client.name.replace(/\s+/g, "_")}-Emergency_Response_Plan.pdf`;
+    a.download = `${displayName.replace(/\s+/g, "_")}-Emergency_Response_Plan.pdf`;
     a.click();
     URL.revokeObjectURL(url);
     return;

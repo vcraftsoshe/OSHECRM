@@ -218,7 +218,7 @@ export default function SignupForm() {
   const [step, setStep] = useState(0);
   const [form, setForm] = useState({
     company: "", email: "", contactName: "", accountsEmail: "", phone: "", startDate: "",
-    address: "", workTasks: "", appUsers: "", paymentFreq: "", requireOhsms: "",
+    address: "", workTasks: "", appUsers: "", paymentFreq: "", requireOhsms: "", hearAboutUs: "",
   });
   const [t, setT] = useState({
     contractors: null, physicalWorkplace: null, plant: null, vehicles: null, ppe: null,
@@ -350,6 +350,9 @@ export default function SignupForm() {
             </Field>
             <Field label="Please list your General Work Tasks">
               <textarea rows={3} value={form.workTasks} onChange={(e) => set("workTasks", e.target.value)} className="w-full text-sm px-3 py-2.5 rounded-lg outline-none resize-none" style={inputStyle} />
+            </Field>
+            <Field label="Where did you hear about us?">
+              <input value={form.hearAboutUs} onChange={(e) => set("hearAboutUs", e.target.value)} className="w-full text-sm px-3 py-2.5 rounded-lg outline-none" style={inputStyle} />
             </Field>
           </div>
         )}

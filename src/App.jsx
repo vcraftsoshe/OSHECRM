@@ -7332,11 +7332,12 @@ function ResellersView({ resellers, selectedId, setSelectedId }) {
                 className="text-sm w-full outline-none rounded-lg px-2 py-1.5" style={{ color: T.ink, border: `1px solid ${T.border}` }} />
             </div>
           </div>
-          <div className="mt-4">
-            <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: T.slate }}>Email to clone</div>
-            <textarea value={contactDraft.emailToClone} onChange={(e) => setContactField("emailToClone", e.target.value)} rows={4}
-              placeholder="A reusable email draft for this reseller — write it once here to have on hand."
-              className="text-sm w-full outline-none rounded-lg px-2 py-1.5 resize-y" style={{ color: T.ink, border: `1px solid ${T.border}` }} />
+          <div className="grid grid-cols-2 gap-4 mt-4">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: T.slate }}>Email to clone</div>
+              <input value={contactDraft.emailToClone} onChange={(e) => setContactField("emailToClone", e.target.value)} placeholder="Add email"
+                className="text-sm w-full outline-none rounded-lg px-2 py-1.5" style={{ color: T.ink, border: `1px solid ${T.border}` }} />
+            </div>
           </div>
         </Card>
 

@@ -4528,6 +4528,30 @@ function Card({ children, style, className, ...rest }) {
 // page from creating additional dialogs" checkbox; once ticked, every future confirm()
 // call just returns false instantly with zero dialog and zero error), which looks exactly
 // like a broken delete button. This can't be suppressed the same way since it's just app UI.
+// There's no error boundary anywhere else in this app, which means any uncaught render
+// error — anywhere — unmounts the entire React tree and white-screens the whole thing,
+// not just the piece that broke. Wrapping newer/more complex tabs (starting with
+// Scheduling) means a bug there shows a small in-place message instead of taking
+// everything down, and — just as usefully — the actual error message ends up visible in
+// the UI instead of only in the browser console, which is a lot easier to report back.
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) { console.error("Caught by ErrorBoundary:", error, info); }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="flex flex-col items-center justify-center gap-2 py-10 text-center">
+          <div className="text-sm font-semibold" style={{ color: T.coral }}>Something went wrong loading this.</div>
+          <div className="text-xs max-w-md" style={{ color: T.slate }}>{String(this.state.error.message || this.state.error)}</div>
+          <button onClick={() => this.setState({ error: null })} className="text-xs font-semibold px-3 py-1.5 rounded-lg mt-1" style={{ background: T.paperAlt, color: T.tealDark }}>Try again</button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function ConfirmButton({ onConfirm, title, icon: Icon = Trash2, iconSize = 14, iconColor, confirmText = "Delete?" }) {
   const [armed, setArmed] = useState(false);
   useEffect(() => {
@@ -4611,21 +4635,27 @@ function ClientScheduling({ client, updateClient }) {
 
   // Sync this actual calendar month's occurrences into the real hours log — idempotent
   // (checks existing ids before writing), so this is safe to re-run on every render.
+  // Wrapped in try/catch since errors thrown inside an effect (unlike render) aren't caught
+  // by ErrorBoundary — better to log it and skip the sync than let it interrupt anything.
   useEffect(() => {
-    const thisMonth = currentMonth();
-    const currentOccurrences = expandScheduleEntriesInRange(entries, `${thisMonth}-01`, `${addMonthsToMonthYear(thisMonth, 1)}-01`);
-    if (currentOccurrences.length === 0) return;
-    const existingIds = new Set((client.hours?.log || []).map((h) => h.id));
-    const newLogEntries = [];
-    currentOccurrences.forEach((occ) => {
-      if (!occ.hours) return;
-      const logId = `sched-${occ.id}-${thisMonth}`;
-      if (!existingIds.has(logId)) {
-        newLogEntries.push({ id: logId, date: occ.occurrenceDate, member: occ.assignee, hours: Number(occ.hours) || 0, description: `Schedule: ${occ.title}` });
+    try {
+      const thisMonth = currentMonth();
+      const currentOccurrences = expandScheduleEntriesInRange(entries, `${thisMonth}-01`, `${addMonthsToMonthYear(thisMonth, 1)}-01`);
+      if (currentOccurrences.length === 0) return;
+      const existingIds = new Set((client.hours?.log || []).map((h) => h.id));
+      const newLogEntries = [];
+      currentOccurrences.forEach((occ) => {
+        if (!occ.hours) return;
+        const logId = `sched-${occ.id}-${thisMonth}`;
+        if (!existingIds.has(logId)) {
+          newLogEntries.push({ id: logId, date: occ.occurrenceDate, member: occ.assignee, hours: Number(occ.hours) || 0, description: `Schedule: ${occ.title}` });
+        }
+      });
+      if (newLogEntries.length > 0) {
+        updateClient((c) => ({ ...c, hours: { ...c.hours, log: [...(c.hours?.log || []), ...newLogEntries] } }));
       }
-    });
-    if (newLogEntries.length > 0) {
-      updateClient((c) => ({ ...c, hours: { ...c.hours, log: [...(c.hours?.log || []), ...newLogEntries] } }));
+    } catch (err) {
+      console.error("Client Scheduling hours sync failed:", err);
     }
   }, [client.id, JSON.stringify(entries)]);
 
@@ -4663,7 +4693,7 @@ function ClientScheduling({ client, updateClient }) {
   // into the real hours log like everything else here, but deliberately never touches
   // scheduleEntries, so it never shows on the calendar above and never counts toward
   // anyone's Schedule tab workload — just the client's billing.
-  const billableThisMonth = (client.hours?.log || []).filter((h) => h.id?.startsWith("billable-") && h.date.slice(0, 7) === monthYear);
+  const billableThisMonth = (client.hours?.log || []).filter((h) => String(h.id).startsWith("billable-") && h.date && h.date.slice(0, 7) === monthYear);
   const addBillableTime = () => {
     if (!billableDraft.description.trim() || !billableDraft.date || !billableDraft.hours) return;
     const entry = { id: "billable-" + Date.now(), date: billableDraft.date, member: billableDraft.member, hours: Number(billableDraft.hours), description: `Billable: ${billableDraft.description.trim()}` };
@@ -5769,7 +5799,9 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
             </div>
           )}
           {tab === "scheduling" && client.profile === "Enterprise Client" && (
-            <ClientScheduling client={client} updateClient={updateClient} />
+            <ErrorBoundary>
+              <ClientScheduling client={client} updateClient={updateClient} />
+            </ErrorBoundary>
           )}
         </div>
         </>

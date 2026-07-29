@@ -4678,29 +4678,39 @@ function ClientScheduling({ client, updateClient }) {
   const monthEnd = `${addMonthsToMonthYear(monthYear, 1)}-01`;
   const occurrences = expandScheduleEntriesInRange(entries, monthStart, monthEnd);
 
-  // Sync this actual calendar month's occurrences into the real hours log — idempotent
-  // (checks existing ids before writing), so this is safe to re-run on every render.
+  // Each scheduled occurrence becomes a real task in this client's Tasks tab — same place
+  // (and same completion flow, same "coming up due" visibility rules) as anything else
+  // there — rather than a separate thing only visible on this tab. That's also what makes
+  // it show up in the assigned person's My Tasks and on the Schedule tab: both already read
+  // from client.reminders, so nothing extra was needed there once this exists.
+  //
+  // Deliberately does NOT touch the hours log here. These are pre-programmed in advance —
+  // scheduled doesn't mean done — so billing only happens once the task is actually ticked
+  // off (see toggleReminderDone), not just because the calendar date arrived. One reminder
+  // per occurrence (id includes the date), so a recurring item's history stays separate
+  // per occurrence rather than one shared task getting silently reused/stale.
   // Wrapped in try/catch since errors thrown inside an effect (unlike render) aren't caught
   // by ErrorBoundary — better to log it and skip the sync than let it interrupt anything.
   useEffect(() => {
     try {
       const thisMonth = currentMonth();
-      const currentOccurrences = expandScheduleEntriesInRange(entries, `${thisMonth}-01`, `${addMonthsToMonthYear(thisMonth, 1)}-01`);
-      if (currentOccurrences.length === 0) return;
-      const existingIds = new Set((client.hours?.log || []).map((h) => h.id));
-      const newLogEntries = [];
-      currentOccurrences.forEach((occ) => {
-        if (!occ.hours) return;
-        const logId = `sched-${occ.id}-${thisMonth}`;
-        if (!existingIds.has(logId)) {
-          newLogEntries.push({ id: logId, date: occ.occurrenceDate, member: occ.assignee, hours: Number(occ.hours) || 0, description: `Schedule: ${occ.title}` });
+      const rangeStart = `${thisMonth}-01`;
+      const rangeEnd = `${addMonthsToMonthYear(thisMonth, 2)}-01`; // this month + next, so there's some lead time
+      const upcoming = expandScheduleEntriesInRange(entries, rangeStart, rangeEnd);
+      if (upcoming.length === 0) return;
+      const existingIds = new Set((client.reminders || []).map((r) => r.id));
+      const newReminders = [];
+      upcoming.forEach((occ) => {
+        const taskId = `sched-task-${occ.id}-${occ.occurrenceDate}`;
+        if (!existingIds.has(taskId)) {
+          newReminders.push({ id: taskId, text: occ.title, date: occ.occurrenceDate, assignee: occ.assignee, estHours: occ.hours || 0, done: false, recurring: "none" });
         }
       });
-      if (newLogEntries.length > 0) {
-        updateClient((c) => ({ ...c, hours: { ...c.hours, log: [...(c.hours?.log || []), ...newLogEntries] } }));
+      if (newReminders.length > 0) {
+        updateClient((c) => ({ ...c, reminders: [...(c.reminders || []), ...newReminders] }));
       }
     } catch (err) {
-      console.error("Client Scheduling hours sync failed:", err);
+      console.error("Client Scheduling task sync failed:", err);
     }
   }, [client.id, JSON.stringify(entries)]);
 
@@ -4718,7 +4728,10 @@ function ClientScheduling({ client, updateClient }) {
     updateClient((c) => ({
       ...c,
       scheduleEntries: (c.scheduleEntries || []).filter((e) => e.id !== id),
-      hours: { ...c.hours, log: (c.hours?.log || []).filter((h) => h.id !== `sched-${id}-${currentMonth()}`) },
+      // Cleans up every task this entry created (one per occurrence, all sharing the
+      // "sched-task-{id}-" prefix) — not just the current month's, since occurrences up to
+      // 2 months out may have already been created.
+      reminders: (c.reminders || []).filter((r) => !r.id.startsWith(`sched-task-${id}-`)),
     }));
   };
 
@@ -4946,7 +4959,7 @@ function ClientScheduling({ client, updateClient }) {
       </Card>
 
       <div className="text-xs text-center" style={{ color: T.slateLight }}>
-        Scheduled items count toward this client's Activity hours log automatically (tagged "Schedule: …"), and — for the 4 team members, not External Consultant — toward that person's weekly workload on the Schedule tab. Billable time also lands in Activity hours (tagged "Billable: …") but never on the calendar or anyone's Schedule tab.
+        Every scheduled item creates a real task in this client's Tasks tab, due on that date — which is also what makes it show up in the assigned person's My Tasks and on their Schedule tab. It only counts toward Activity/Billing hours once that task is actually ticked off, since these are pre-programmed in advance — being on the calendar isn't the same as being done. Billable time below is different: it's a direct log, so it lands in Activity hours (tagged "Billable: …") immediately, but never on the calendar or anyone's Schedule tab either way.
       </div>
     </div>
   );
@@ -5315,7 +5328,10 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
   // Completing a reminder does three things: marks it done (so it shows crossed out),
   // logs a note so it counts as a client touchpoint on the dashboard heatmap, and — if it's
   // a recurring reminder — immediately reopens it at its next due date rather than leaving it
-  // permanently ticked off, so the next occurrence isn't lost.
+  // permanently ticked off, so the next occurrence isn't lost. For a task that came from the
+  // Scheduling tab (id starts with "sched-task-"), completing it is also what triggers the
+  // billing sync — these are pre-programmed in advance, so being on the calendar isn't the
+  // same as being done; the hours only land in Activity/Billing once it's actually ticked off.
   const toggleReminderDone = (id) => {
     const reminder = client.reminders.find((r) => r.id === id);
     if (reminder && !reminder.done) playCompletionChime();
@@ -5333,7 +5349,16 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
       const notes = completing
         ? [...c.notes, { id: Date.now(), author: "You", date: today(), text: `Completed reminder: "${reminder.text}"` }]
         : c.notes;
-      return { ...c, reminders, notes };
+      let hours = c.hours;
+      if (completing && id.startsWith("sched-task-") && reminder.estHours) {
+        const logId = `sched-hours-${id}`;
+        const alreadyLogged = (c.hours?.log || []).some((h) => h.id === logId);
+        if (!alreadyLogged) {
+          const logEntry = { id: logId, date: today(), member: reminder.assignee, hours: reminder.estHours, description: `Schedule: ${reminder.text}` };
+          hours = { ...c.hours, log: [...(c.hours?.log || []), logEntry] };
+        }
+      }
+      return { ...c, reminders, notes, hours };
     });
   };
   const removeReminder = (id) => updateClient((c) => {
@@ -6005,7 +6030,24 @@ function defaultChecked(client, category) {
   return Object.fromEntries(categoryItems(category).map((label) => [label, packList ? packList.includes(label) : category.alwaysLabels.includes(label)]));
 }
 
+// Every PDF in this app uses pdf-lib's standard fonts (Helvetica), which only support
+// WinAnsi encoding — it throws instead of skipping a character it can't render. Macron
+// vowels (ā, ē, ī, ō, ū — common in Māori place names and words) are the most likely thing
+// to trip this, since they show up unpredictably in client-supplied data like CSV site
+// addresses, but any character outside WinAnsi's range would do the same. Rather than crash
+// PDF generation entirely over one character, map the common ones to their plain equivalents
+// and drop anything else outside WinAnsi's safe range.
+const PDF_MACRON_MAP = { "ā": "a", "ē": "e", "ī": "i", "ō": "o", "ū": "u", "Ā": "A", "Ē": "E", "Ī": "I", "Ō": "O", "Ū": "U" };
+function sanitizeForPdf(text) {
+  if (text === null || text === undefined) return text;
+  const str = String(text);
+  const deMacroned = str.replace(/[āēīōūĀĒĪŌŪ]/g, (c) => PDF_MACRON_MAP[c] || c);
+  return deMacroned.replace(/[^\x09\x0A\x0D\x20-\x7E\xA0-\xFF]/g, "");
+}
+function sanitizeArrayForPdf(arr) { return (arr || []).map((v) => sanitizeForPdf(v)); }
+
 async function exportReviewLogPdf(entries) {
+  entries = (entries || []).map((e) => ({ ...e, type: sanitizeForPdf(e.type), person: sanitizeForPdf(e.person), notes: sanitizeForPdf(e.notes) }));
   const { PDFDocument, StandardFonts, rgb } = await importWithReloadOnStaleChunk(() => import("pdf-lib"));
   const pdfDoc = await PDFDocument.create();
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
@@ -6232,6 +6274,8 @@ function wrapTextLines(text, font, size, maxWidth) {
 // Policies each start on their own fresh page, since they're separate standalone documents
 // just bundled together for convenience, not one flowing manual.
 async function downloadBuildPdf({ client, category, categoryKey, included, documentTemplates }) {
+  client = { ...client, name: sanitizeForPdf(client.name), legalName: sanitizeForPdf(client.legalName) };
+  documentTemplates = Object.fromEntries(Object.entries(documentTemplates || {}).map(([k, v]) => [k, sanitizeForPdf(v)]));
   const { PDFDocument, StandardFonts, rgb } = await importWithReloadOnStaleChunk(() => import("pdf-lib"));
   const isFlowing = categoryKey === "sections";
   const displayName = client.legalName || client.name;  // Manual/Procedures/Policies use the legal name; ERP intentionally still uses the trading name below.
@@ -8939,6 +8983,7 @@ function pieSlicePoints(cx, cy, r, angleStart, angleEnd) {
 // Builds a simple usage statement for one reseller — their clients and how many users each
 // had that month — so they've got something concrete to work from for their own billing.
 async function downloadResellerPdf({ reseller, monthYear, usersForMonth }) {
+  reseller = { ...reseller, name: sanitizeForPdf(reseller.name), clients: (reseller.clients || []).map((c) => ({ ...c, name: sanitizeForPdf(c.name) })) };
   const { PDFDocument, StandardFonts, rgb } = await importWithReloadOnStaleChunk(() => import("pdf-lib"));
   const ink = rgb(0.08, 0.14, 0.13);
   const slate = rgb(0.36, 0.45, 0.45);
@@ -8998,6 +9043,18 @@ async function downloadResellerPdf({ reseller, monthYear, usersForMonth }) {
 }
 
 async function downloadMonthlyReportPdf({ client, monthYear, sections, highlights, focusNextMonth, createdBy }) {
+  client = { ...client, name: sanitizeForPdf(client.name), legalName: sanitizeForPdf(client.legalName) };
+  sections = (sections || []).map((s) => ({
+    ...s,
+    title: sanitizeForPdf(s.title),
+    comment: sanitizeForPdf(s.comment),
+    highlightLabel: sanitizeForPdf(s.highlightLabel),
+    csvHeaders: sanitizeArrayForPdf(s.csvHeaders),
+    csvData: (s.csvData || []).map((row) => sanitizeArrayForPdf(row)),
+  }));
+  highlights = sanitizeForPdf(highlights);
+  focusNextMonth = sanitizeForPdf(focusNextMonth);
+  createdBy = sanitizeForPdf(createdBy);
   const { PDFDocument, StandardFonts, rgb } = await importWithReloadOnStaleChunk(() => import("pdf-lib"));
   const ink = rgb(0.08, 0.14, 0.13);
   const slate = rgb(0.36, 0.45, 0.45);
@@ -9688,17 +9745,6 @@ function gatherWorkloadItems(person, tasks, onboardings, clients, scheduleBlocks
         items.push({ type: "reminder", title: r.text, date: r.date, hours: r.estHours || 0, clientId: c.id, clientName: c.name });
       }
     });
-    // Client Scheduling entries (Enterprise clients) — External Consultant isn't a team
-    // member with a personal capacity to track, so only the 4 real people's entries count
-    // toward Schedule workload here (they still count toward the client's Activity hours
-    // log regardless of assignee — that sync happens in ClientScheduling itself).
-    if (TEAM.includes(person)) {
-      expandScheduleEntriesInRange(c.scheduleEntries, start, end).forEach((occ) => {
-        if (occ.assignee === person) {
-          items.push({ type: "clientSchedule", title: occ.title, date: occ.occurrenceDate, hours: occ.hours || 0, clientId: c.id, clientName: c.name });
-        }
-      });
-    }
   });
   scheduleBlocks.filter((b) => b.assignee === person).forEach((b) => {
     if (b.repeat && b.repeat !== "none") {
@@ -9759,7 +9805,10 @@ function ScheduleView({ tasks, clients, onboardings, scheduleBlocks, addSchedule
           return (
             <Card key={person} style={{ padding: 18 }} className="flex flex-col gap-3">
               <div className="flex items-center justify-between">
-                <div className="text-base font-bold" style={{ color: T.ink }}>{person}</div>
+                <div className="text-base font-bold flex items-center gap-2" style={{ color: T.ink }}>
+                  {person}
+                  <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{ background: T.paperAlt, color: T.slate }}>{items.length} item{items.length === 1 ? "" : "s"}</span>
+                </div>
                 <div className="text-sm font-semibold" style={{ color: barColor }}>{totalHours}h / {capacity}h ({pct}%)</div>
               </div>
               <div className="w-full rounded-full h-2.5" style={{ background: T.paperAlt }}>
@@ -9767,15 +9816,15 @@ function ScheduleView({ tasks, clients, onboardings, scheduleBlocks, addSchedule
               </div>
               {pct > 100 && <div className="text-[11px] font-semibold" style={{ color: T.coral }}>Over capacity for this window</div>}
 
-              <div className="flex flex-col gap-1.5 max-h-64 overflow-y-auto mt-1">
+              <div className="flex flex-col gap-1.5 max-h-[32rem] overflow-y-auto mt-1">
                 {items.length === 0 && <div className="text-xs" style={{ color: T.slateLight }}>Nothing scheduled in this window.</div>}
                 {items.map((item, i) => (
                   <div key={i} className="flex items-center justify-between text-xs py-1.5 px-2 rounded-lg" style={{ background: T.paperAlt }}>
                     <div className="flex items-center gap-2 min-w-0">
-                      <Pill color={item.type === "task" ? T.tealDark : item.type === "workflow" ? T.blue : item.type === "reminder" ? "#8B6BA8" : item.type === "clientSchedule" ? T.coral : T.amber} bg={T.card}>
-                        {item.type === "task" ? "Task" : item.type === "workflow" ? "Workflow" : item.type === "reminder" ? "Reminder" : item.type === "clientSchedule" ? "Scheduled" : item.repeat === "daily" ? "Daily" : item.repeat === "weekly" ? "Weekly" : "Booked"}
+                      <Pill color={item.type === "task" ? T.tealDark : item.type === "workflow" ? T.blue : item.type === "reminder" ? "#8B6BA8" : T.amber} bg={T.card}>
+                        {item.type === "task" ? "Task" : item.type === "workflow" ? "Workflow" : item.type === "reminder" ? "Reminder" : item.repeat === "daily" ? "Daily" : item.repeat === "weekly" ? "Weekly" : "Booked"}
                       </Pill>
-                      <button onClick={() => item.clientId && goToClient(item.clientId, item.type === "workflow" ? "onboarding" : item.type === "reminder" ? "reminders" : item.type === "clientSchedule" ? "scheduling" : "overview")}
+                      <button onClick={() => item.clientId && goToClient(item.clientId, item.type === "workflow" ? "onboarding" : item.type === "reminder" ? "reminders" : "overview")}
                         className="truncate text-left" disabled={!item.clientId} style={{ color: T.ink, cursor: item.clientId ? "pointer" : "default" }} title={item.title}>
                         {item.title}{item.clientName ? ` — ${item.clientName}` : ""}
                       </button>

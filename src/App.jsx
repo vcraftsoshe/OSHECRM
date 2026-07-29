@@ -4598,19 +4598,64 @@ function addMonthsToMonthYear(monthYear, delta) {
   const d = new Date(y, m - 1 + delta, 1);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
-// Expands one-off entries (kept as-is if inside the range) and monthly-recurring entries
-// (one occurrence per month overlapping the range, on the same day-of-month, clamped to
-// however many days that month has) into a flat list with a concrete occurrenceDate each.
+// weekday: 0=Mon .. 6=Sun. nth: 1-4 for 1st..4th occurrence, or -1 for "last". Returns null
+// if that occurrence doesn't exist in the month (e.g. a 5th Friday most months don't have).
+function nthWeekdayOfMonth(monthYear, nth, weekday) {
+  const [y, m] = monthYear.split("-").map(Number);
+  const daysInMonth = new Date(y, m, 0).getDate();
+  if (nth === -1) {
+    for (let d = daysInMonth; d >= 1; d--) {
+      if ((new Date(y, m - 1, d).getDay() + 6) % 7 === weekday) return `${monthYear}-${String(d).padStart(2, "0")}`;
+    }
+    return null;
+  }
+  let count = 0;
+  for (let d = 1; d <= daysInMonth; d++) {
+    if ((new Date(y, m - 1, d).getDay() + 6) % 7 === weekday) {
+      count++;
+      if (count === nth) return `${monthYear}-${String(d).padStart(2, "0")}`;
+    }
+  }
+  return null;
+}
+const WEEKDAY_LABELS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+const NTH_LABELS = { 1: "1st", 2: "2nd", 3: "3rd", 4: "4th", "-1": "last" };
+// Expands every repeat type into a flat list with a concrete occurrenceDate each, for
+// whatever [start, end) range is being looked at (a week, a month, whatever):
+// - "none": kept as-is if its own date falls inside the range.
+// - "weekly": every matching weekday from the anchor date onward.
+// - "monthly": same day-of-month as the anchor, clamped to however many days that month has.
+// - "monthly-nth": a specific occurrence (e.g. "3rd Friday") every month — skips months
+//   that genuinely don't have that occurrence (a 5th-of-something, most months).
 function expandScheduleEntriesInRange(entries, start, end) {
   const out = [];
   (entries || []).forEach((e) => {
-    if (e.repeat === "monthly") {
+    if (e.repeat === "weekly") {
+      const anchor = new Date(e.date + "T00:00:00");
+      const weekday = anchor.getDay();
+      const cursor = new Date(Math.max(new Date(start + "T00:00:00").getTime(), anchor.getTime()));
+      while (cursor.getDay() !== weekday) cursor.setDate(cursor.getDate() + 1);
+      while (cursor.toISOString().slice(0, 10) < end) {
+        out.push({ ...e, occurrenceDate: cursor.toISOString().slice(0, 10) });
+        cursor.setDate(cursor.getDate() + 7);
+      }
+    } else if (e.repeat === "monthly") {
       let cursor = start.slice(0, 7);
       const endMonth = end.slice(0, 7);
       let guard = 0;
       while (cursor <= endMonth && guard < 36) {
         const occDate = monthOccurrenceDate(e.date, cursor);
         if (occDate >= start && occDate < end) out.push({ ...e, occurrenceDate: occDate });
+        cursor = addMonthsToMonthYear(cursor, 1);
+        guard++;
+      }
+    } else if (e.repeat === "monthly-nth") {
+      let cursor = start.slice(0, 7);
+      const endMonth = end.slice(0, 7);
+      let guard = 0;
+      while (cursor <= endMonth && guard < 36) {
+        const occDate = nthWeekdayOfMonth(cursor, e.nth, e.weekday);
+        if (occDate && occDate >= start && occDate < end) out.push({ ...e, occurrenceDate: occDate });
         cursor = addMonthsToMonthYear(cursor, 1);
         guard++;
       }
@@ -4623,9 +4668,9 @@ function expandScheduleEntriesInRange(entries, start, end) {
 
 function ClientScheduling({ client, updateClient }) {
   const [monthYear, setMonthYear] = useState(currentMonth());
-  const [draft, setDraft] = useState({ title: "", assignee: TEAM[0], date: today(), hours: "", repeat: "none", targetId: "" });
+  const [draft, setDraft] = useState({ title: "", assignee: TEAM[0], date: today(), hours: "", repeat: "none", targetId: "", nth: 1, weekday: 4 });
   const [targetDraft, setTargetDraft] = useState({ title: "", count: "", repeat: "monthly" });
-  const [billableDraft, setBillableDraft] = useState({ description: "", member: TEAM[0], date: today(), hours: "" });
+  const [billableDraft, setBillableDraft] = useState({ description: "", member: TEAM[0], date: today(), type: "hours", hours: "", amount: "" });
 
   const entries = client.scheduleEntries || [];
   const targets = client.scheduleTargets || [];
@@ -4661,9 +4706,13 @@ function ClientScheduling({ client, updateClient }) {
 
   const addEntry = () => {
     if (!draft.title.trim() || !draft.date || !draft.hours) return;
-    const entry = { id: "sched" + Date.now(), title: draft.title.trim(), assignee: draft.assignee, date: draft.date, hours: Number(draft.hours), repeat: draft.repeat, targetId: draft.targetId || null };
+    const entry = {
+      id: "sched" + Date.now(), title: draft.title.trim(), assignee: draft.assignee, date: draft.date, hours: Number(draft.hours),
+      repeat: draft.repeat, targetId: draft.targetId || null,
+      ...(draft.repeat === "monthly-nth" ? { nth: Number(draft.nth), weekday: Number(draft.weekday) } : {}),
+    };
     updateClient((c) => ({ ...c, scheduleEntries: [...(c.scheduleEntries || []), entry] }));
-    setDraft({ title: "", assignee: TEAM[0], date: today(), hours: "", repeat: "none", targetId: "" });
+    setDraft({ title: "", assignee: TEAM[0], date: today(), hours: "", repeat: "none", targetId: "", nth: 1, weekday: 4 });
   };
   const removeEntry = (id) => {
     updateClient((c) => ({
@@ -4689,18 +4738,37 @@ function ClientScheduling({ client, updateClient }) {
   };
   const removeTarget = (id) => updateClient((c) => ({ ...c, scheduleTargets: (c.scheduleTargets || []).filter((t) => t.id !== id) }));
 
-  // Billable time (travel, admin, anything that isn't a "scheduled" item) — logs straight
-  // into the real hours log like everything else here, but deliberately never touches
-  // scheduleEntries, so it never shows on the calendar above and never counts toward
-  // anyone's Schedule tab workload — just the client's billing.
-  const billableThisMonth = (client.hours?.log || []).filter((h) => String(h.id).startsWith("billable-") && h.date && h.date.slice(0, 7) === monthYear);
+  // Billable time (travel, admin, anything that isn't a "scheduled" item) — either hours
+  // (logs into the real hours log, like everything else here) or a flat dollar amount
+  // (flights, gear, anything that isn't hourly work — kept in a separate billableExpenses
+  // list since it has no hours value to add to a hours total). Neither ever touches
+  // scheduleEntries, so neither shows on the calendar above or counts toward anyone's
+  // Schedule tab workload — both are just for the client's billing, itemised on the real
+  // Billing tab (Sophie/Vanessa) rather than collapsed into a single hours number.
+  const billableHoursThisMonth = (client.hours?.log || [])
+    .filter((h) => String(h.id).startsWith("billable-") && h.date && h.date.slice(0, 7) === monthYear)
+    .map((h) => ({ ...h, kind: "hours" }));
+  const billableExpensesThisMonth = (client.billableExpenses || [])
+    .filter((x) => x.date && x.date.slice(0, 7) === monthYear)
+    .map((x) => ({ ...x, kind: "amount" }));
+  const billableThisMonth = [...billableHoursThisMonth, ...billableExpensesThisMonth].sort((a, b) => (a.date || "").localeCompare(b.date || ""));
   const addBillableTime = () => {
-    if (!billableDraft.description.trim() || !billableDraft.date || !billableDraft.hours) return;
-    const entry = { id: "billable-" + Date.now(), date: billableDraft.date, member: billableDraft.member, hours: Number(billableDraft.hours), description: `Billable: ${billableDraft.description.trim()}` };
-    updateClient((c) => ({ ...c, hours: { ...c.hours, log: [...(c.hours?.log || []), entry] } }));
-    setBillableDraft({ description: "", member: TEAM[0], date: today(), hours: "" });
+    if (!billableDraft.description.trim() || !billableDraft.date) return;
+    if (billableDraft.type === "hours") {
+      if (!billableDraft.hours) return;
+      const entry = { id: "billable-" + Date.now(), date: billableDraft.date, member: billableDraft.member, hours: Number(billableDraft.hours), description: `Billable: ${billableDraft.description.trim()}` };
+      updateClient((c) => ({ ...c, hours: { ...c.hours, log: [...(c.hours?.log || []), entry] } }));
+    } else {
+      if (!billableDraft.amount) return;
+      const entry = { id: "expense-" + Date.now(), date: billableDraft.date, member: billableDraft.member, amount: Number(billableDraft.amount), description: billableDraft.description.trim() };
+      updateClient((c) => ({ ...c, billableExpenses: [...(c.billableExpenses || []), entry] }));
+    }
+    setBillableDraft({ description: "", member: TEAM[0], date: today(), type: billableDraft.type, hours: "", amount: "" });
   };
-  const removeBillableTime = (id) => updateClient((c) => ({ ...c, hours: { ...c.hours, log: (c.hours?.log || []).filter((h) => h.id !== id) } }));
+  const removeBillableTime = (item) => {
+    if (item.kind === "hours") updateClient((c) => ({ ...c, hours: { ...c.hours, log: (c.hours?.log || []).filter((h) => h.id !== item.id) } }));
+    else updateClient((c) => ({ ...c, billableExpenses: (c.billableExpenses || []).filter((x) => x.id !== item.id) }));
+  };
 
   const [gy, gm] = monthYear.split("-").map(Number);
   const daysInMonth = new Date(gy, gm, 0).getDate();
@@ -4781,7 +4849,11 @@ function ClientScheduling({ client, updateClient }) {
             <div key={e.id} className="flex items-center justify-between text-sm py-1.5" style={{ borderBottom: `1px solid ${T.border}` }}>
               <div>
                 <span style={{ color: T.ink, fontWeight: 600 }}>{e.title}</span>
-                <span className="ml-2 text-xs" style={{ color: T.slate }}>{e.assignee} · {fmtDate(e.date)}{e.repeat === "monthly" ? " · monthly" : ""} · {e.hours}h{e.targetId ? " · counts toward target" : ""}</span>
+                <span className="ml-2 text-xs" style={{ color: T.slate }}>
+                  {e.assignee} · {fmtDate(e.date)}
+                  {e.repeat === "weekly" ? " · weekly" : e.repeat === "monthly" ? " · monthly (same date)" : e.repeat === "monthly-nth" ? ` · ${NTH_LABELS[e.nth]} ${WEEKDAY_LABELS[e.weekday]} of each month` : ""}
+                  {" · "}{e.hours}h{e.targetId ? " · counts toward target" : ""}
+                </span>
               </div>
               <ConfirmButton onConfirm={() => removeEntry(e.id)} title="Remove" iconSize={13} />
             </div>
@@ -4812,29 +4884,44 @@ function ClientScheduling({ client, updateClient }) {
           <select value={draft.repeat} onChange={(e) => setDraft({ ...draft, repeat: e.target.value })}
             className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
             <option value="none">This month only</option>
-            <option value="monthly">Repeats monthly</option>
+            <option value="weekly">Repeats weekly</option>
+            <option value="monthly">Repeats monthly (same date)</option>
+            <option value="monthly-nth">Repeats monthly (specific day)</option>
           </select>
+          {draft.repeat === "monthly-nth" && (
+            <>
+              <select value={draft.nth} onChange={(e) => setDraft({ ...draft, nth: e.target.value })}
+                className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
+                {[1, 2, 3, 4].map((n) => <option key={n} value={n}>{NTH_LABELS[n]}</option>)}
+                <option value="-1">Last</option>
+              </select>
+              <select value={draft.weekday} onChange={(e) => setDraft({ ...draft, weekday: e.target.value })}
+                className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
+                {WEEKDAY_LABELS.map((w, i) => <option key={w} value={i}>{w}</option>)}
+              </select>
+            </>
+          )}
           <button onClick={addEntry} className="text-xs font-semibold px-3 py-1.5 rounded-lg shrink-0" style={{ background: T.tealDark, color: "#fff" }}>Add</button>
         </div>
       </Card>
 
       <Card style={{ padding: 16 }}>
         <div className="text-sm font-semibold mb-1" style={{ color: T.ink }}>Billable time</div>
-        <div className="text-[11px] mb-3" style={{ color: T.slateLight }}>Travel, admin, anything else that's billable but isn't a scheduled item — goes straight into Activity hours, never shows on the calendar above or on anyone's Schedule tab.</div>
+        <div className="text-[11px] mb-3" style={{ color: T.slateLight }}>Travel, admin, flights, anything billable that isn't a scheduled item — as hours or a flat dollar amount. Goes straight into Activity/Billing, itemised — never shows on the calendar above or on anyone's Schedule tab.</div>
         <div className="flex flex-col gap-2 mb-3">
-          {billableThisMonth.map((h) => (
-            <div key={h.id} className="flex items-center justify-between text-sm py-1.5" style={{ borderBottom: `1px solid ${T.border}` }}>
+          {billableThisMonth.map((item) => (
+            <div key={item.id} className="flex items-center justify-between text-sm py-1.5" style={{ borderBottom: `1px solid ${T.border}` }}>
               <div>
-                <span style={{ color: T.ink, fontWeight: 600 }}>{h.description.replace(/^Billable: /, "")}</span>
-                <span className="ml-2 text-xs" style={{ color: T.slate }}>{h.member} · {fmtDate(h.date)} · {h.hours}h</span>
+                <span style={{ color: T.ink, fontWeight: 600 }}>{item.description.replace(/^Billable: /, "")}</span>
+                <span className="ml-2 text-xs" style={{ color: T.slate }}>{item.member} · {fmtDate(item.date)} · {item.kind === "hours" ? `${item.hours}h` : `$${item.amount}`}</span>
               </div>
-              <ConfirmButton onConfirm={() => removeBillableTime(h.id)} title="Remove" iconSize={13} />
+              <ConfirmButton onConfirm={() => removeBillableTime(item)} title="Remove" iconSize={13} />
             </div>
           ))}
           {billableThisMonth.length === 0 && <div className="text-xs" style={{ color: T.slateLight }}>Nothing logged for {monthYear === currentMonth() ? "this month" : monthLabel(monthYear)} yet.</div>}
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <input placeholder="What (e.g. Travel to site)" value={billableDraft.description} onChange={(e) => setBillableDraft({ ...billableDraft, description: e.target.value })}
+          <input placeholder="What (e.g. Travel to site, or Flight)" value={billableDraft.description} onChange={(e) => setBillableDraft({ ...billableDraft, description: e.target.value })}
             className="flex-1 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink, minWidth: 140 }} />
           <select value={billableDraft.member} onChange={(e) => setBillableDraft({ ...billableDraft, member: e.target.value })}
             className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
@@ -4842,8 +4929,18 @@ function ClientScheduling({ client, updateClient }) {
           </select>
           <input type="date" value={billableDraft.date} onChange={(e) => setBillableDraft({ ...billableDraft, date: e.target.value })}
             className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
-          <input type="number" min="0" step="0.5" placeholder="hrs" value={billableDraft.hours} onChange={(e) => setBillableDraft({ ...billableDraft, hours: e.target.value })}
-            className="w-16 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+          <select value={billableDraft.type} onChange={(e) => setBillableDraft({ ...billableDraft, type: e.target.value })}
+            className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
+            <option value="hours">Hours</option>
+            <option value="amount">Dollar amount</option>
+          </select>
+          {billableDraft.type === "hours" ? (
+            <input type="number" min="0" step="0.5" placeholder="hrs" value={billableDraft.hours} onChange={(e) => setBillableDraft({ ...billableDraft, hours: e.target.value })}
+              className="w-16 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+          ) : (
+            <input type="number" min="0" step="0.01" placeholder="$" value={billableDraft.amount} onChange={(e) => setBillableDraft({ ...billableDraft, amount: e.target.value })}
+              className="w-20 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+          )}
           <button onClick={addBillableTime} className="text-xs font-semibold px-3 py-1.5 rounded-lg shrink-0" style={{ background: T.tealDark, color: "#fff" }}>Log</button>
         </div>
       </Card>
@@ -7860,6 +7957,8 @@ function HoursView({ clients }) {
 
 function BillingOverview({ clients, resellers }) {
   const [showFlatFee, setShowFlatFee] = useState(false);
+  const [expandedBilling, setExpandedBilling] = useState({});
+  const toggleBillingExpand = (id) => setExpandedBilling((prev) => ({ ...prev, [id]: !prev[id] }));
   const newClients = clients.filter((c) => c.billingSetupDone === false);
   const setUpClients = clients.filter((c) => c.billingSetupDone !== false);
   const hasHoursThisMonth = (c) => c.hours.log.some((h) => h.date.slice(0, 7) === currentMonth());
@@ -7870,6 +7969,8 @@ function BillingOverview({ clients, resellers }) {
     included: c.hours.included,
     users: c.users.log[c.users.log.length - 1]?.count ?? 0,
     status: c.billing.status,
+    hourItems: c.hours.log.filter((h) => h.date.slice(0, 7) === currentMonth()),
+    expenseItems: (c.billableExpenses || []).filter((x) => x.date && x.date.slice(0, 7) === currentMonth()),
   }));
   const flatFeeRows = setUpClients.filter((c) => (c.billingType || "FlatFee") === "FlatFee" && !hasHoursThisMonth(c)).map((c) => ({
     id: c.id, name: c.name,
@@ -7954,15 +8055,45 @@ function BillingOverview({ clients, resellers }) {
         </div>
         {needsAttention.map((r) => {
           const diff = r.included > 0 ? r.logged - r.included : null;
+          const expensesTotal = r.expenseItems.reduce((s, x) => s + x.amount, 0);
+          const expanded = expandedBilling[r.id];
           return (
-            <div key={r.id} className="grid items-center px-4 py-3 text-sm" style={{ gridTemplateColumns: "2fr 1.3fr 1fr 1fr 1fr 1fr 1fr", borderBottom: `1px solid ${T.border}` }}>
-              <div style={{ color: T.ink }} className="font-medium">{r.name}</div>
-              <div><Pill color={r.adHoc ? T.amber : billingTypeMeta[r.type].color} bg={T.paperAlt}>{r.adHoc ? "Flat + ad-hoc" : r.type === "Hourly" ? "Hourly" : "Sub + hours"}</Pill></div>
-              <div style={{ color: T.ink }}>{r.logged}h</div>
-              <div style={{ color: T.slate }}>{r.included > 0 ? `${r.included}h` : "—"}</div>
-              <div style={{ color: diff === null ? T.slateLight : diff > 0 ? T.coral : T.tealDark }}>{diff === null ? "—" : diff > 0 ? `+${diff}h` : `${diff}h`}</div>
-              <div style={{ color: T.ink }}>{r.users}</div>
-              <div><Pill color={r.status === "Overdue" ? T.coral : T.tealDark} bg={T.paperAlt}>{r.status}</Pill></div>
+            <div key={r.id} style={{ borderBottom: `1px solid ${T.border}` }}>
+              <button onClick={() => toggleBillingExpand(r.id)} className="grid items-center px-4 py-3 text-sm w-full text-left" style={{ gridTemplateColumns: "2fr 1.3fr 1fr 1fr 1fr 1fr 1fr" }}>
+                <div style={{ color: T.ink }} className="font-medium flex items-center gap-1.5">
+                  <ChevronDown size={12} color={T.slateLight} style={{ transform: expanded ? "none" : "rotate(-90deg)" }} />
+                  {r.name}
+                </div>
+                <div><Pill color={r.adHoc ? T.amber : billingTypeMeta[r.type].color} bg={T.paperAlt}>{r.adHoc ? "Flat + ad-hoc" : r.type === "Hourly" ? "Hourly" : "Sub + hours"}</Pill></div>
+                <div style={{ color: T.ink }}>{r.logged}h{expensesTotal > 0 ? ` + $${expensesTotal}` : ""}</div>
+                <div style={{ color: T.slate }}>{r.included > 0 ? `${r.included}h` : "—"}</div>
+                <div style={{ color: diff === null ? T.slateLight : diff > 0 ? T.coral : T.tealDark }}>{diff === null ? "—" : diff > 0 ? `+${diff}h` : `${diff}h`}</div>
+                <div style={{ color: T.ink }}>{r.users}</div>
+                <div><Pill color={r.status === "Overdue" ? T.coral : T.tealDark} bg={T.paperAlt}>{r.status}</Pill></div>
+              </button>
+              {expanded && (
+                <div className="px-4 pb-3" style={{ background: T.paperAlt }}>
+                  <div className="text-[11px] font-semibold uppercase tracking-wide pt-2 pb-1" style={{ color: T.slateLight }}>Hours logged this month</div>
+                  {r.hourItems.map((h) => (
+                    <div key={h.id} className="flex items-center justify-between text-xs py-1" style={{ borderBottom: `1px solid ${T.border}` }}>
+                      <div><span style={{ color: T.ink }}>{h.description || "—"}</span><span className="ml-2" style={{ color: T.slateLight }}>{h.member} · {fmtDate(h.date)}</span></div>
+                      <span className="font-semibold" style={{ color: T.tealDark }}>{h.hours}h</span>
+                    </div>
+                  ))}
+                  {r.hourItems.length === 0 && <div className="text-xs py-1" style={{ color: T.slateLight }}>None logged this month.</div>}
+                  {r.expenseItems.length > 0 && (
+                    <>
+                      <div className="text-[11px] font-semibold uppercase tracking-wide pt-3 pb-1" style={{ color: T.slateLight }}>Billable expenses this month</div>
+                      {r.expenseItems.map((x) => (
+                        <div key={x.id} className="flex items-center justify-between text-xs py-1" style={{ borderBottom: `1px solid ${T.border}` }}>
+                          <div><span style={{ color: T.ink }}>{x.description || "—"}</span><span className="ml-2" style={{ color: T.slateLight }}>{x.member} · {fmtDate(x.date)}</span></div>
+                          <span className="font-semibold" style={{ color: T.amber }}>${x.amount}</span>
+                        </div>
+                      ))}
+                    </>
+                  )}
+                </div>
+              )}
             </div>
           );
         })}
@@ -9111,6 +9242,7 @@ function ReportsView({ clients, reportTemplates, addReportTemplate, renameReport
   const [sections, setSections] = useState([]);
   const [highlights, setHighlights] = useState("");
   const [focusNextMonth, setFocusNextMonth] = useState("");
+  const [showHighlights, setShowHighlights] = useState(true);
   const [createdBy, setCreatedBy] = useState(TEAM[0]);
   const [loaded, setLoaded] = useState(false);
   const [newSectionTitle, setNewSectionTitle] = useState("");
@@ -9131,6 +9263,7 @@ function ReportsView({ clients, reportTemplates, addReportTemplate, renameReport
         setHighlights(data.highlights || "");
         setFocusNextMonth(data.focusNextMonth || "");
         setCreatedBy(data.createdBy || TEAM[0]);
+        setShowHighlights(data.showHighlights !== false);
       })
       .catch((err) => console.error("Couldn't load monthly report:", err))
       .finally(() => setLoaded(true));
@@ -9144,14 +9277,16 @@ function ReportsView({ clients, reportTemplates, addReportTemplate, renameReport
     const nextHighlights = patch.highlights !== undefined ? patch.highlights : highlights;
     const nextFocus = patch.focusNextMonth !== undefined ? patch.focusNextMonth : focusNextMonth;
     const nextCreatedBy = patch.createdBy !== undefined ? patch.createdBy : createdBy;
+    const nextShowHighlights = patch.showHighlights !== undefined ? patch.showHighlights : showHighlights;
     if (patch.sections !== undefined) setSections(nextSections);
     if (patch.highlights !== undefined) setHighlights(nextHighlights);
     if (patch.focusNextMonth !== undefined) setFocusNextMonth(nextFocus);
     if (patch.createdBy !== undefined) setCreatedBy(nextCreatedBy);
+    if (patch.showHighlights !== undefined) setShowHighlights(nextShowHighlights);
     if (!client) return;
     setDoc(doc(db, "monthlyReports", reportKey(client.id, monthYear)), {
       clientId: client.id, clientName: client.name, monthYear,
-      sections: nextSections, highlights: nextHighlights, focusNextMonth: nextFocus, createdBy: nextCreatedBy, updatedAt: today(),
+      sections: nextSections, highlights: nextHighlights, focusNextMonth: nextFocus, createdBy: nextCreatedBy, showHighlights: nextShowHighlights, updatedAt: today(),
     });
   };
   const save = (nextSections) => persist({ sections: nextSections });
@@ -9318,20 +9453,29 @@ function ReportsView({ clients, reportTemplates, addReportTemplate, renameReport
         </Card>
       )}
 
-      <div className="grid grid-cols-2 gap-4">
-        <Card style={{ padding: 16 }}>
-          <div className="text-xs font-semibold uppercase tracking-wide mb-1.5" style={{ color: T.slate }}>Highlights this month</div>
-          <textarea value={highlights} onChange={(e) => persist({ highlights: e.target.value })} rows={4}
-            placeholder={"What went well this month? Start a line with \"• \" for a bullet point."}
-            className="w-full text-sm px-3 py-2 rounded-lg outline-none resize-y" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
-        </Card>
-        <Card style={{ padding: 16 }}>
-          <div className="text-xs font-semibold uppercase tracking-wide mb-1.5" style={{ color: T.slate }}>Focus for next month</div>
-          <textarea value={focusNextMonth} onChange={(e) => persist({ focusNextMonth: e.target.value })} rows={4}
-            placeholder={"What's the priority for next month? Start a line with \"• \" for a bullet point."}
-            className="w-full text-sm px-3 py-2 rounded-lg outline-none resize-y" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
-        </Card>
+      <div className="flex items-center justify-between">
+        <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: T.slate }}>Highlights / Focus for next month</div>
+        <label className="flex items-center gap-1.5 text-xs" style={{ color: T.slate }}>
+          <input type="checkbox" checked={showHighlights} onChange={(e) => persist({ showHighlights: e.target.checked })} />
+          {showHighlights ? "On — included in this report" : "Off — doesn't make sense for weekly reports, for example"}
+        </label>
       </div>
+      {showHighlights && (
+        <div className="grid grid-cols-2 gap-4">
+          <Card style={{ padding: 16 }}>
+            <div className="text-xs font-semibold uppercase tracking-wide mb-1.5" style={{ color: T.slate }}>Highlights this month</div>
+            <textarea value={highlights} onChange={(e) => persist({ highlights: e.target.value })} rows={4}
+              placeholder={"What went well this month? Start a line with \"• \" for a bullet point."}
+              className="w-full text-sm px-3 py-2 rounded-lg outline-none resize-y" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+          </Card>
+          <Card style={{ padding: 16 }}>
+            <div className="text-xs font-semibold uppercase tracking-wide mb-1.5" style={{ color: T.slate }}>Focus for next month</div>
+            <textarea value={focusNextMonth} onChange={(e) => persist({ focusNextMonth: e.target.value })} rows={4}
+              placeholder={"What's the priority for next month? Start a line with \"• \" for a bullet point."}
+              className="w-full text-sm px-3 py-2 rounded-lg outline-none resize-y" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+          </Card>
+        </div>
+      )}
 
       {!loaded ? (
         <div className="text-sm" style={{ color: T.slateLight }}>Loading…</div>
@@ -9463,7 +9607,7 @@ function ReportsView({ clients, reportTemplates, addReportTemplate, renameReport
               onClick={async () => {
                 setDownloading(true);
                 try {
-                  await downloadMonthlyReportPdf({ client, monthYear, sections, highlights, focusNextMonth, createdBy });
+                  await downloadMonthlyReportPdf({ client, monthYear, sections, highlights: showHighlights ? highlights : "", focusNextMonth: showHighlights ? focusNextMonth : "", createdBy });
                 } catch (err) {
                   console.error("Monthly report PDF generation failed:", err);
                   alert(`Couldn't build the PDF: ${err.message || err}`);
@@ -9561,7 +9705,7 @@ function gatherWorkloadItems(person, tasks, onboardings, clients, scheduleBlocks
 }
 
 function ScheduleView({ tasks, clients, onboardings, scheduleBlocks, addScheduleBlock, removeScheduleBlock, goToClient }) {
-  const [windowKey, setWindowKey] = useState("week");
+  const [windowKey, setWindowKey] = useState("2weeks");
   const [drafts, setDrafts] = useState(Object.fromEntries(SCHEDULE_PEOPLE.map((p) => [p, { date: today(), hours: "", note: "", repeat: "none" }])));
 
   const { days } = SCHEDULE_WINDOWS[windowKey];
@@ -9771,6 +9915,18 @@ export default function App() {
           ohsmsDue: src.ohsmsDue,
           reminders: upsertOhsmsReminder(c.reminders, src.ohsmsDue),
         });
+      } else if (c.ohsmsDue) {
+        // Separate, narrower backfill: this client's OHSMS reminder already exists (due
+        // date was fine), but it was created before estHours: 0.5 was added to
+        // ohsmsAnnualReminder — those migrated straight from the original import script,
+        // which predates that field entirely. Only patches the hours on that one reminder,
+        // nothing else about it (date, recurring, assignee all stay exactly as they were).
+        const existing = (c.reminders || []).find((r) => r.id === "ohsms-annual-review");
+        if (existing && existing.estHours === undefined) {
+          updateDoc(doc(db, "clients", c.id), {
+            reminders: c.reminders.map((r) => (r.id === "ohsms-annual-review" ? { ...r, estHours: 0.5 } : r)),
+          });
+        }
       }
     });
   }, [clientsLoaded, clients]);

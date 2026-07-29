@@ -4732,6 +4732,11 @@ function ClientScheduling({ client, updateClient }) {
       // "sched-task-{id}-" prefix) — not just the current month's, since occurrences up to
       // 2 months out may have already been created.
       reminders: (c.reminders || []).filter((r) => !r.id.startsWith(`sched-task-${id}-`)),
+      // And any of those tasks that were already ticked off already have a matching hours.log
+      // entry (id "sched-hours-sched-task-{id}-...") — without this, deleting the schedule
+      // entry after it was already billed left that hours entry sitting there orphaned,
+      // permanently, with nothing left pointing back to it to ever clean it up.
+      hours: { ...c.hours, log: (c.hours?.log || []).filter((h) => !h.id.startsWith(`sched-hours-sched-task-${id}-`)) },
     }));
   };
 
@@ -5367,6 +5372,12 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
     // this, the Dashboards reconciliation effect would just recreate it on the very next
     // pass since the underlying "below target" condition is still true.
     if (id === "touchpoint-baseline-" + c.id) patch.touchpointSnoozedUntil = addDays(today(), 30);
+    // If this was a Scheduling-tab task that had already been ticked off (and so already
+    // billed), deleting it directly from here shouldn't leave that hours entry behind either.
+    if (id.startsWith("sched-task-")) {
+      const logId = `sched-hours-${id}`;
+      patch.hours = { ...c.hours, log: (c.hours?.log || []).filter((h) => h.id !== logId) };
+    }
     return { ...c, ...patch };
   });
 

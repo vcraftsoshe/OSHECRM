@@ -6227,6 +6227,7 @@ function wrapTextLines(text, font, size, maxWidth) {
 async function downloadBuildPdf({ client, category, categoryKey, included, documentTemplates }) {
   const { PDFDocument, StandardFonts, rgb } = await importWithReloadOnStaleChunk(() => import("pdf-lib"));
   const isFlowing = categoryKey === "sections";
+  const displayName = client.legalName || client.name;  // Manual/Procedures/Policies use the legal name; ERP intentionally still uses the trading name below.
   const ink = rgb(0.08, 0.14, 0.13);
   const slate = rgb(0.36, 0.45, 0.45);
   const teal = rgb(0.04, 0.68, 0.63);
@@ -6247,8 +6248,8 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
     page.drawText("HEALTH AND SAFETY MANUAL", { x: margin, y: pageHeight - 58, size: 13, font: boldFont, color: teal });
     const nameMaxWidth = pageWidth - margin * 2;
     let nameSize = 32;
-    while (nameSize > 18 && boldFont.widthOfTextAtSize(client.name, nameSize) > nameMaxWidth) nameSize -= 1;
-    page.drawText(client.name, { x: margin, y: pageHeight - 100, size: nameSize, font: boldFont, color: rgb(1, 1, 1) });
+    while (nameSize > 18 && boldFont.widthOfTextAtSize(displayName, nameSize) > nameMaxWidth) nameSize -= 1;
+    page.drawText(displayName, { x: margin, y: pageHeight - 100, size: nameSize, font: boldFont, color: rgb(1, 1, 1) });
 
     // Large standalone logo, top-left, just under the header band.
     if (logoImage) {
@@ -6263,7 +6264,7 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
     // Review Date is always exactly 1 year after the issue Date shown right above it.
     const issueDate = today();
     let coverY = 160;
-    page.drawText(`Prepared for: ${client.name}`, { x: margin, y: coverY, size: 11, font: boldFont, color: ink });
+    page.drawText(`Prepared for: ${displayName}`, { x: margin, y: coverY, size: 11, font: boldFont, color: ink });
     coverY -= 22;
     page.drawText(`Date: ${fmtDate(issueDate)}`, { x: margin, y: coverY, size: 10, font, color: slate });
     coverY -= 18;
@@ -6277,8 +6278,8 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
     const drawContentHeader = (pg, w, h, m) => {
       pg.drawLine({ start: { x: m, y: h - headerHeight + 8 }, end: { x: w - m, y: h - headerHeight + 8 }, thickness: 0.75, color: rgb(0.85, 0.85, 0.85) });
       pg.drawText("HEALTH AND SAFETY MANUAL", { x: m, y: h - 22, size: 8, font: boldFont, color: teal });
-      const nw = boldFont.widthOfTextAtSize(client.name, 8);
-      pg.drawText(client.name, { x: w - m - nw, y: h - 22, size: 8, font: boldFont, color: slate });
+      const nw = boldFont.widthOfTextAtSize(displayName, 8);
+      pg.drawText(displayName, { x: w - m - nw, y: h - 22, size: 8, font: boldFont, color: slate });
     };
 
     page = pdfDoc.addPage([pageWidth, pageHeight]);
@@ -6310,7 +6311,7 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
 
       if (label === "4. Health & Safety Policy") {
         const raw = documentTemplates[templateKey(categoryKey, label)] || "";
-        const content = raw.replaceAll("The Company", client.name) || `No template text written yet for "${label}".`;
+        const content = raw.replaceAll("The Company", displayName) || `No template text written yet for "${label}".`;
         const landscapeWidth = pageHeight, landscapeHeight = pageWidth, lMargin = 40;
         const landscapePage = pdfDoc.addPage([landscapeWidth, landscapeHeight]);
         drawContentHeader(landscapePage, landscapeWidth, landscapeHeight, lMargin);
@@ -6322,13 +6323,13 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
           ly -= 12;
         });
         ly -= 14;
-        drawPolicyGrid({ page: landscapePage, x: lMargin, y0: ly, maxWidth: landscapeWidth - lMargin * 2, font, boldFont, rgb, clientName: client.name });
+        drawPolicyGrid({ page: landscapePage, x: lMargin, y0: ly, maxWidth: landscapeWidth - lMargin * 2, font, boldFont, rgb, clientName: displayName });
         newPage(); // force fresh portrait page so section 5+ don't land back on the pre-section-4 page
         continue;
       }
 
       const raw = documentTemplates[templateKey(categoryKey, label)] || "";
-      const content = raw.replaceAll("The Company", client.name) || `No template text written yet for "${label}".`;
+      const content = raw.replaceAll("The Company", displayName) || `No template text written yet for "${label}".`;
       const bodyLines = wrapTextLines(content, font, 10, maxWidth);
 
       // Pre-load this section's diagram (if any) so we can measure it before committing to a page.
@@ -6373,7 +6374,7 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
     }
     const logEntries = [
       ...GLOBAL_DOCUMENT_LOG,
-      { date: today(), details: `Manual issued for ${client.name}` },
+      { date: today(), details: `Manual issued for ${displayName}` },
     ].sort((a, b) => a.date.localeCompare(b.date));
 
     ensureSpace(40 + logEntries.length * 22);
@@ -6401,8 +6402,8 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
     for (let p = 0; p < pageCount; p++) {
       const pg = pdfDoc.getPage(p);
       const footerText = p === 0
-        ? `Prepared for ${client.name}  ·  ${fmtDate(today())}`
-        : `Prepared for ${client.name}  ·  ${fmtDate(today())}  ·  Page ${p} of ${pageCount - 1}`;
+        ? `Prepared for ${displayName}  ·  ${fmtDate(today())}`
+        : `Prepared for ${displayName}  ·  ${fmtDate(today())}  ·  Page ${p} of ${pageCount - 1}`;
       pg.drawText(footerText, { x: margin, y: 24, size: 8, font, color: slate });
     }
 
@@ -6411,7 +6412,7 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${client.name.replace(/\s+/g, "_")}-${category.label.replace(/\s+/g, "_")}.pdf`;
+    a.download = `${displayName.replace(/\s+/g, "_")}-Health_and_Safety_Manual-${new Date().getFullYear()}.pdf`;
     a.click();
     URL.revokeObjectURL(url);
     return;
@@ -6617,11 +6618,11 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
 
       let y = lh - bandHeight - 16;
       const introSize = 10;
-      const introLines = wrapTextLines(getPolicyIntro(client.name), font, introSize, lMaxWidth * 0.85);
+      const introLines = wrapTextLines(getPolicyIntro(displayName), font, introSize, lMaxWidth * 0.85);
       introLines.forEach((line) => { drawCenteredText(page, line, lw / 2, y, introSize, font, ink); y -= introSize + 3; });
       y -= 6;
 
-      const bottomY = drawPolicyGrid({ page, x: lMargin, y0: y, maxWidth: lMaxWidth, font, boldFont, rgb, clientName: client.name });
+      const bottomY = drawPolicyGrid({ page, x: lMargin, y0: y, maxWidth: lMaxWidth, font, boldFont, rgb, clientName: displayName });
 
       let sy = bottomY - 20;
       const rightColX = lw - lMargin - 200;
@@ -6636,7 +6637,7 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${client.name.replace(/\s+/g, "_")}-Health_Safety_Policy.pdf`;
+      a.download = `${displayName.replace(/\s+/g, "_")}-Health_Safety_Policy-${new Date().getFullYear()}.pdf`;
       a.click();
       URL.revokeObjectURL(url);
       continue;
@@ -6668,7 +6669,7 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
       const ensureSpace = (needed) => { if (y - needed < margin) newPage(); };
 
       const raw = documentTemplates[templateKey(categoryKey, label)] || "";
-      const content = raw.replaceAll("The Company", client.name) || `No template text written yet for "${label}".`;
+      const content = raw.replaceAll("The Company", displayName) || `No template text written yet for "${label}".`;
       wrapTextLines(content, font, 10, maxWidth).forEach((line) => {
         ensureSpace(13);
         page.drawText(line, { x: margin, y, size: 10, font, color: ink });
@@ -6692,7 +6693,7 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${client.name.replace(/\s+/g, "_")}-${label.replace(/\s+/g, "_")}.pdf`;
+      a.download = `${displayName.replace(/\s+/g, "_")}-${label.replace(/\s+/g, "_")}-${new Date().getFullYear()}.pdf`;
       a.click();
       URL.revokeObjectURL(url);
       continue;
@@ -6715,7 +6716,7 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
       }
       const titleSize = 17;
       pg.drawText(label, { x: margin, y: pageHeight - 55, size: titleSize, font: boldFont, color: rgb(1, 1, 1) });
-      pg.drawText(client.name, { x: margin, y: pageHeight - 75, size: 10, font, color: rgb(0.72, 0.78, 0.78) });
+      pg.drawText(displayName, { x: margin, y: pageHeight - 75, size: 10, font, color: rgb(0.72, 0.78, 0.78) });
     };
     drawProcHeader(page);
 
@@ -6753,7 +6754,7 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
     };
 
     const raw = documentTemplates[templateKey(categoryKey, label)] || "";
-    const content = raw.replaceAll("The Company", client.name) || `No template text written yet for "${label}".`;
+    const content = raw.replaceAll("The Company", displayName) || `No template text written yet for "${label}".`;
     const inlineMap = INLINE_DIAGRAMS[label] || {};
     const paragraphs = content.split("\n\n");
 
@@ -6893,7 +6894,7 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
           lPage.drawImage(logoImage, { x: lw - lMargin - w, y: lh - lBandHeight / 2 - h / 2, width: w, height: h });
         }
         lPage.drawText(label, { x: lMargin, y: lh - 48, size: 15, font: boldFont, color: rgb(1, 1, 1) });
-        lPage.drawText(client.name, { x: lMargin, y: lh - 68, size: 9, font, color: rgb(0.72, 0.78, 0.78) });
+        lPage.drawText(displayName, { x: lMargin, y: lh - 68, size: 9, font, color: rgb(0.72, 0.78, 0.78) });
 
         lPage.drawText(`Appendix: ${title}`, { x: lMargin, y: lh - lBandHeight - 24, size: 13, font: boldFont, color: teal });
         let ly = lh - lBandHeight - 48;
@@ -6933,7 +6934,7 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
     const monthYear = new Date().toLocaleDateString("en-NZ", { month: "long", year: "numeric" });
     for (let p = 0; p < pageCount; p++) {
       const pg = pdfDoc.getPage(p);
-      pg.drawText(`Developed by OSHE for ${client.name}`, { x: margin, y: 24, size: 8, font, color: slate });
+      pg.drawText(`Developed by OSHE for ${displayName}`, { x: margin, y: 24, size: 8, font, color: slate });
       const rightText = pageCount > 1 ? `${monthYear}  ·  Page ${p + 1} of ${pageCount}` : monthYear;
       const rightW = font.widthOfTextAtSize(rightText, 8);
       pg.drawText(rightText, { x: pageWidth - margin - rightW, y: 24, size: 8, font, color: slate });
@@ -6945,7 +6946,7 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${client.name.replace(/\s+/g, "_")}-${safeName}.pdf`;
+    a.download = `${displayName.replace(/\s+/g, "_")}-${safeName}-${new Date().getFullYear()}.pdf`;
     a.click();
     URL.revokeObjectURL(url);
     // A small gap between each download — most browsers will block or warn on a burst of

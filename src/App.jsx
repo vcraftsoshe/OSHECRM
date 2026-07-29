@@ -4550,6 +4550,281 @@ function ConfirmButton({ onConfirm, title, icon: Icon = Trash2, iconSize = 14, i
   );
 }
 
+/* ---------- Client Scheduling (Enterprise clients only) ----------
+   A per-client monthly plan of who's doing what, when — site reviews, reporting, whatever
+   needs to happen for that specific client's retainer. Anything here with hours syncs into
+   two places automatically: the client's real Activity hours log (tagged "Schedule: ..."),
+   and — for the 4 team members specifically, not External Consultant — that person's
+   weekly workload on the Schedule tab, via gatherWorkloadItems reading client.scheduleEntries
+   directly (see there). Both syncs are the same client-side, idempotent reconciliation
+   pattern used elsewhere in this app (OHSMS reminders, touchpoint baselines): safe to run
+   repeatedly, only ever adds what's missing. */
+const SCHEDULE_ASSIGNEES = [...TEAM, "External Consultant"];
+
+function monthOccurrenceDate(anchorDate, targetMonthYear) {
+  const anchor = new Date(anchorDate + "T00:00:00");
+  const day = anchor.getDate();
+  const [y, m] = targetMonthYear.split("-").map(Number);
+  const daysInMonth = new Date(y, m, 0).getDate();
+  const clampedDay = Math.min(day, daysInMonth);
+  return `${targetMonthYear}-${String(clampedDay).padStart(2, "0")}`;
+}
+function addMonthsToMonthYear(monthYear, delta) {
+  const [y, m] = monthYear.split("-").map(Number);
+  const d = new Date(y, m - 1 + delta, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+// Expands one-off entries (kept as-is if inside the range) and monthly-recurring entries
+// (one occurrence per month overlapping the range, on the same day-of-month, clamped to
+// however many days that month has) into a flat list with a concrete occurrenceDate each.
+function expandScheduleEntriesInRange(entries, start, end) {
+  const out = [];
+  (entries || []).forEach((e) => {
+    if (e.repeat === "monthly") {
+      let cursor = start.slice(0, 7);
+      const endMonth = end.slice(0, 7);
+      let guard = 0;
+      while (cursor <= endMonth && guard < 36) {
+        const occDate = monthOccurrenceDate(e.date, cursor);
+        if (occDate >= start && occDate < end) out.push({ ...e, occurrenceDate: occDate });
+        cursor = addMonthsToMonthYear(cursor, 1);
+        guard++;
+      }
+    } else if (e.date && e.date >= start && e.date < end) {
+      out.push({ ...e, occurrenceDate: e.date });
+    }
+  });
+  return out.sort((a, b) => a.occurrenceDate.localeCompare(b.occurrenceDate));
+}
+
+function ClientScheduling({ client, updateClient }) {
+  const [monthYear, setMonthYear] = useState(currentMonth());
+  const [draft, setDraft] = useState({ title: "", assignee: TEAM[0], date: today(), hours: "", repeat: "none", targetId: "" });
+  const [targetDraft, setTargetDraft] = useState({ title: "", count: "", repeat: "monthly" });
+  const [billableDraft, setBillableDraft] = useState({ description: "", member: TEAM[0], date: today(), hours: "" });
+
+  const entries = client.scheduleEntries || [];
+  const targets = client.scheduleTargets || [];
+  const monthStart = `${monthYear}-01`;
+  const monthEnd = `${addMonthsToMonthYear(monthYear, 1)}-01`;
+  const occurrences = expandScheduleEntriesInRange(entries, monthStart, monthEnd);
+
+  // Sync this actual calendar month's occurrences into the real hours log — idempotent
+  // (checks existing ids before writing), so this is safe to re-run on every render.
+  useEffect(() => {
+    const thisMonth = currentMonth();
+    const currentOccurrences = expandScheduleEntriesInRange(entries, `${thisMonth}-01`, `${addMonthsToMonthYear(thisMonth, 1)}-01`);
+    if (currentOccurrences.length === 0) return;
+    const existingIds = new Set((client.hours?.log || []).map((h) => h.id));
+    const newLogEntries = [];
+    currentOccurrences.forEach((occ) => {
+      if (!occ.hours) return;
+      const logId = `sched-${occ.id}-${thisMonth}`;
+      if (!existingIds.has(logId)) {
+        newLogEntries.push({ id: logId, date: occ.occurrenceDate, member: occ.assignee, hours: Number(occ.hours) || 0, description: `Schedule: ${occ.title}` });
+      }
+    });
+    if (newLogEntries.length > 0) {
+      updateClient((c) => ({ ...c, hours: { ...c.hours, log: [...(c.hours?.log || []), ...newLogEntries] } }));
+    }
+  }, [client.id, JSON.stringify(entries)]);
+
+  const addEntry = () => {
+    if (!draft.title.trim() || !draft.date || !draft.hours) return;
+    const entry = { id: "sched" + Date.now(), title: draft.title.trim(), assignee: draft.assignee, date: draft.date, hours: Number(draft.hours), repeat: draft.repeat, targetId: draft.targetId || null };
+    updateClient((c) => ({ ...c, scheduleEntries: [...(c.scheduleEntries || []), entry] }));
+    setDraft({ title: "", assignee: TEAM[0], date: today(), hours: "", repeat: "none", targetId: "" });
+  };
+  const removeEntry = (id) => {
+    updateClient((c) => ({
+      ...c,
+      scheduleEntries: (c.scheduleEntries || []).filter((e) => e.id !== id),
+      hours: { ...c.hours, log: (c.hours?.log || []).filter((h) => h.id !== `sched-${id}-${currentMonth()}`) },
+    }));
+  };
+
+  // Monthly targets ("we need 8 site reviews this month") — a quota checked against the
+  // calendar. Progress matches by targetId, set when a scheduled item is explicitly linked
+  // to a target in the add-entry form below — not by comparing title text, which broke on
+  // anything less than an exact match (casing, plurals, extra words). "Repeats monthly"
+  // targets apply to every month you look at; "This month only" targets are scoped to the
+  // specific month they were created in and only show while viewing that month.
+  const progressFor = (target) => occurrences.filter((o) => o.targetId === target.id).length;
+  const visibleTargets = targets.filter((t) => t.repeat === "monthly" || t.monthYear === monthYear);
+  const addTarget = () => {
+    if (!targetDraft.title.trim() || !targetDraft.count) return;
+    const target = { id: "target" + Date.now(), title: targetDraft.title.trim(), targetCount: Number(targetDraft.count), repeat: targetDraft.repeat, monthYear: targetDraft.repeat === "none" ? monthYear : null };
+    updateClient((c) => ({ ...c, scheduleTargets: [...(c.scheduleTargets || []), target] }));
+    setTargetDraft({ title: "", count: "", repeat: "monthly" });
+  };
+  const removeTarget = (id) => updateClient((c) => ({ ...c, scheduleTargets: (c.scheduleTargets || []).filter((t) => t.id !== id) }));
+
+  // Billable time (travel, admin, anything that isn't a "scheduled" item) — logs straight
+  // into the real hours log like everything else here, but deliberately never touches
+  // scheduleEntries, so it never shows on the calendar above and never counts toward
+  // anyone's Schedule tab workload — just the client's billing.
+  const billableThisMonth = (client.hours?.log || []).filter((h) => h.id?.startsWith("billable-") && h.date.slice(0, 7) === monthYear);
+  const addBillableTime = () => {
+    if (!billableDraft.description.trim() || !billableDraft.date || !billableDraft.hours) return;
+    const entry = { id: "billable-" + Date.now(), date: billableDraft.date, member: billableDraft.member, hours: Number(billableDraft.hours), description: `Billable: ${billableDraft.description.trim()}` };
+    updateClient((c) => ({ ...c, hours: { ...c.hours, log: [...(c.hours?.log || []), entry] } }));
+    setBillableDraft({ description: "", member: TEAM[0], date: today(), hours: "" });
+  };
+  const removeBillableTime = (id) => updateClient((c) => ({ ...c, hours: { ...c.hours, log: (c.hours?.log || []).filter((h) => h.id !== id) } }));
+
+  const [gy, gm] = monthYear.split("-").map(Number);
+  const daysInMonth = new Date(gy, gm, 0).getDate();
+  const startWeekday = (new Date(gy, gm - 1, 1).getDay() + 6) % 7;
+  const cells = [];
+  for (let i = 0; i < startWeekday; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(`${monthYear}-${String(d).padStart(2, "0")}`);
+  const assigneeColor = (a) => (a === "External Consultant" ? T.amber : T.tealDark);
+
+  return (
+    <div className="flex flex-col gap-4">
+      <Card style={{ padding: "10px 16px" }}>
+        <div className="flex items-center gap-3">
+          <button onClick={() => setMonthYear(addMonthsToMonthYear(monthYear, -1))}><ChevronLeft size={16} color={T.slate} /></button>
+          <span className="text-sm font-semibold" style={{ color: T.ink }}>{monthYear === currentMonth() ? "This month" : monthLabel(monthYear)}</span>
+          <button onClick={() => setMonthYear(addMonthsToMonthYear(monthYear, 1))}><ChevronRight size={16} color={T.slate} /></button>
+        </div>
+      </Card>
+
+      <Card style={{ padding: 16 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 6 }}>
+          {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d) => (
+            <div key={d} className="text-[10px] font-semibold text-center" style={{ color: T.slateLight }}>{d}</div>
+          ))}
+          {cells.map((date, i) => (
+            <div key={i} style={{ minHeight: 74, background: date ? T.paperAlt : "transparent", borderRadius: 8, padding: 4 }}>
+              {date && <div className="text-[10px]" style={{ color: T.slateLight }}>{Number(date.slice(8))}</div>}
+              {date && occurrences.filter((o) => o.occurrenceDate === date).map((o) => (
+                <div key={o.id + o.occurrenceDate} className="text-[9px] rounded px-1 py-0.5 mt-0.5 truncate" style={{ background: T.card, color: assigneeColor(o.assignee) }} title={`${o.title} — ${o.assignee} — ${o.hours}h`}>
+                  {o.title} · {o.hours}h
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      <Card style={{ padding: 16 }}>
+        <div className="text-sm font-semibold mb-1" style={{ color: T.ink }}>Monthly targets</div>
+        <div className="text-[11px] mb-3" style={{ color: T.slateLight }}>How many of each thing should happen this month, checked against the calendar above for {monthYear === currentMonth() ? "this month" : monthLabel(monthYear)}.</div>
+        <div className="flex flex-col gap-2 mb-3">
+          {visibleTargets.map((t) => {
+            const done = progressFor(t);
+            const complete = done >= t.targetCount;
+            return (
+              <div key={t.id} className="flex items-center justify-between text-sm py-1.5" style={{ borderBottom: `1px solid ${T.border}` }}>
+                <div>
+                  <span style={{ color: T.ink, fontWeight: 600 }}>{t.title}</span>
+                  <span className="ml-2 text-[11px]" style={{ color: T.slateLight }}>{t.repeat === "monthly" ? "repeats monthly" : monthLabel(t.monthYear || monthYear) + " only"}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold px-2 py-1 rounded-full" style={{ color: complete ? T.tealDark : T.amber, background: T.paperAlt }}>{done}/{t.targetCount}</span>
+                  <ConfirmButton onConfirm={() => removeTarget(t.id)} title="Remove target" iconSize={13} />
+                </div>
+              </div>
+            );
+          })}
+          {visibleTargets.length === 0 && <div className="text-xs" style={{ color: T.slateLight }}>No targets set for {monthYear === currentMonth() ? "this month" : monthLabel(monthYear)}.</div>}
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <input placeholder="What (e.g. Site review)" value={targetDraft.title} onChange={(e) => setTargetDraft({ ...targetDraft, title: e.target.value })}
+            className="flex-1 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink, minWidth: 120 }} />
+          <input type="number" min="1" placeholder="How many" value={targetDraft.count} onChange={(e) => setTargetDraft({ ...targetDraft, count: e.target.value })}
+            className="w-24 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+          <select value={targetDraft.repeat} onChange={(e) => setTargetDraft({ ...targetDraft, repeat: e.target.value })}
+            className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
+            <option value="monthly">Repeats monthly</option>
+            <option value="none">This month only</option>
+          </select>
+          <button onClick={addTarget} className="text-xs font-semibold px-3 py-1.5 rounded-lg shrink-0" style={{ background: T.tealDark, color: "#fff" }}>Add target</button>
+        </div>
+      </Card>
+
+      <Card style={{ padding: 16 }}>
+        <div className="text-sm font-semibold mb-3" style={{ color: T.ink }}>All scheduled items</div>
+        <div className="flex flex-col gap-2 mb-3">
+          {entries.map((e) => (
+            <div key={e.id} className="flex items-center justify-between text-sm py-1.5" style={{ borderBottom: `1px solid ${T.border}` }}>
+              <div>
+                <span style={{ color: T.ink, fontWeight: 600 }}>{e.title}</span>
+                <span className="ml-2 text-xs" style={{ color: T.slate }}>{e.assignee} · {fmtDate(e.date)}{e.repeat === "monthly" ? " · monthly" : ""} · {e.hours}h{e.targetId ? " · counts toward target" : ""}</span>
+              </div>
+              <ConfirmButton onConfirm={() => removeEntry(e.id)} title="Remove" iconSize={13} />
+            </div>
+          ))}
+          {entries.length === 0 && <div className="text-xs" style={{ color: T.slateLight }}>Nothing scheduled yet.</div>}
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <select value={draft.targetId} onChange={(e) => {
+              const targetId = e.target.value;
+              const linked = targets.find((t) => t.id === targetId);
+              setDraft({ ...draft, targetId, title: linked ? linked.title : draft.title });
+            }}
+            className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} title="Link this item to a monthly target so it counts toward its progress">
+            <option value="">Not linked to a target</option>
+            {targets.map((t) => <option key={t.id} value={t.id}>Counts toward: {t.title}</option>)}
+          </select>
+          <input placeholder="What (e.g. Site review)" value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })}
+            disabled={Boolean(draft.targetId)}
+            className="flex-1 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink, minWidth: 140, opacity: draft.targetId ? 0.7 : 1 }} />
+          <select value={draft.assignee} onChange={(e) => setDraft({ ...draft, assignee: e.target.value })}
+            className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
+            {SCHEDULE_ASSIGNEES.map((a) => <option key={a} value={a}>{a}</option>)}
+          </select>
+          <input type="date" value={draft.date} onChange={(e) => setDraft({ ...draft, date: e.target.value })}
+            className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+          <input type="number" min="0" step="0.5" placeholder="hrs" value={draft.hours} onChange={(e) => setDraft({ ...draft, hours: e.target.value })}
+            className="w-16 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+          <select value={draft.repeat} onChange={(e) => setDraft({ ...draft, repeat: e.target.value })}
+            className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
+            <option value="none">This month only</option>
+            <option value="monthly">Repeats monthly</option>
+          </select>
+          <button onClick={addEntry} className="text-xs font-semibold px-3 py-1.5 rounded-lg shrink-0" style={{ background: T.tealDark, color: "#fff" }}>Add</button>
+        </div>
+      </Card>
+
+      <Card style={{ padding: 16 }}>
+        <div className="text-sm font-semibold mb-1" style={{ color: T.ink }}>Billable time</div>
+        <div className="text-[11px] mb-3" style={{ color: T.slateLight }}>Travel, admin, anything else that's billable but isn't a scheduled item — goes straight into Activity hours, never shows on the calendar above or on anyone's Schedule tab.</div>
+        <div className="flex flex-col gap-2 mb-3">
+          {billableThisMonth.map((h) => (
+            <div key={h.id} className="flex items-center justify-between text-sm py-1.5" style={{ borderBottom: `1px solid ${T.border}` }}>
+              <div>
+                <span style={{ color: T.ink, fontWeight: 600 }}>{h.description.replace(/^Billable: /, "")}</span>
+                <span className="ml-2 text-xs" style={{ color: T.slate }}>{h.member} · {fmtDate(h.date)} · {h.hours}h</span>
+              </div>
+              <ConfirmButton onConfirm={() => removeBillableTime(h.id)} title="Remove" iconSize={13} />
+            </div>
+          ))}
+          {billableThisMonth.length === 0 && <div className="text-xs" style={{ color: T.slateLight }}>Nothing logged for {monthYear === currentMonth() ? "this month" : monthLabel(monthYear)} yet.</div>}
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <input placeholder="What (e.g. Travel to site)" value={billableDraft.description} onChange={(e) => setBillableDraft({ ...billableDraft, description: e.target.value })}
+            className="flex-1 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink, minWidth: 140 }} />
+          <select value={billableDraft.member} onChange={(e) => setBillableDraft({ ...billableDraft, member: e.target.value })}
+            className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
+            {SCHEDULE_ASSIGNEES.map((a) => <option key={a} value={a}>{a}</option>)}
+          </select>
+          <input type="date" value={billableDraft.date} onChange={(e) => setBillableDraft({ ...billableDraft, date: e.target.value })}
+            className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+          <input type="number" min="0" step="0.5" placeholder="hrs" value={billableDraft.hours} onChange={(e) => setBillableDraft({ ...billableDraft, hours: e.target.value })}
+            className="w-16 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+          <button onClick={addBillableTime} className="text-xs font-semibold px-3 py-1.5 rounded-lg shrink-0" style={{ background: T.tealDark, color: "#fff" }}>Log</button>
+        </div>
+      </Card>
+
+      <div className="text-xs text-center" style={{ color: T.slateLight }}>
+        Scheduled items count toward this client's Activity hours log automatically (tagged "Schedule: …"), and — for the 4 team members, not External Consultant — toward that person's weekly workload on the Schedule tab. Billable time also lands in Activity hours (tagged "Billable: …") but never on the calendar or anyone's Schedule tab.
+      </div>
+    </div>
+  );
+}
+
 /* ---------- Onboarding (lives on the client record) ---------- */
 function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, workflows, pushNotification, goToWorkflows }) {
   const [pickerWorkflowId, setPickerWorkflowId] = useState(workflows.find((w) => w.isDefault)?.id || workflows[0]?.id);
@@ -5087,7 +5362,8 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
               { id: "onboarding", label: "Workflows", icon: ListChecks },
               { id: "notes", label: "Notes", icon: StickyNote },
               { id: "reminders", label: "Tasks", icon: Bell },
-            ].map((t) => (
+              { id: "scheduling", label: "Scheduling", icon: CalendarClock },
+            ].filter((t) => t.id !== "scheduling" || client.profile === "Enterprise Client").map((t) => (
               <button key={t.id} onClick={() => setTab(t.id)} className="flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium -mb-px whitespace-nowrap"
                 style={{ color: tab === t.id ? T.tealDark : T.slate, borderBottom: tab === t.id ? `2px solid ${T.tealDark}` : "2px solid transparent" }}>
                 <t.icon size={14} /> {t.label}
@@ -5491,6 +5767,9 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
                 <button onClick={addReminder} className="text-xs font-semibold px-3 py-1.5 rounded-lg shrink-0" style={{ background: T.tealDark, color: "#fff" }}>Add</button>
               </Card>
             </div>
+          )}
+          {tab === "scheduling" && client.profile === "Enterprise Client" && (
+            <ClientScheduling client={client} updateClient={updateClient} />
           )}
         </div>
         </>
@@ -9225,6 +9504,17 @@ function gatherWorkloadItems(person, tasks, onboardings, clients, scheduleBlocks
         items.push({ type: "reminder", title: r.text, date: r.date, hours: r.estHours || 0, clientId: c.id, clientName: c.name });
       }
     });
+    // Client Scheduling entries (Enterprise clients) — External Consultant isn't a team
+    // member with a personal capacity to track, so only the 4 real people's entries count
+    // toward Schedule workload here (they still count toward the client's Activity hours
+    // log regardless of assignee — that sync happens in ClientScheduling itself).
+    if (TEAM.includes(person)) {
+      expandScheduleEntriesInRange(c.scheduleEntries, start, end).forEach((occ) => {
+        if (occ.assignee === person) {
+          items.push({ type: "clientSchedule", title: occ.title, date: occ.occurrenceDate, hours: occ.hours || 0, clientId: c.id, clientName: c.name });
+        }
+      });
+    }
   });
   scheduleBlocks.filter((b) => b.assignee === person).forEach((b) => {
     if (b.repeat && b.repeat !== "none") {
@@ -9298,10 +9588,10 @@ function ScheduleView({ tasks, clients, onboardings, scheduleBlocks, addSchedule
                 {items.map((item, i) => (
                   <div key={i} className="flex items-center justify-between text-xs py-1.5 px-2 rounded-lg" style={{ background: T.paperAlt }}>
                     <div className="flex items-center gap-2 min-w-0">
-                      <Pill color={item.type === "task" ? T.tealDark : item.type === "workflow" ? T.blue : item.type === "reminder" ? "#8B6BA8" : T.amber} bg={T.card}>
-                        {item.type === "task" ? "Task" : item.type === "workflow" ? "Workflow" : item.type === "reminder" ? "Reminder" : item.repeat === "daily" ? "Daily" : item.repeat === "weekly" ? "Weekly" : "Booked"}
+                      <Pill color={item.type === "task" ? T.tealDark : item.type === "workflow" ? T.blue : item.type === "reminder" ? "#8B6BA8" : item.type === "clientSchedule" ? T.coral : T.amber} bg={T.card}>
+                        {item.type === "task" ? "Task" : item.type === "workflow" ? "Workflow" : item.type === "reminder" ? "Reminder" : item.type === "clientSchedule" ? "Scheduled" : item.repeat === "daily" ? "Daily" : item.repeat === "weekly" ? "Weekly" : "Booked"}
                       </Pill>
-                      <button onClick={() => item.clientId && goToClient(item.clientId, item.type === "workflow" ? "onboarding" : item.type === "reminder" ? "reminders" : "overview")}
+                      <button onClick={() => item.clientId && goToClient(item.clientId, item.type === "workflow" ? "onboarding" : item.type === "reminder" ? "reminders" : item.type === "clientSchedule" ? "scheduling" : "overview")}
                         className="truncate text-left" disabled={!item.clientId} style={{ color: T.ink, cursor: item.clientId ? "pointer" : "default" }} title={item.title}>
                         {item.title}{item.clientName ? ` — ${item.clientName}` : ""}
                       </button>

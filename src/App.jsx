@@ -5298,6 +5298,9 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
     updateClient((c) => ({ ...c, hours: { ...c.hours, log: [...c.hours.log, { id: Date.now(), date: today(), member: newHour.member, hours: Number(newHour.hours), description: newHour.description }] } }));
     setNewHour({ member: TEAM[0], hours: "", description: "" });
   };
+  // Deletes straight out of the same hours log Billing reads from — nothing else to sync,
+  // it disappears from the itemised Billing breakdown the moment it's gone here.
+  const removeHour = (id) => updateClient((c) => ({ ...c, hours: { ...c.hours, log: c.hours.log.filter((h) => h.id !== id) } }));
   const addUserCount = () => {
     if (!newUserCount) return;
     updateClient((c) => ({ ...c, users: { log: [...c.users.log, { id: Date.now(), month: currentMonth(), count: Number(newUserCount) }] } }));
@@ -5770,7 +5773,11 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
                   {client.hours.log.filter((h) => h.date.slice(0, 7) === viewMonth).map((h) => (
                     <div key={h.id} className="flex items-center justify-between text-sm py-1.5" style={{ borderBottom: `1px solid ${T.border}` }}>
                       <div><span className="font-medium" style={{ color: T.ink }}>{h.member}</span><span className="ml-2" style={{ color: T.slate }}>{h.description}</span></div>
-                      <div className="flex items-center gap-3 shrink-0"><span style={{ color: T.slate }}>{fmtDate(h.date)}</span><span className="font-bold" style={{ color: T.tealDark }}>{h.hours}h</span></div>
+                      <div className="flex items-center gap-3 shrink-0">
+                        <span style={{ color: T.slate }}>{fmtDate(h.date)}</span>
+                        <span className="font-bold" style={{ color: T.tealDark }}>{h.hours}h</span>
+                        <ConfirmButton onConfirm={() => removeHour(h.id)} title="Remove this hours entry" iconSize={13} />
+                      </div>
                     </div>
                   ))}
                   {client.hours.log.filter((h) => h.date.slice(0, 7) === viewMonth).length === 0 && (
@@ -8022,6 +8029,11 @@ function BillingOverview({ clients, resellers }) {
   const [showFlatFee, setShowFlatFee] = useState(false);
   const [expandedBilling, setExpandedBilling] = useState({});
   const toggleBillingExpand = (id) => setExpandedBilling((prev) => ({ ...prev, [id]: !prev[id] }));
+  const removeHourFromBilling = (clientId, hourId) => {
+    const c = clients.find((x) => x.id === clientId);
+    if (!c) return;
+    updateDoc(doc(db, "clients", clientId), { hours: { ...c.hours, log: c.hours.log.filter((h) => h.id !== hourId) } });
+  };
   const newClients = clients.filter((c) => c.billingSetupDone === false);
   const setUpClients = clients.filter((c) => c.billingSetupDone !== false);
   const hasHoursThisMonth = (c) => c.hours.log.some((h) => h.date.slice(0, 7) === currentMonth());
@@ -8140,7 +8152,10 @@ function BillingOverview({ clients, resellers }) {
                   {r.hourItems.map((h) => (
                     <div key={h.id} className="flex items-center justify-between text-xs py-1" style={{ borderBottom: `1px solid ${T.border}` }}>
                       <div><span style={{ color: T.ink }}>{h.description || "—"}</span><span className="ml-2" style={{ color: T.slateLight }}>{h.member} · {fmtDate(h.date)}</span></div>
-                      <span className="font-semibold" style={{ color: T.tealDark }}>{h.hours}h</span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="font-semibold" style={{ color: T.tealDark }}>{h.hours}h</span>
+                        <ConfirmButton onConfirm={() => removeHourFromBilling(r.id, h.id)} title="Remove this hours entry" iconSize={11} />
+                      </div>
                     </div>
                   ))}
                   {r.hourItems.length === 0 && <div className="text-xs py-1" style={{ color: T.slateLight }}>None logged this month.</div>}

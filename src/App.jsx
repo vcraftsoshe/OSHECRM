@@ -9746,7 +9746,8 @@ function expandRecurringDates(anchorDate, start, end, repeat) {
     }
   } else if (repeat === "daily") {
     while (cursor.toISOString().slice(0, 10) < end) {
-      dates.push(cursor.toISOString().slice(0, 10));
+      const dow = cursor.getDay(); // 0 = Sunday, 6 = Saturday
+      if (dow !== 0 && dow !== 6) dates.push(cursor.toISOString().slice(0, 10));
       cursor.setDate(cursor.getDate() + 1);
     }
   }

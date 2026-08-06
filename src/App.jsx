@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
 import {
   Users, TrendingUp, Bell, Building2, CreditCard, StickyNote,
-  ChevronRight, ChevronLeft, Plus, Check, Upload, Calendar, X, Search, Clock,
+  ChevronRight, ChevronLeft, Plus, Check, Upload, Calendar, X, Search, Clock, PieChart,
   ClipboardList, Layers, Circle, CheckCircle2, Image as ImageIcon,
   Repeat, Trash2, ListChecks, ListTodo, Mail, ArrowUpRight, Store, LayoutDashboard, ChevronDown, Smartphone, FileText, CalendarClock, MessageCircle
 } from "lucide-react";
@@ -4434,7 +4434,16 @@ const initialResellers = [
   },
 ];
 
-function today() { return new Date().toISOString().slice(0, 10); }
+// Uses local date components, not toISOString() (which is always UTC) — NZ is 12-13 hours
+// ahead of UTC, so for roughly the first half of every NZ day (midnight to early afternoon),
+// the UTC calendar date is still "yesterday". toISOString() would silently return the wrong
+// day for that whole window, which is what was causing due dates and similar to land a day
+// early. This is the one place that matters — everything else in the app (addDays,
+// currentMonth, etc.) is built from this, so fixing it here fixes it everywhere at once.
+function today() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 
 // A small "done!" chime for completing a task/reminder — synthesized with the Web Audio
 // API rather than a bundled audio file, so there's nothing to host or fail to load. A
@@ -4492,7 +4501,23 @@ function playChime() {
 }
 function fmtDate(d) { return d ? new Date(d).toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric" }) : "—"; }
 function daysUntil(d) { return Math.ceil((new Date(d) - new Date(today())) / 86400000); }
-function addDays(dateStr, days) { const d = new Date(dateStr); d.setDate(d.getDate() + days); return d.toISOString().slice(0, 10); }
+// Same local-date approach as today() above, for the same reason — parsing "YYYY-MM-DD" as
+// dateStr alone is UTC midnight, and toISOString() serializes back to UTC, so the old
+// version could drift a day depending on time of day and time of year (DST). Anchoring to
+// local midnight ("T00:00:00", no Z) and reading local components back out avoids both.
+// Shared by every date-expansion loop below — converts a Date object to a "YYYY-MM-DD"
+// string using its LOCAL calendar date, never toISOString() (always UTC). Building a Date
+// at local midnight and then reading it back via toISOString() silently shifts the date one
+// day earlier for anyone in a timezone ahead of UTC (NZ included) — this was the same root
+// cause as the today()/addDays() bug above, just showing up in several more places.
+function toLocalDateStr(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function addDays(dateStr, days) {
+  const d = new Date(dateStr + "T00:00:00");
+  d.setDate(d.getDate() + days);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 function urgencyColor(dueDate) {
   const d = daysUntil(dueDate);
   return d < 0 ? T.coral : d <= 3 ? T.amber : T.slate;
@@ -4635,8 +4660,8 @@ function expandScheduleEntriesInRange(entries, start, end) {
       const weekday = anchor.getDay();
       const cursor = new Date(Math.max(new Date(start + "T00:00:00").getTime(), anchor.getTime()));
       while (cursor.getDay() !== weekday) cursor.setDate(cursor.getDate() + 1);
-      while (cursor.toISOString().slice(0, 10) < end) {
-        out.push({ ...e, occurrenceDate: cursor.toISOString().slice(0, 10) });
+      while (toLocalDateStr(cursor) < end) {
+        out.push({ ...e, occurrenceDate: toLocalDateStr(cursor) });
         cursor.setDate(cursor.getDate() + 7);
       }
     } else if (e.repeat === "monthly") {
@@ -4796,8 +4821,47 @@ function ClientScheduling({ client, updateClient }) {
   for (let d = 1; d <= daysInMonth; d++) cells.push(`${monthYear}-${String(d).padStart(2, "0")}`);
   const assigneeColor = (a) => (a === "External Consultant" ? T.amber : T.tealDark);
 
+  // "What's left to do this month" / "Coming up" — reads the real linked tasks (not just
+  // the raw calendar entries), so this reflects what's actually still outstanding, not just
+  // what's scheduled. A completed occurrence drops off "left to do" the moment it's ticked.
+  const thisRealMonth = currentMonth();
+  const nextRealMonth = addMonthsToMonthYear(thisRealMonth, 1);
+  const leftToDoThisMonth = (client.reminders || [])
+    .filter((r) => r.id.startsWith("sched-task-") && !r.done && r.date.slice(0, 7) === thisRealMonth)
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const comingUpNextMonth = (client.reminders || [])
+    .filter((r) => r.id.startsWith("sched-task-") && r.date.slice(0, 7) === nextRealMonth)
+    .sort((a, b) => a.date.localeCompare(b.date));
+
   return (
     <div className="flex flex-col gap-4">
+      <div className="grid grid-cols-2 gap-4">
+        <Card style={{ padding: 16 }}>
+          <div className="text-sm font-semibold mb-2" style={{ color: T.ink }}>Left to do this month</div>
+          <div className="flex flex-col gap-1.5">
+            {leftToDoThisMonth.map((r) => (
+              <div key={r.id} className="flex items-center justify-between text-xs py-1" style={{ borderBottom: `1px solid ${T.border}` }}>
+                <span style={{ color: T.ink }}>{r.text}</span>
+                <span style={{ color: T.slateLight }}>{r.assignee} · {fmtDate(r.date)}</span>
+              </div>
+            ))}
+            {leftToDoThisMonth.length === 0 && <div className="text-xs" style={{ color: T.slateLight }}>Nothing outstanding for this month.</div>}
+          </div>
+        </Card>
+        <Card style={{ padding: 16 }}>
+          <div className="text-sm font-semibold mb-2" style={{ color: T.ink }}>Coming up — {monthLabel(nextRealMonth)}</div>
+          <div className="flex flex-col gap-1.5">
+            {comingUpNextMonth.map((r) => (
+              <div key={r.id} className="flex items-center justify-between text-xs py-1" style={{ borderBottom: `1px solid ${T.border}` }}>
+                <span style={{ color: T.ink }}>{r.text}</span>
+                <span style={{ color: T.slateLight }}>{r.assignee} · {fmtDate(r.date)}</span>
+              </div>
+            ))}
+            {comingUpNextMonth.length === 0 && <div className="text-xs" style={{ color: T.slateLight }}>Nothing scheduled yet for next month.</div>}
+          </div>
+        </Card>
+      </div>
+
       <Card style={{ padding: "10px 16px" }}>
         <div className="flex items-center gap-3">
           <button onClick={() => setMonthYear(addMonthsToMonthYear(monthYear, -1))}><ChevronLeft size={16} color={T.slate} /></button>
@@ -4982,7 +5046,18 @@ function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, wor
   const markDone = (instId, stepId) => {
     updateOnboardingsForClient(client.id, (clientList) => clientList.map((inst) => {
       if (inst.id !== instId) return inst;
-      const steps = inst.steps.map((s) => (s.id === stepId ? { ...s, done: true } : s));
+      const step = inst.steps.find((s) => s.id === stepId);
+      let steps;
+      if (step && step.recurring && step.recurring !== "none") {
+        // Some steps aren't one-time — annual policy reviews and the like need redoing on
+        // a schedule, so completing one reopens it at the next due date instead of leaving
+        // it permanently ticked off, same idea as a recurring client reminder.
+        const days = step.recurring === "monthly" ? 30 : step.recurring === "quarterly" ? 90 : 365;
+        const nextDate = addDays(step.dueDate, days);
+        steps = inst.steps.map((s) => (s.id === stepId ? { ...s, done: false, dueDate: nextDate } : s));
+      } else {
+        steps = inst.steps.map((s) => (s.id === stepId ? { ...s, done: true } : s));
+      }
       const nowComplete = steps.every((s) => s.done);
       if (nowComplete) {
         pushNotification({ forPerson: "Vanessa", clientId: client.id, clientName: client.name, message: `${client.name} — ${inst.workflowName} complete, add to billing` });
@@ -5096,6 +5171,9 @@ function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, wor
                                 <Calendar size={10} /> {daysUntil(s.dueDate) < 0 ? `Overdue · was due ${fmtDate(s.dueDate)}` : `Due ${fmtDate(s.dueDate)}`}
                               </span>
                             )}
+                            {s.recurring && s.recurring !== "none" && (
+                              <span className="flex items-center gap-1" style={{ color: T.slateLight }}><Repeat size={10} /> {s.recurring}</span>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -5163,7 +5241,7 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
     if (tabRequest && tabRequest.nonce) setTab(tabRequest.tab);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tabRequest && tabRequest.nonce]);
-  const [newHour, setNewHour] = useState({ member: TEAM[0], hours: "", description: "" });
+  const [newHour, setNewHour] = useState({ member: TEAM[0], hours: "", description: "", date: today() });
   const [newExtra, setNewExtra] = useState({ description: "", hours: "" });
   const [newUserCount, setNewUserCount] = useState("");
   const [newContact, setNewContact] = useState({ name: "", role: "", email: "", phone: "" });
@@ -5245,6 +5323,8 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
     }
   };
   const removeClientFile = (fileId) => updateClient((c) => ({ ...c, files: (c.files || []).filter((f) => f.id !== fileId) }));
+  const viewGeneratedDocument = viewClientFile; // same Storage-backed pattern, just a different array
+  const removeGeneratedDocument = (docId) => updateClient((c) => ({ ...c, generatedDocuments: (c.generatedDocuments || []).filter((d) => d.id !== docId) }));
 
   const addClient = async () => {
     if (!newClientForm.name.trim()) return;
@@ -5294,9 +5374,9 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
     setNewExtra({ description: "", hours: "" });
   };
   const addHour = () => {
-    if (!newHour.description.trim() || !newHour.hours) return;
-    updateClient((c) => ({ ...c, hours: { ...c.hours, log: [...c.hours.log, { id: Date.now(), date: today(), member: newHour.member, hours: Number(newHour.hours), description: newHour.description }] } }));
-    setNewHour({ member: TEAM[0], hours: "", description: "" });
+    if (!newHour.description.trim() || !newHour.hours || !newHour.date) return;
+    updateClient((c) => ({ ...c, hours: { ...c.hours, log: [...c.hours.log, { id: Date.now(), date: newHour.date, member: newHour.member, hours: Number(newHour.hours), description: newHour.description }] } }));
+    setNewHour({ member: newHour.member, hours: "", description: "", date: today() });
   };
   // Deletes straight out of the same hours log Billing reads from — nothing else to sync,
   // it disappears from the itemised Billing breakdown the moment it's gone here.
@@ -5569,6 +5649,14 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
                 </Card>
               </div>
               <Card style={{ padding: 20 }}>
+                <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: T.slate }}>Document control</div>
+                <label className="flex items-center gap-2 text-sm mt-1" style={{ color: T.ink }}>
+                  <input type="checkbox" checked={Boolean(client.showVersionInFooter)} onChange={(e) => updateClient((c) => ({ ...c, showVersionInFooter: e.target.checked }))} />
+                  Show the current document version number in this client's document footers
+                </label>
+                <div className="text-[11px] mt-1.5" style={{ color: T.slateLight }}>Version numbers themselves are set on the Systems tab's Review Log — this only controls whether they show up on {client.name}'s documents specifically.</div>
+              </Card>
+              <Card style={{ padding: 20 }}>
                 <div className="text-sm font-semibold mb-3" style={{ color: T.ink }}>Contacts</div>
                 <div className="flex flex-col gap-2 mb-3">
                   {(client.contacts || []).map((ct) => (
@@ -5784,19 +5872,19 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
                     <div className="text-xs" style={{ color: T.slateLight }}>No hours logged {viewMonth === currentMonth() ? "yet this month" : `for ${monthLabel(viewMonth)}`}.</div>
                   )}
                 </div>
-                {viewMonth === currentMonth() && (
-                  <div className="flex items-center gap-2">
-                    <select value={newHour.member} onChange={(e) => setNewHour({ ...newHour, member: e.target.value })}
-                      className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
-                      {TEAM.map((m) => <option key={m} value={m}>{m}</option>)}
-                    </select>
-                    <input placeholder="What was the work?" value={newHour.description} onChange={(e) => setNewHour({ ...newHour, description: e.target.value })}
-                      className="flex-1 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
-                    <input placeholder="Hrs" value={newHour.hours} onChange={(e) => setNewHour({ ...newHour, hours: e.target.value })}
-                      className="w-16 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
-                    <button onClick={addHour} className="text-xs font-semibold px-3 py-1.5 rounded-lg shrink-0" style={{ background: T.tealDark, color: "#fff" }}>Log</button>
-                  </div>
-                )}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <select value={newHour.member} onChange={(e) => setNewHour({ ...newHour, member: e.target.value })}
+                    className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
+                    {TEAM.map((m) => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                  <input type="date" value={newHour.date} onChange={(e) => setNewHour({ ...newHour, date: e.target.value })} title="Logging retrospectively? Just pick the actual date it happened."
+                    className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+                  <input placeholder="What was the work?" value={newHour.description} onChange={(e) => setNewHour({ ...newHour, description: e.target.value })}
+                    className="flex-1 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink, minWidth: 140 }} />
+                  <input placeholder="Hrs" value={newHour.hours} onChange={(e) => setNewHour({ ...newHour, hours: e.target.value })}
+                    className="w-16 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+                  <button onClick={addHour} className="text-xs font-semibold px-3 py-1.5 rounded-lg shrink-0" style={{ background: T.tealDark, color: "#fff" }}>Log</button>
+                </div>
               </Card>
 
               <Card style={{ padding: 16 }}>
@@ -5865,6 +5953,25 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
                   <input type="file" className="hidden" disabled={uploadingClientFile} onChange={(e) => uploadClientFile(e.target.files?.[0])} />
                 </label>
                 <div className="text-[11px] mt-1.5" style={{ color: T.slateLight }}>Any file type — save an email as a .eml/.msg/PDF first if you're uploading correspondence.</div>
+              </Card>
+              <Card style={{ padding: 14 }}>
+                <div className="text-sm font-semibold mb-2" style={{ color: T.ink }}>Generated documents</div>
+                <div className="text-[11px] mb-2" style={{ color: T.slateLight }}>Every Manual, Policy, Procedure, ERP, and Monthly Report generated for {client.name} — a running record of what's actually been produced.</div>
+                <div className="flex flex-col gap-1.5">
+                  {[...(client.generatedDocuments || [])].reverse().map((d) => (
+                    <div key={d.id} className="flex items-center justify-between text-xs rounded-lg px-2.5 py-1.5" style={{ background: T.paperAlt }}>
+                      <button onClick={() => viewGeneratedDocument(d.path)} className="truncate text-left flex-1 flex items-center gap-2" style={{ color: T.tealDark }} title={d.name}>
+                        <Pill color={T.blue} bg={T.card}>{d.category}</Pill>
+                        <span className="truncate">{d.name}</span>
+                      </button>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span style={{ color: T.slateLight }}>{fmtDate(d.date)}</span>
+                        <ConfirmButton onConfirm={() => removeGeneratedDocument(d.id)} title="Remove from history" iconSize={12} />
+                      </div>
+                    </div>
+                  ))}
+                  {(client.generatedDocuments || []).length === 0 && <div className="text-xs" style={{ color: T.slateLight }}>Nothing generated yet — anything downloaded from Systems or Reports will show up here automatically.</div>}
+                </div>
               </Card>
               <Card style={{ padding: 14 }}>
                 <textarea placeholder="Write a client note..." rows={2} value={noteDraft.text} onChange={(e) => setNoteDraft({ ...noteDraft, text: e.target.value })}
@@ -6063,6 +6170,25 @@ function sanitizeForPdf(text) {
   return deMacroned.replace(/[^\x09\x0A\x0D\x20-\x7E\xA0-\xFF]/g, "");
 }
 function sanitizeArrayForPdf(arr) { return (arr || []).map((v) => sanitizeForPdf(v)); }
+
+// Every PDF generator below calls this right after building its bytes — uploads the actual
+// PDF to Storage and records it against the client, so there's a real, visible history of
+// what's been generated for them (viewable/deletable on their Notes tab), not just whatever
+// happened to land in someone's Downloads folder. Never blocks or breaks the download itself
+// if it fails — that's the primary thing the person actually asked for, this is secondary.
+async function saveGeneratedDocument(client, bytes, filename, category) {
+  try {
+    const path = `generated-documents/${client.id}/${Date.now()}-${filename}`;
+    const blob = new Blob([bytes], { type: "application/pdf" });
+    await uploadBytes(storageRef(storage, path), blob);
+    const entry = { id: Date.now(), name: filename, category, path, date: today() };
+    const snap = await getDoc(doc(db, "clients", client.id));
+    const current = snap.exists() ? snap.data().generatedDocuments || [] : [];
+    await updateDoc(doc(db, "clients", client.id), { generatedDocuments: [...current, entry] });
+  } catch (err) {
+    console.error("Couldn't save generated document to history:", err);
+  }
+}
 
 async function exportReviewLogPdf(entries) {
   entries = (entries || []).map((e) => ({ ...e, type: sanitizeForPdf(e.type), person: sanitizeForPdf(e.person), notes: sanitizeForPdf(e.notes) }));
@@ -6291,7 +6417,9 @@ function wrapTextLines(text, font, size, maxWidth) {
 // section only forces a new page if there genuinely isn't room left); Procedures and
 // Policies each start on their own fresh page, since they're separate standalone documents
 // just bundled together for convenience, not one flowing manual.
-async function downloadBuildPdf({ client, category, categoryKey, included, documentTemplates }) {
+async function downloadBuildPdf({ client, category, categoryKey, included, documentTemplates, docVersion }) {
+  const showVersion = docVersion && client.showVersionInFooter;
+  const versionSuffix = showVersion ? ` · ${docVersion}` : "";
   client = { ...client, name: sanitizeForPdf(client.name), legalName: sanitizeForPdf(client.legalName) };
   documentTemplates = Object.fromEntries(Object.entries(documentTemplates || {}).map(([k, v]) => [k, sanitizeForPdf(v)]));
   const { PDFDocument, StandardFonts, rgb } = await importWithReloadOnStaleChunk(() => import("pdf-lib"));
@@ -6471,17 +6599,19 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
     for (let p = 0; p < pageCount; p++) {
       const pg = pdfDoc.getPage(p);
       const footerText = p === 0
-        ? `Prepared for ${displayName}  ·  ${fmtDate(today())}`
-        : `Prepared for ${displayName}  ·  ${fmtDate(today())}  ·  Page ${p} of ${pageCount - 1}`;
+        ? `Prepared for ${displayName}  ·  ${fmtDate(today())}${versionSuffix}`
+        : `Prepared for ${displayName}  ·  ${fmtDate(today())}  ·  Page ${p} of ${pageCount - 1}${versionSuffix}`;
       pg.drawText(footerText, { x: margin, y: 24, size: 8, font, color: slate });
     }
 
     const bytes = await pdfDoc.save();
+    const manualFilename = `${displayName.replace(/\s+/g, "_")}-Health_and_Safety_Manual-${new Date().getFullYear()}.pdf`;
+    saveGeneratedDocument(client, bytes, manualFilename, "Manual");
     const blob = new Blob([bytes], { type: "application/pdf" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${displayName.replace(/\s+/g, "_")}-Health_and_Safety_Manual-${new Date().getFullYear()}.pdf`;
+    a.download = manualFilename;
     a.click();
     URL.revokeObjectURL(url);
     return;
@@ -6534,17 +6664,18 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
     };
     const newPage = () => { page = pdfDoc.addPage([pageWidth, pageHeight]); drawContentHeader(page); y = pageHeight - topGap; };
 
-    // Numbers/contacts are stored as editable "Label: value" template text (same Templates
-    // tab as everything else) — parsed into table rows here rather than a separate data
-    // format, so changing e.g. the Hospital number is just editing that line of text.
+    // Numbers table is still shared editable "Label: value" template text (same national
+    // numbers for every client) — parsed into table rows here. Company contacts (Emergency
+    // Controller etc.) are different: genuinely per-client, so those come straight off the
+    // client record (client.erpCompanyContacts) instead of being parsed out of free text —
+    // real fields can't produce the malformed rows a hand-typed "Name — X Number — Y" could.
     const parseRows = (raw) => (raw || "").replaceAll("The Company", displayName).split("\n\n").map((p) => p.trim()).filter(Boolean)
       .map((p) => { const idx = p.indexOf(":"); return idx > 0 ? { label: p.slice(0, idx).trim(), value: p.slice(idx + 1).trim() } : null; })
       .filter(Boolean);
     const numberRows = parseRows(documentTemplates[templateKey("erp", "Emergency Contact Numbers")]);
-    const companyRowsRaw = parseRows(documentTemplates[templateKey("erp", "Company Emergency Contacts")]);
-    const companyRows = companyRowsRaw.map((r) => {
-      const m = r.value.match(/Name\s*—\s*([^\n]*?)\s*Number\s*—\s*(.*)$/);
-      return m ? { role: r.label, name: m[1].trim(), number: m[2].trim() } : { role: r.label, name: "", number: r.value };
+    const companyRows = ERP_COMPANY_ROLES.map((role) => {
+      const c = (client.erpCompanyContacts || {})[role] || {};
+      return { role, name: c.name || "", number: c.number || "" };
     });
 
     // Table sits flush against the bottom margin — compute its exact height first (title +
@@ -6649,12 +6780,20 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
       });
     });
 
+    const erpPageCount = pdfDoc.getPageCount();
+    for (let p = 0; p < erpPageCount; p++) {
+      const pg = pdfDoc.getPage(p);
+      pg.drawText(`Prepared for ${displayName}  ·  ${fmtDate(today())}  ·  Page ${p + 1} of ${erpPageCount}${versionSuffix}`, { x: margin, y: 24, size: 8, font, color: slate });
+    }
+
     const bytes = await pdfDoc.save();
+    const erpFilename = `${displayName.replace(/\s+/g, "_")}-Emergency_Response_Plan.pdf`;
+    saveGeneratedDocument(client, bytes, erpFilename, "Emergency Response Plan");
     const blob = new Blob([bytes], { type: "application/pdf" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${displayName.replace(/\s+/g, "_")}-Emergency_Response_Plan.pdf`;
+    a.download = erpFilename;
     a.click();
     URL.revokeObjectURL(url);
     return;
@@ -6701,12 +6840,20 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
       page.drawText("Signed: _______________________________", { x: lMargin, y: sy, size: 9, font, color: rgb(0.2, 0.25, 0.25) });
       page.drawText(`Review Date: ${fmtDate(addDays(today(), 365))}`, { x: rightColX, y: sy, size: 9, font, color: rgb(0.2, 0.25, 0.25) });
 
+      const policyPageCount = pdfDoc.getPageCount();
+      for (let p = 0; p < policyPageCount; p++) {
+        const pg = pdfDoc.getPage(p);
+        pg.drawText(`Prepared for ${displayName}  ·  ${fmtDate(today())}${versionSuffix}`, { x: margin, y: 24, size: 8, font, color: slate });
+      }
+
       const bytes = await pdfDoc.save();
+      const policyFilename = `${displayName.replace(/\s+/g, "_")}-Health_Safety_Policy-${new Date().getFullYear()}.pdf`;
+      saveGeneratedDocument(client, bytes, policyFilename, "Policy");
       const blob = new Blob([bytes], { type: "application/pdf" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${displayName.replace(/\s+/g, "_")}-Health_Safety_Policy-${new Date().getFullYear()}.pdf`;
+      a.download = policyFilename;
       a.click();
       URL.revokeObjectURL(url);
       continue;
@@ -6757,12 +6904,20 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
       page.drawText("Signed: _______________________________", { x: margin, y: sy, size: 9, font, color: rgb(0.2, 0.25, 0.25) });
       page.drawText(`Review Date: ${fmtDate(addDays(today(), 365))}`, { x: rightColX, y: sy, size: 9, font, color: rgb(0.2, 0.25, 0.25) });
 
+      const itemPageCount = pdfDoc.getPageCount();
+      for (let p = 0; p < itemPageCount; p++) {
+        const pg = pdfDoc.getPage(p);
+        pg.drawText(`Prepared for ${displayName}  ·  ${fmtDate(today())}${versionSuffix}`, { x: margin, y: 24, size: 8, font, color: rgb(0.36, 0.45, 0.45) });
+      }
+
       const bytes = await pdfDoc.save();
+      const itemFilename = `${displayName.replace(/\s+/g, "_")}-${label.replace(/\s+/g, "_")}-${new Date().getFullYear()}.pdf`;
+      saveGeneratedDocument(client, bytes, itemFilename, categoryKey === "policies" ? "Policy" : "Procedure");
       const blob = new Blob([bytes], { type: "application/pdf" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${displayName.replace(/\s+/g, "_")}-${label.replace(/\s+/g, "_")}-${new Date().getFullYear()}.pdf`;
+      a.download = itemFilename;
       a.click();
       URL.revokeObjectURL(url);
       continue;
@@ -7003,7 +7158,7 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
     const monthYear = new Date().toLocaleDateString("en-NZ", { month: "long", year: "numeric" });
     for (let p = 0; p < pageCount; p++) {
       const pg = pdfDoc.getPage(p);
-      pg.drawText(`Developed by OSHE for ${displayName}`, { x: margin, y: 24, size: 8, font, color: slate });
+      pg.drawText(`Developed by OSHE for ${displayName}${versionSuffix}`, { x: margin, y: 24, size: 8, font, color: slate });
       const rightText = pageCount > 1 ? `${monthYear}  ·  Page ${p + 1} of ${pageCount}` : monthYear;
       const rightW = font.widthOfTextAtSize(rightText, 8);
       pg.drawText(rightText, { x: pageWidth - margin - rightW, y: 24, size: 8, font, color: slate });
@@ -7011,11 +7166,13 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
 
     const bytes = await pdfDoc.save();
     const safeName = label.replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+    const finalFilename = `${displayName.replace(/\s+/g, "_")}-${safeName}-${new Date().getFullYear()}.pdf`;
+    saveGeneratedDocument(client, bytes, finalFilename, categoryKey === "policies" ? "Policy" : "Procedure");
     const blob = new Blob([bytes], { type: "application/pdf" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${displayName.replace(/\s+/g, "_")}-${safeName}-${new Date().getFullYear()}.pdf`;
+    a.download = finalFilename;
     a.click();
     URL.revokeObjectURL(url);
     // A small gap between each download — most browsers will block or warn on a burst of
@@ -7024,6 +7181,13 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
   }
 }
 
+
+// The three site-contact roles on the Emergency Response Plan — genuinely per-client (each
+// client's own Controller/Warden/First Aider), so these live on the client record itself
+// (client.erpCompanyContacts) rather than the shared Templates tab. That's also what fixes
+// the table-overflow bug: real Name/Number fields can't produce anything but clean data,
+// unlike free text someone has to type in an exact "Name — X Number — Y" format by hand.
+const ERP_COMPANY_ROLES = ["Emergency Controller", "Fire Warden", "First Aider"];
 
 function SystemsView({ clients, selectedId, setSelectedId, documentTemplates, saveDocumentTemplate, systemReviewLog, addSystemReviewLogEntry, customErpItems, addCustomErpItem }) {
   const client = clients.find((c) => c.id === selectedId) || clients[0];
@@ -7034,8 +7198,16 @@ function SystemsView({ clients, selectedId, setSelectedId, documentTemplates, sa
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const [logoPreviewUrl, setLogoPreviewUrl] = useState(null);
   const [downloading, setDownloading] = useState(false);
-  const [newLogEntry, setNewLogEntry] = useState({ type: "Review", person: TEAM[0], notes: "" });
+  const [newLogEntry, setNewLogEntry] = useState({ type: "Review", person: TEAM[0], notes: "", version: "" });
   const [newEmergencyName, setNewEmergencyName] = useState("");
+  const [erpContactDraft, setErpContactDraft] = useState({});
+  useEffect(() => {
+    setErpContactDraft(client.erpCompanyContacts || {});
+  }, [client.id]);
+  const setErpContactField = (role, field, value) => {
+    setErpContactDraft((d) => ({ ...d, [role]: { ...(d[role] || {}), [field]: value } }));
+    updateErpContact(role, field, value);
+  };
   const addEmergency = () => {
     const name = newEmergencyName.trim();
     if (!name) return;
@@ -7105,6 +7277,14 @@ function SystemsView({ clients, selectedId, setSelectedId, documentTemplates, sa
   const hasRealAnswers = Boolean(client?.intake?.ohsmsPack);
 
   const contentFor = (label) => {
+    if (label === "Company Emergency Contacts") {
+      const contacts = client.erpCompanyContacts || {};
+      const lines = ERP_COMPANY_ROLES.map((role) => {
+        const c = contacts[role] || {};
+        return `${role}: ${c.name || "(not set)"} — ${c.number || "(not set)"}`;
+      });
+      return lines.join("\n") + "\n\nSet these in the \"Site Contacts\" panel on the left.";
+    }
     const raw = documentTemplates[templateKey(categoryKey, label)];
     if (!raw) return `No template written yet for "${label}" — add it on the Templates tab.`;
     return raw.replaceAll("The Company", client.name);
@@ -7112,8 +7292,16 @@ function SystemsView({ clients, selectedId, setSelectedId, documentTemplates, sa
 
   const addLogEntry = () => {
     if (!newLogEntry.notes.trim()) return;
-    addSystemReviewLogEntry({ date: today(), type: newLogEntry.type, person: newLogEntry.person, notes: newLogEntry.notes });
-    setNewLogEntry({ type: "Review", person: TEAM[0], notes: "" });
+    addSystemReviewLogEntry({ date: today(), type: newLogEntry.type, person: newLogEntry.person, notes: newLogEntry.notes, version: newLogEntry.version.trim() || null });
+    setNewLogEntry({ type: "Review", person: TEAM[0], notes: "", version: "" });
+  };
+  // The current document version is just whatever the most recent log entry with a version
+  // set says — no separate place that number lives, so it can never drift from the log.
+  const currentDocVersion = [...systemReviewLog].reverse().find((e) => e.version)?.version || null;
+  const updateErpContact = (role, field, value) => {
+    const current = client.erpCompanyContacts || {};
+    const next = { ...current, [role]: { ...(current[role] || {}), [field]: value } };
+    updateDoc(doc(db, "clients", client.id), { erpCompanyContacts: next });
   };
 
   const [newReissueMonth, setNewReissueMonth] = useState("");
@@ -7188,6 +7376,23 @@ function SystemsView({ clients, selectedId, setSelectedId, documentTemplates, sa
               <div className="text-sm font-medium" style={{ color: T.ink }}>{fmtDate(client.ohsmsDue)}</div>
               <div className="text-xs mt-1" style={{ color: T.slate }}>Auto-reminder fires 1 month prior</div>
             </Card>
+            {categoryKey === "erp" && (
+              <Card style={{ padding: 16 }}>
+                <div className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: T.slate }}>Site Contacts</div>
+                <div className="flex flex-col gap-3">
+                  {ERP_COMPANY_ROLES.map((role) => (
+                    <div key={role}>
+                      <div className="text-xs font-semibold mb-1" style={{ color: T.ink }}>{role}</div>
+                      <input placeholder="Name" value={erpContactDraft[role]?.name || ""} onChange={(e) => setErpContactField(role, "name", e.target.value)}
+                        className="w-full text-xs px-2 py-1.5 rounded-lg outline-none mb-1" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+                      <input placeholder="Number" value={erpContactDraft[role]?.number || ""} onChange={(e) => setErpContactField(role, "number", e.target.value)}
+                        className="w-full text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+                    </div>
+                  ))}
+                </div>
+                <div className="text-[11px] mt-2" style={{ color: T.slateLight }}>Specific to {client.name} — not shared with other clients.</div>
+              </Card>
+            )}
           </div>
 
           <div className="w-80 shrink-0 flex flex-col gap-2 overflow-y-auto">
@@ -7236,7 +7441,7 @@ function SystemsView({ clients, selectedId, setSelectedId, documentTemplates, sa
                 onClick={async () => {
                   setDownloading(true);
                   try {
-                    await downloadBuildPdf({ client, category, categoryKey, included, documentTemplates });
+                    await downloadBuildPdf({ client, category, categoryKey, included, documentTemplates, docVersion: currentDocVersion });
                     if (categoryKey === "sections") {
                       // Downloading the Manual is the actual moment it's issued to the
                       // client — that's what should set the date of issue, not a default
@@ -7340,13 +7545,16 @@ function SystemsView({ clients, selectedId, setSelectedId, documentTemplates, sa
         <div className="flex-1 min-h-0 flex flex-col gap-6 overflow-y-auto">
           <div>
             <div className="flex items-center justify-between mb-1">
-              <div className="text-sm font-bold" style={{ color: T.ink }}>System Review Log</div>
+              <div className="flex items-center gap-2">
+                <div className="text-sm font-bold" style={{ color: T.ink }}>System Review Log</div>
+                {currentDocVersion && <Pill color={T.tealDark} bg={T.paperAlt}>Current: {currentDocVersion}</Pill>}
+              </div>
               <button onClick={() => exportReviewLogPdf(systemReviewLog)} className="text-xs font-semibold px-3 py-2 rounded-lg" style={{ background: T.paperAlt, color: T.tealDark }}>
                 Download log as PDF
               </button>
             </div>
             <div className="text-xs mb-3" style={{ color: T.slateLight }}>
-              Shared across every client — when the templates or system itself change, that's one entry here, not something logged per client. This never appears on the manual/policy/procedure documents themselves, only here and in the downloadable log.
+              Shared across every client — when the templates or system itself change, that's one entry here, not something logged per client. Whether the version number shows up in a client's document footer is set per client, on their Overview tab.
             </div>
             <Card style={{ padding: 16 }} className="flex items-center gap-2 flex-wrap">
               <select value={newLogEntry.type} onChange={(e) => setNewLogEntry({ ...newLogEntry, type: e.target.value })}
@@ -7358,6 +7566,8 @@ function SystemsView({ clients, selectedId, setSelectedId, documentTemplates, sa
                 className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
                 {TEAM.map((m) => <option key={m} value={m}>{m}</option>)}
               </select>
+              <input placeholder="Version (e.g. v1.4) — optional" value={newLogEntry.version} onChange={(e) => setNewLogEntry({ ...newLogEntry, version: e.target.value })}
+                className="w-40 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
               <input placeholder="What was reviewed or changed?" value={newLogEntry.notes} onChange={(e) => setNewLogEntry({ ...newLogEntry, notes: e.target.value })}
                 className="flex-1 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink, minWidth: 200 }} />
               <button onClick={addLogEntry} className="text-xs font-semibold px-3 py-1.5 rounded-lg shrink-0" style={{ background: T.tealDark, color: "#fff" }}>Log entry</button>
@@ -7366,7 +7576,10 @@ function SystemsView({ clients, selectedId, setSelectedId, documentTemplates, sa
               {[...systemReviewLog].reverse().map((entry) => (
                 <Card key={entry.id} style={{ padding: 14 }}>
                   <div className="flex items-center justify-between">
-                    <Pill color={entry.type === "Update" ? T.amber : T.tealDark} bg={T.paperAlt}>{entry.type}</Pill>
+                    <div className="flex items-center gap-2">
+                      <Pill color={entry.type === "Update" ? T.amber : T.tealDark} bg={T.paperAlt}>{entry.type}</Pill>
+                      {entry.version && <Pill color={T.blue} bg={T.paperAlt}>{entry.version}</Pill>}
+                    </div>
                     <div className="text-xs" style={{ color: T.slate }}>{fmtDate(entry.date)} &middot; {entry.person}</div>
                   </div>
                   <div className="text-sm mt-2" style={{ color: T.ink }}>{entry.notes}</div>
@@ -7449,10 +7662,30 @@ function SalesView({ leads, convertLeadToClient }) {
     updateDoc(doc(db, "leads", lead.id), { files: (lead.files || []).filter((f) => f.id !== fileId) });
   };
 
-  const sendForm = (lead) => {
+  // Writes to a "mail" collection in the exact shape the official Firebase "Trigger Email"
+  // extension expects (https://extensions.dev/extensions/firebase/firestore-send-email) —
+  // that extension watches this collection and actually sends through whatever SMTP
+  // provider it's configured with. Without that extension (or an equivalent Cloud Function)
+  // installed in the Firebase project, this write just sits there and nothing gets sent —
+  // that installation step happens in the Firebase console, not in this file.
+  const sendForm = async (lead) => {
     const email = emailDrafts[lead.id];
     if (!email) return;
-    updateDoc(doc(db, "leads", lead.id), { formEmail: email, formStatus: "sent" });
+    const link = `https://signup.oshe.co.nz/${lead.id}`;
+    try {
+      await setDoc(doc(collection(db, "mail")), {
+        to: [email],
+        message: {
+          subject: `${lead.company} — complete your OSHE sign-up`,
+          html: `<p>Hi ${lead.contact || "there"},</p><p>Thanks for choosing OSHE. Please complete your sign-up using the link below:</p><p><a href="${link}">${link}</a></p><p>If you have any questions, just reply to this email.</p>`,
+        },
+      });
+      updateDoc(doc(db, "leads", lead.id), { formEmail: email, formStatus: "sent" });
+    } catch (err) {
+      console.error("Couldn't queue sign-up email:", err);
+      alert(`Couldn't send the email: ${err.message || err}. You can still copy the link below and send it manually.`);
+      updateDoc(doc(db, "leads", lead.id), { formEmail: email, formStatus: "sent" });
+    }
   };
 
   const addLead = async () => {
@@ -7556,7 +7789,7 @@ function SalesView({ leads, convertLeadToClient }) {
                           <button onClick={() => navigator.clipboard.writeText(`https://signup.oshe.co.nz/${l.id}`)}
                             className="text-xs font-semibold px-2 py-1.5 rounded-lg shrink-0" style={{ background: T.paperAlt, color: T.tealDark }}>Copy</button>
                         </div>
-                        <div className="text-[11px]" style={{ color: T.slateLight }}>Automated emailing isn't live yet — copy this link and send it yourself for now.</div>
+                        <div className="text-[11px]" style={{ color: T.slateLight }}>Emails through this only send once the Firebase "Trigger Email" extension is set up on the project — copy the link below as a backup either way.</div>
                         <button onClick={() => convertLeadToClient(l)} className="flex items-center justify-center gap-1.5 text-xs font-semibold py-1.5 rounded-lg" style={{ background: T.paperAlt, color: T.tealDark }}>
                           <ArrowUpRight size={12} /> Simulate form completed
                         </button>
@@ -7909,7 +8142,7 @@ function startOfWeek(dateStr) {
   const day = d.getDay();
   const diff = day === 0 ? -6 : 1 - day;
   d.setDate(d.getDate() + diff);
-  return d.toISOString().slice(0, 10);
+  return toLocalDateStr(d);
 }
 function getBillableEntries(client) {
   const hoursEntries = (client.hours?.log || []).map((h) => ({ date: h.date, hours: h.hours }));
@@ -7922,12 +8155,17 @@ function weeklyTargetFor(client) {
 
 function HoursView({ clients }) {
   const [view, setView] = useState("weekly");
+  const [groupBy, setGroupBy] = useState("client");
   const [weekStart, setWeekStart] = useState(startOfWeek(today()));
   const [monthYear, setMonthYear] = useState(currentMonth());
 
   const trackedClients = clients.filter((c) => !c.archived && (c.billingType || "FlatFee") !== "FlatFee");
   const days = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
   const dayHeaderLabel = (d) => new Date(d + "T00:00:00").toLocaleDateString("en-NZ", { weekday: "short" });
+
+  // Every hours.log entry across every tracked client, in one flat list — used for the
+  // "by person" breakdown, which doesn't care which client the hours were against.
+  const allEntries = trackedClients.flatMap((c) => (c.hours?.log || []).map((h) => ({ ...h, clientName: c.name })));
 
   const monthsAvailable = (() => {
     const set = new Set();
@@ -7945,6 +8183,12 @@ function HoursView({ clients }) {
               style={{ background: view === "weekly" ? T.card : "transparent", color: view === "weekly" ? T.tealDark : T.slate }}>Weekly</button>
             <button onClick={() => setView("monthly")} className="text-xs font-semibold px-4 py-1.5 rounded-md"
               style={{ background: view === "monthly" ? T.card : "transparent", color: view === "monthly" ? T.tealDark : T.slate }}>Monthly</button>
+          </div>
+          <div className="flex rounded-lg p-1" style={{ background: T.paperAlt }}>
+            <button onClick={() => setGroupBy("client")} className="text-xs font-semibold px-4 py-1.5 rounded-md"
+              style={{ background: groupBy === "client" ? T.card : "transparent", color: groupBy === "client" ? T.tealDark : T.slate }}>By client</button>
+            <button onClick={() => setGroupBy("person")} className="text-xs font-semibold px-4 py-1.5 rounded-md"
+              style={{ background: groupBy === "person" ? T.card : "transparent", color: groupBy === "person" ? T.tealDark : T.slate }}>By person</button>
           </div>
           {view === "weekly" ? (
             <div className="flex items-center gap-2">
@@ -7965,6 +8209,7 @@ function HoursView({ clients }) {
       </Card>
 
       {view === "weekly" ? (
+        groupBy === "client" ? (
         <Card style={{ padding: 16, overflowX: "auto" }}>
           <div style={{ display: "grid", gridTemplateColumns: "180px repeat(7, 72px) 96px", gap: 4, minWidth: 760 }}>
             <div />
@@ -7999,7 +8244,36 @@ function HoursView({ clients }) {
           </div>
           {trackedClients.length === 0 && <div className="text-xs py-3" style={{ color: T.slateLight }}>No hourly or subscription+hours clients to track.</div>}
         </Card>
-      ) : (
+        ) : (
+        <Card style={{ padding: 16, overflowX: "auto" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "140px repeat(7, 72px) 80px", gap: 4, minWidth: 700 }}>
+            <div />
+            {days.map((d) => (
+              <div key={d} className="text-center">
+                <div className="text-[10px] font-semibold" style={{ color: T.slateLight }}>{dayHeaderLabel(d)}</div>
+                <div className="text-[10px]" style={{ color: T.slateLight }}>{fmtDate(d).replace(/ \d{4}$/, "")}</div>
+              </div>
+            ))}
+            <div className="text-[10px] text-center font-semibold self-center" style={{ color: T.slateLight }}>Total</div>
+
+            {TEAM.map((person) => {
+              const personEntries = allEntries.filter((e) => e.member === person);
+              const dayTotals = days.map((d) => personEntries.filter((e) => e.date === d).reduce((s, e) => s + e.hours, 0));
+              const weekTotal = Math.round(dayTotals.reduce((s, v) => s + v, 0) * 100) / 100;
+              return (
+                <React.Fragment key={person}>
+                  <div className="text-xs font-medium py-2 truncate" style={{ color: T.ink }}>{person}</div>
+                  {dayTotals.map((v, i) => (
+                    <div key={i} className="text-xs text-center py-2" style={{ color: v > 0 ? T.ink : T.border }}>{v > 0 ? v : "—"}</div>
+                  ))}
+                  <div className="text-xs text-center py-2 font-bold" style={{ color: T.tealDark }}>{weekTotal}h</div>
+                </React.Fragment>
+              );
+            })}
+          </div>
+        </Card>
+        )
+      ) : groupBy === "client" ? (
         <Card style={{ padding: 0 }}>
           <div className="grid text-xs font-semibold uppercase tracking-wide px-4 py-3" style={{ gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr", color: T.slate, borderBottom: `1px solid ${T.border}` }}>
             <div>Client</div><div>Hours logged</div><div>Included</div><div>Over / under</div><div>Status</div>
@@ -8020,6 +8294,115 @@ function HoursView({ clients }) {
           })}
           {trackedClients.length === 0 && <div className="text-xs px-4 py-3" style={{ color: T.slateLight }}>No hourly or subscription+hours clients to track.</div>}
         </Card>
+      ) : (
+        <Card style={{ padding: 0 }}>
+          <div className="grid text-xs font-semibold uppercase tracking-wide px-4 py-3" style={{ gridTemplateColumns: "2fr 1fr", color: T.slate, borderBottom: `1px solid ${T.border}` }}>
+            <div>Person</div><div>Hours logged this month</div>
+          </div>
+          {TEAM.map((person) => {
+            const logged = Math.round(allEntries.filter((e) => e.member === person && e.date.slice(0, 7) === monthYear).reduce((s, e) => s + e.hours, 0) * 100) / 100;
+            return (
+              <div key={person} className="grid items-center px-4 py-3 text-sm" style={{ gridTemplateColumns: "2fr 1fr", borderBottom: `1px solid ${T.border}` }}>
+                <div style={{ color: T.ink }} className="font-medium">{person}</div>
+                <div style={{ color: T.tealDark }} className="font-bold">{logged}h</div>
+              </div>
+            );
+          })}
+        </Card>
+      )}
+    </div>
+  );
+}
+
+/* ---------- Overview (first landing page — everything due this month, for everyone) ---------- */
+function OverviewView({ clients, tasks, onboardings, goToClient }) {
+  const thisMonth = currentMonth();
+  const monthStart = `${thisMonth}-01`;
+  const monthEnd = `${addMonthsToMonthYear(thisMonth, 1)}-01`;
+
+  // One list per person — same three sources My Tasks reads from (tasks, client reminders,
+  // current workflow step), just windowed to the calendar month instead of "next 14 days",
+  // since this page is meant to answer "what's due this month", not "what's due soon".
+  const peopleItems = TEAM.map((person) => {
+    const items = [];
+    tasks.filter((t) => t.assignee === person && !t.done && t.dueDate && t.dueDate >= monthStart && t.dueDate < monthEnd)
+      .forEach((t) => items.push({ type: "Task", title: t.title, date: t.dueDate }));
+    clients.forEach((c) => {
+      (c.reminders || []).filter((r) => r.assignee === person && !r.done && r.date && r.date >= monthStart && r.date < monthEnd)
+        .forEach((r) => items.push({ type: "Reminder", title: r.text, date: r.date, clientName: c.name, clientId: c.id }));
+      (onboardings[c.id] || []).filter((i) => !i.completedDate).forEach((inst) => {
+        const currentIdx = inst.steps.findIndex((s) => !s.done);
+        if (currentIdx === -1) return;
+        const step = inst.steps[currentIdx];
+        if (step.owner === person && step.dueDate && step.dueDate >= monthStart && step.dueDate < monthEnd) {
+          items.push({ type: "Workflow", title: step.title, date: step.dueDate, clientName: c.name, clientId: c.id });
+        }
+      });
+    });
+    items.sort((a, b) => a.date.localeCompare(b.date));
+    return { person, items };
+  });
+
+  // Same "left to do this month" logic as the Scheduling tab itself, rolled up across every
+  // Enterprise client so it's visible here without opening each one individually.
+  const enterpriseSummaries = clients.filter((c) => !c.archived && c.profile === "Enterprise Client").map((c) => ({
+    client: c,
+    leftToDo: (c.reminders || []).filter((r) => r.id.startsWith("sched-task-") && !r.done && r.date.slice(0, 7) === thisMonth).sort((a, b) => a.date.localeCompare(b.date)),
+  })).filter((x) => x.leftToDo.length > 0);
+
+  const typeColor = (t) => (t === "Task" ? T.tealDark : t === "Workflow" ? T.blue : "#8B6BA8");
+
+  return (
+    <div className="flex flex-col gap-6">
+      <div>
+        <div className="text-sm font-semibold mb-3" style={{ color: T.ink }}>Due this month — {monthLabel(thisMonth)}</div>
+        <div className="grid grid-cols-2 gap-4">
+          {peopleItems.map(({ person, items }) => (
+            <Card key={person} style={{ padding: 16 }}>
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-sm font-bold" style={{ color: T.ink }}>{person}</div>
+                <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{ background: T.paperAlt, color: T.slate }}>{items.length} item{items.length === 1 ? "" : "s"}</span>
+              </div>
+              <div className="flex flex-col gap-1.5 max-h-64 overflow-y-auto">
+                {items.map((it, i) => (
+                  <button key={i} onClick={() => it.clientId && goToClient(it.clientId, it.type === "Workflow" ? "onboarding" : "reminders")}
+                    className="flex items-center justify-between text-xs py-1 text-left" style={{ borderBottom: `1px solid ${T.border}`, cursor: it.clientId ? "pointer" : "default" }}>
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <Pill color={typeColor(it.type)} bg={T.paperAlt}>{it.type}</Pill>
+                      <span className="truncate" style={{ color: T.ink }}>{it.title}{it.clientName ? ` — ${it.clientName}` : ""}</span>
+                    </div>
+                    <span className="shrink-0 ml-2" style={{ color: urgencyColor(it.date) }}>{fmtDate(it.date)}</span>
+                  </button>
+                ))}
+                {items.length === 0 && <div className="text-xs" style={{ color: T.slateLight }}>Nothing due this month.</div>}
+              </div>
+            </Card>
+          ))}
+        </div>
+      </div>
+
+      {enterpriseSummaries.length > 0 && (
+        <div>
+          <div className="text-sm font-semibold mb-3" style={{ color: T.ink }}>Enterprise clients — left to do this month</div>
+          <div className="flex flex-col gap-3">
+            {enterpriseSummaries.map(({ client, leftToDo }) => (
+              <Card key={client.id} style={{ padding: 16 }}>
+                <button onClick={() => goToClient(client.id, "scheduling")} className="flex items-center justify-between w-full mb-2 text-left">
+                  <div className="text-sm font-semibold" style={{ color: T.ink }}>{client.name}</div>
+                  <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{ background: T.paperAlt, color: T.amber }}>{leftToDo.length} left</span>
+                </button>
+                <div className="flex flex-col gap-1">
+                  {leftToDo.map((r) => (
+                    <div key={r.id} className="flex items-center justify-between text-xs py-1" style={{ borderBottom: `1px solid ${T.border}` }}>
+                      <span style={{ color: T.ink }}>{r.text} <span style={{ color: T.slateLight }}>— {r.assignee}</span></span>
+                      <span style={{ color: T.slateLight }}>{fmtDate(r.date)}</span>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            ))}
+          </div>
+        </div>
       )}
     </div>
   );
@@ -8539,11 +8922,18 @@ function WorkflowsView({ workflows }) {
                 <input type="number" min="0" step="0.5" value={step.estHours ?? ""} onChange={(e) => updateWorkflow(wf.id, (w) => ({ ...w, steps: w.steps.map((s) => (s.id === step.id ? { ...s, estHours: e.target.value ? Number(e.target.value) : 0 } : s)) }))}
                   className="w-14 px-2 py-1.5 rounded-lg outline-none text-xs" style={{ border: `1px solid ${T.border}`, color: T.ink }} title="Estimated hours — counts toward Schedule workload" placeholder="hrs" />
                 <span className="text-[11px] shrink-0" style={{ color: T.slateLight }}>hrs</span>
+                <select value={step.recurring || "none"} onChange={(e) => updateWorkflow(wf.id, (w) => ({ ...w, steps: w.steps.map((s) => (s.id === step.id ? { ...s, recurring: e.target.value } : s)) }))}
+                  className="px-2 py-1.5 rounded-lg outline-none text-xs" style={{ border: `1px solid ${T.border}`, color: T.ink }} title="Some steps need redoing on a schedule rather than being a one-time thing">
+                  <option value="none">One-time</option>
+                  <option value="monthly">Monthly</option>
+                  <option value="quarterly">Quarterly</option>
+                  <option value="yearly">Yearly</option>
+                </select>
                 <button onClick={() => updateWorkflow(wf.id, (w) => ({ ...w, steps: w.steps.filter((s) => s.id !== step.id) }))}><Trash2 size={14} color={T.slateLight} /></button>
               </div>
             ))}
           </div>
-          <button onClick={() => updateWorkflow(wf.id, (w) => ({ ...w, steps: [...w.steps, { id: "step" + Date.now(), title: "New step", owner: TEAM[0], dueDays: 7, estHours: 1 }] }))}
+          <button onClick={() => updateWorkflow(wf.id, (w) => ({ ...w, steps: [...w.steps, { id: "step" + Date.now(), title: "New step", owner: TEAM[0], dueDays: 7, estHours: 1, recurring: "none" }] }))}
             className="flex items-center gap-1.5 text-xs font-semibold mt-3" style={{ color: T.tealDark }}>
             <Plus size={13} /> Add step
           </button>
@@ -8560,7 +8950,7 @@ function dashboardMonths() {
   for (let i = 11; i >= 0; i--) {
     const d = new Date();
     d.setMonth(d.getMonth() - i);
-    months.push(d.toISOString().slice(0, 7));
+    months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
   }
   return months;
 }
@@ -8928,7 +9318,7 @@ function parseCsv(text) {
 function reportKey(clientId, monthYear) { return `${clientId}__${monthYear}`; }
 
 
-function currentMonthYear() { return new Date().toISOString().slice(0, 7); }
+function currentMonthYear() { return today().slice(0, 7); }
 
 function monthYearLabel(monthYear) { return new Date(monthYear + "-02").toLocaleDateString("en-NZ", { month: "long", year: "numeric" }); }
 
@@ -9317,11 +9707,13 @@ async function downloadMonthlyReportPdf({ client, monthYear, sections, highlight
   }
 
   const bytes = await pdfDoc.save();
+  const reportFilename = `${client.name.replace(/\s+/g, "_")}-Monthly_Report-${monthYear}.pdf`;
+  saveGeneratedDocument(client, bytes, reportFilename, "Monthly Report");
   const blob = new Blob([bytes], { type: "application/pdf" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `${client.name.replace(/\s+/g, "_")}-Monthly_Report-${monthYear}.pdf`;
+  a.download = reportFilename;
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -9740,14 +10132,14 @@ function expandRecurringDates(anchorDate, start, end, repeat) {
   if (repeat === "weekly") {
     const dow = anchor.getDay();
     while (cursor.getDay() !== dow) cursor.setDate(cursor.getDate() + 1);
-    while (cursor.toISOString().slice(0, 10) < end) {
-      dates.push(cursor.toISOString().slice(0, 10));
+    while (toLocalDateStr(cursor) < end) {
+      dates.push(toLocalDateStr(cursor));
       cursor.setDate(cursor.getDate() + 7);
     }
   } else if (repeat === "daily") {
-    while (cursor.toISOString().slice(0, 10) < end) {
+    while (toLocalDateStr(cursor) < end) {
       const dow = cursor.getDay(); // 0 = Sunday, 6 = Saturday
-      if (dow !== 0 && dow !== 6) dates.push(cursor.toISOString().slice(0, 10));
+      if (dow !== 0 && dow !== 6) dates.push(toLocalDateStr(cursor));
       cursor.setDate(cursor.getDate() + 1);
     }
   }
@@ -9899,7 +10291,7 @@ function ScheduleView({ tasks, clients, onboardings, scheduleBlocks, addSchedule
 }
 
 export default function App() {
-  const [module, setModule] = useState("clients");
+  const [module, setModule] = useState("overview");
   // Detect a mobile-width viewport and default straight into the Quick Add screen the first
   // time — field staff on their phone want notes/tasks fast, not the full desktop layout.
   // They can still reach the full app any time via the "Full App" button, and from there
@@ -10601,13 +10993,14 @@ export default function App() {
         <div className="px-3 py-3 mb-3">
           <img src="/logo.png" alt="OSHE" style={{ height: 36, width: "auto" }} />
         </div>
+        <NavItem icon={LayoutDashboard} label="Overview" active={module === "overview"} onClick={() => setModule("overview")} />
         <NavItem icon={Smartphone} label="Quick Add" active={false} onClick={() => setModule("mobile")} />
         <NavItem icon={Users} label="Clients" active={module === "clients"} onClick={() => setModule("clients")} />
         <NavItem icon={Layers} label="Systems" active={module === "systems"} onClick={() => setModule("systems")} />
         <NavItem icon={TrendingUp} label="Sales" active={module === "sales"} onClick={() => setModule("sales")} />
         <NavItem icon={Clock} label="Hours" active={module === "hours"} onClick={() => setModule("hours")} />
         {canSeeBilling && <NavItem icon={ClipboardList} label="Billing" active={module === "billing"} onClick={() => setModule("billing")} />}
-        <NavItem icon={LayoutDashboard} label="Dashboards" active={module === "dashboards"} onClick={() => setModule("dashboards")} />
+        <NavItem icon={PieChart} label="Dashboards" active={module === "dashboards"} onClick={() => setModule("dashboards")} />
         <NavItem icon={Store} label="Resellers" active={module === "resellers"} onClick={() => setModule("resellers")} />
         <NavItem icon={ListChecks} label="Workflows" active={module === "workflows"} onClick={() => setModule("workflows")} />
         <NavItem icon={ListTodo} label="My Tasks" active={module === "tasks"} onClick={() => setModule("tasks")} />
@@ -10626,7 +11019,7 @@ export default function App() {
         <div className="flex items-center justify-between px-8 py-5" style={{ borderBottom: `1px solid ${T.border}` }}>
           <div>
             <div className="text-xl font-bold" style={{ color: T.ink }}>
-              {{ clients: "Clients", systems: "Systems", sales: "Sales", billing: "Billing", workflows: "Workflows", resellers: "Resellers", tasks: "My Tasks", dashboards: "Dashboards", reports: "Reports", schedule: "Schedule", hours: "Hours" }[module]}
+              {{ overview: "Overview", clients: "Clients", systems: "Systems", sales: "Sales", billing: "Billing", workflows: "Workflows", resellers: "Resellers", tasks: "My Tasks", dashboards: "Dashboards", reports: "Reports", schedule: "Schedule", hours: "Hours" }[module]}
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -10645,6 +11038,7 @@ export default function App() {
           )}
           {module === "systems" && <SystemsView clients={clients} selectedId={selectedClient} setSelectedId={setSelectedClient} documentTemplates={documentTemplates} saveDocumentTemplate={saveDocumentTemplate} systemReviewLog={systemReviewLog} addSystemReviewLogEntry={addSystemReviewLogEntry} customErpItems={customErpItems} addCustomErpItem={addCustomErpItem} />}
           {module === "sales" && <SalesView leads={leads} convertLeadToClient={convertLeadToClient} />}
+          {module === "overview" && <OverviewView clients={clients} tasks={tasks} onboardings={onboardings} goToClient={goToClient} />}
           {module === "hours" && <HoursView clients={clients} />}
           {module === "billing" && canSeeBilling && <BillingOverview clients={clients} resellers={resellers} />}
           {module === "dashboards" && <DashboardsView clients={clients} tasks={tasks} touchpointBaselines={touchpointBaselines} updateTouchpointBaseline={updateTouchpointBaseline} />}

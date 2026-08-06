@@ -218,7 +218,7 @@ export default function SignupForm() {
   const [step, setStep] = useState(0);
   const [form, setForm] = useState({
     company: "", email: "", contactName: "", accountsEmail: "", phone: "", startDate: "",
-    address: "", workTasks: "", appUsers: "", paymentFreq: "", requireOhsms: "", hearAboutUs: "",
+    address: "", workTasks: "", appUsers: "", paymentFreq: "", requireOhsms: "", hearAboutUs: "", wantsMonthlyReports: false,
   });
   const [t, setT] = useState({
     contractors: null, physicalWorkplace: null, plant: null, vehicles: null, ppe: null,
@@ -383,6 +383,12 @@ export default function SignupForm() {
                     <option>Yes</option>
                   </select>
                 </Field>
+              </div>
+              <div className="col-span-2 flex items-center gap-2.5 rounded-lg p-3" style={{ background: T.paperAlt }}>
+                <input type="checkbox" id="wantsMonthlyReports" checked={form.wantsMonthlyReports} onChange={(e) => set("wantsMonthlyReports", e.target.checked)} />
+                <label htmlFor="wantsMonthlyReports" className="text-sm" style={{ color: T.ink }}>
+                  Add Monthly Reports — <span style={{ color: T.slate }}>$130+ per month</span>
+                </label>
               </div>
             </div>
 

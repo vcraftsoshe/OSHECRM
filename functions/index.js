@@ -335,6 +335,7 @@ exports.submitSignup = onCall({ cors: true }, async (request) => {
     paymentFreq: form.paymentFreq || null,
     requireOhsms: form.requireOhsms || null,
     hearAboutUs: form.hearAboutUs || null,
+    wantsMonthlyReports: Boolean(form.wantsMonthlyReports),
     triggers: triggers || null,
     emergencies: emergencies || [],
     emergencyOther: emergencyOther || null,

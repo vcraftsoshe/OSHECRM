@@ -1,16 +1,16 @@
-onst { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { onDocumentCreated } = require("firebase-functions/v2/firestore");
 const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
 const { PDFDocument, StandardFonts, rgb } = require("pdf-lib");
 const { Resend } = require("resend");
- 
+
 const resendApiKey = defineSecret("RESEND_API_KEY");
- 
+
 admin.initializeApp();
 const db = admin.firestore();
 const bucket = admin.storage().bucket("oshe-895ad.firebasestorage.app");
- 
+
 function today() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -19,7 +19,7 @@ function addDays(dateStr, days) {
   d.setDate(d.getDate() + days);
   return d.toISOString().slice(0, 10);
 }
- 
+
 /* ---------- OHSMS builder logic — keep in sync with SignupForm.jsx and ohsms-builder-logic.md ---------- */
 const SECTION_ITEMS = [
   { label: "1. Introduction", always: true },
@@ -94,29 +94,29 @@ const CONDITIONAL_POLICIES = [
   { key: "vehicles", label: "Driver Statement Policy" },
   { key: "environmental", label: "Environmental Policy" },
 ];
- 
+
 function computeOhsmsPack(t) {
   const complianceForced = t.compliance === true;
- 
+
   const sections = SECTION_ITEMS.filter((item) => {
     if (item.always) return true;
     if (item.key === "continualImprovement") return t.continualImprovement || complianceForced;
     return Boolean(t[item.key]);
   }).map((item) => item.label);
- 
+
   const procedures = [...ALWAYS_PROCEDURES];
   CONDITIONAL_PROCEDURES.forEach((p) => {
     const on = p.key === "continualImprovement" ? (t.continualImprovement || complianceForced) : t[p.key];
     if (on) procedures.push(p.label);
   });
   if (complianceForced) procedures.push(...COMPLIANCE_EXTRA_PROCEDURES);
- 
+
   const policies = [...ALWAYS_POLICIES];
   CONDITIONAL_POLICIES.forEach((p) => { if (t[p.key]) policies.push(p.label); });
- 
+
   return { sections, procedures, policies, forms: [] };
 }
- 
+
 /* ---------- T&Cs text — keep in sync with SignupForm.jsx ---------- */
 const termsSections = [
   { title: "1. Subscription and Access", body: [
@@ -189,7 +189,7 @@ const termsSections = [
     "Any amendments must be in writing and signed by both parties.",
   ]},
 ];
- 
+
 /* ---------- PDF generation ---------- */
 function wrapText(text, font, size, maxWidth) {
   const words = text.split(" ");
@@ -207,7 +207,7 @@ function wrapText(text, font, size, maxWidth) {
   if (line) lines.push(line);
   return lines;
 }
- 
+
 async function generateSignedPdf({ companyName, contactName, submittedDate, signaturePngBytes }) {
   const pdfDoc = await PDFDocument.create();
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
@@ -217,10 +217,10 @@ async function generateSignedPdf({ companyName, contactName, submittedDate, sign
   const pageHeight = 842;
   const maxWidth = pageWidth - margin * 2;
   const lineHeight = 14;
- 
+
   let page = pdfDoc.addPage([pageWidth, pageHeight]);
   let y = pageHeight - margin;
- 
+
   const newPage = () => {
     page = pdfDoc.addPage([pageWidth, pageHeight]);
     y = pageHeight - margin;
@@ -232,11 +232,11 @@ async function generateSignedPdf({ companyName, contactName, submittedDate, sign
     page.drawText(text, { x: margin, y, size, font: bold ? boldFont : font, color: rgb(0.08, 0.16, 0.14) });
     y -= gap;
   };
- 
+
   drawLine("OSHE Limited — Terms & Conditions", { size: 16, bold: true, gap: 24 });
   drawLine(`Client: ${companyName}`, { size: 11, bold: true, gap: 16 });
   drawLine(`Signed by: ${contactName}     Date: ${submittedDate}`, { size: 10, gap: 22 });
- 
+
   for (const section of termsSections) {
     ensureSpace(20);
     drawLine(section.title, { size: 12, bold: true, gap: 16 });
@@ -246,7 +246,7 @@ async function generateSignedPdf({ companyName, contactName, submittedDate, sign
       y -= 4;
     }
   }
- 
+
   ensureSpace(160);
   y -= 10;
   drawLine("Signature:", { size: 11, bold: true, gap: 18 });
@@ -257,30 +257,30 @@ async function generateSignedPdf({ companyName, contactName, submittedDate, sign
     page.drawImage(sigImage, { x: margin, y: y - sigDims.height, width: sigDims.width, height: sigDims.height });
     y -= sigDims.height + 10;
   }
- 
+
   return pdfDoc.save();
 }
- 
+
 /* ---------- Main function ---------- */
 exports.submitSignup = onCall({ cors: true }, async (request) => {
   const data = request.data || {};
   const { leadId, form, triggers, emergencies, emergencyOther, logoDataUrl, signatureDataUrl, existingFiles } = data;
- 
+
   if (!form || !form.company || !form.email || !form.contactName || !form.phone) {
     throw new HttpsError("invalid-argument", "Missing required company details.");
   }
   if (!signatureDataUrl) {
     throw new HttpsError("invalid-argument", "A signature is required.");
   }
- 
+
   const clientId = "c" + Date.now();
   const submittedDate = today();
- 
+
   // Default workflow for onboarding
   const workflowsSnap = await db.collection("workflows").where("isDefault", "==", true).limit(1).get();
   const wfDoc = workflowsSnap.empty ? (await db.collection("workflows").limit(1).get()).docs[0] : workflowsSnap.docs[0];
   const wf = wfDoc ? { id: wfDoc.id, ...wfDoc.data() } : null;
- 
+
   // Logo upload (optional)
   let logoPath = null;
   if (logoDataUrl && logoDataUrl.startsWith("data:image")) {
@@ -290,7 +290,7 @@ exports.submitSignup = onCall({ cors: true }, async (request) => {
     await file.save(buffer, { metadata: { contentType: "image/png" } });
     logoPath = file.name;
   }
- 
+
   // Any existing documents the client attached, uploaded as-is for OSHE to work into their system
   const existingFilePaths = [];
   if (Array.isArray(existingFiles)) {
@@ -306,13 +306,13 @@ exports.submitSignup = onCall({ cors: true }, async (request) => {
       existingFilePaths.push({ name: f.name, path: file.name });
     }
   }
- 
+
   // Signature upload
   const sigBase64 = signatureDataUrl.split(",")[1];
   const sigBuffer = Buffer.from(sigBase64, "base64");
   const sigFile = bucket.file(`signatures/${clientId}/signature.png`);
   await sigFile.save(sigBuffer, { metadata: { contentType: "image/png" } });
- 
+
   // Signed T&Cs PDF
   const pdfBytes = await generateSignedPdf({
     companyName: form.company,
@@ -322,11 +322,11 @@ exports.submitSignup = onCall({ cors: true }, async (request) => {
   });
   const pdfFile = bucket.file(`signed-terms/${clientId}.pdf`);
   await pdfFile.save(Buffer.from(pdfBytes), { metadata: { contentType: "application/pdf" } });
- 
+
   // OHSMS pack, computed server-side from the trigger answers (not trusted blindly from the client)
   const wantsOhsms = form.requireOhsms === "Yes";
   const pack = wantsOhsms && triggers ? computeOhsmsPack(triggers) : null;
- 
+
   const intake = {
     submittedDate,
     contactEmail: form.email,
@@ -349,7 +349,7 @@ exports.submitSignup = onCall({ cors: true }, async (request) => {
     existingFiles: existingFilePaths,
     logoPath,
   };
- 
+
   const newClient = {
     name: form.company,
     legalName: form.company,
@@ -370,9 +370,9 @@ exports.submitSignup = onCall({ cors: true }, async (request) => {
     ohsmsDue: addDays(submittedDate, 90),
     intake,
   };
- 
+
   await db.collection("clients").doc(clientId).set(newClient);
- 
+
   if (wf) {
     await db.collection("onboardings").doc(clientId).set({
       list: [{
@@ -385,14 +385,14 @@ exports.submitSignup = onCall({ cors: true }, async (request) => {
       }],
     });
   }
- 
+
   if (leadId) {
     await db.collection("leads").doc(leadId).delete().catch(() => {});
   }
- 
+
   return { clientId };
 });
- 
+
 /* ---------- Email sending (Resend) ----------
    App.jsx writes a doc to the "mail" collection ({ to: [...], message: { subject, html } })
    whenever it needs to send something — right now that's the Sales tab's "send sign-up
@@ -405,7 +405,7 @@ exports.sendQueuedEmail = onDocumentCreated(
     const snap = event.data;
     const data = snap.data();
     if (!data || !data.to || !data.message) return;
- 
+
     const resend = new Resend(resendApiKey.value());
     try {
       await resend.emails.send({

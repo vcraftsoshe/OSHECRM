@@ -1,4 +1,4 @@
-
+{
   "name": "functions",
   "description": "Cloud Functions for the OSHE CRM",
   "main": "index.js",
@@ -12,3 +12,4 @@
     "resend": "^6.18.1"
   },
   "private": true
+}

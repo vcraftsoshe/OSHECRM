@@ -4724,10 +4724,11 @@ function ClientScheduling({ client, updateClient }) {
       const upcoming = expandScheduleEntriesInRange(entries, rangeStart, rangeEnd);
       if (upcoming.length === 0) return;
       const existingIds = new Set((client.reminders || []).map((r) => r.id));
+      const deletedIds = new Set(client.deletedScheduleTaskIds || []);
       const newReminders = [];
       upcoming.forEach((occ) => {
         const taskId = `sched-task-${occ.id}-${occ.occurrenceDate}`;
-        if (!existingIds.has(taskId)) {
+        if (!existingIds.has(taskId) && !deletedIds.has(taskId)) {
           newReminders.push({ id: taskId, text: occ.title, date: occ.occurrenceDate, assignee: occ.assignee, estHours: occ.hours || 0, done: false, recurring: "none" });
         }
       });
@@ -4756,12 +4757,12 @@ function ClientScheduling({ client, updateClient }) {
       // Cleans up every task this entry created (one per occurrence, all sharing the
       // "sched-task-{id}-" prefix) — not just the current month's, since occurrences up to
       // 2 months out may have already been created.
-      reminders: (c.reminders || []).filter((r) => !r.id.startsWith(`sched-task-${id}-`)),
+      reminders: (c.reminders || []).filter((r) => !String(r.id).startsWith(`sched-task-${id}-`)),
       // And any of those tasks that were already ticked off already have a matching hours.log
       // entry (id "sched-hours-sched-task-{id}-...") — without this, deleting the schedule
       // entry after it was already billed left that hours entry sitting there orphaned,
       // permanently, with nothing left pointing back to it to ever clean it up.
-      hours: { ...c.hours, log: (c.hours?.log || []).filter((h) => !h.id.startsWith(`sched-hours-sched-task-${id}-`)) },
+      hours: { ...c.hours, log: (c.hours?.log || []).filter((h) => !String(h.id).startsWith(`sched-hours-sched-task-${id}-`)) },
     }));
   };
 
@@ -4827,10 +4828,10 @@ function ClientScheduling({ client, updateClient }) {
   const thisRealMonth = currentMonth();
   const nextRealMonth = addMonthsToMonthYear(thisRealMonth, 1);
   const leftToDoThisMonth = (client.reminders || [])
-    .filter((r) => r.id.startsWith("sched-task-") && !r.done && r.date.slice(0, 7) === thisRealMonth)
+    .filter((r) => String(r.id).startsWith("sched-task-") && !r.done && r.date.slice(0, 7) === thisRealMonth)
     .sort((a, b) => a.date.localeCompare(b.date));
   const comingUpNextMonth = (client.reminders || [])
-    .filter((r) => r.id.startsWith("sched-task-") && r.date.slice(0, 7) === nextRealMonth)
+    .filter((r) => String(r.id).startsWith("sched-task-") && r.date.slice(0, 7) === nextRealMonth)
     .sort((a, b) => a.date.localeCompare(b.date));
 
   return (
@@ -5438,7 +5439,7 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
         ? [...c.notes, { id: Date.now(), author: "You", date: today(), text: `Completed reminder: "${reminder.text}"` }]
         : c.notes;
       let hours = c.hours;
-      if (completing && id.startsWith("sched-task-") && reminder.estHours) {
+      if (completing && String(id).startsWith("sched-task-") && reminder.estHours) {
         const logId = `sched-hours-${id}`;
         const alreadyLogged = (c.hours?.log || []).some((h) => h.id === logId);
         if (!alreadyLogged) {
@@ -5455,11 +5456,15 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
     // this, the Dashboards reconciliation effect would just recreate it on the very next
     // pass since the underlying "below target" condition is still true.
     if (id === "touchpoint-baseline-" + c.id) patch.touchpointSnoozedUntil = addDays(today(), 30);
-    // If this was a Scheduling-tab task that had already been ticked off (and so already
-    // billed), deleting it directly from here shouldn't leave that hours entry behind either.
-    if (id.startsWith("sched-task-")) {
+    // Same problem for a Scheduling-tab task: as long as the schedule entry that spawned it
+    // still exists, the Scheduling tab's own reconciliation would just recreate this exact
+    // occurrence again next time it runs. Recording it here is what makes "delete" actually
+    // stick — the real way to stop it recurring for good is deleting the schedule entry
+    // itself (Scheduling tab), this is just for "skip this one occurrence".
+    if (String(id).startsWith("sched-task-")) {
       const logId = `sched-hours-${id}`;
       patch.hours = { ...c.hours, log: (c.hours?.log || []).filter((h) => h.id !== logId) };
+      patch.deletedScheduleTaskIds = [...(c.deletedScheduleTaskIds || []), id];
     }
     return { ...c, ...patch };
   });
@@ -8347,7 +8352,7 @@ function OverviewView({ clients, tasks, onboardings, goToClient }) {
   // Enterprise client so it's visible here without opening each one individually.
   const enterpriseSummaries = clients.filter((c) => !c.archived && c.profile === "Enterprise Client").map((c) => ({
     client: c,
-    leftToDo: (c.reminders || []).filter((r) => r.id.startsWith("sched-task-") && !r.done && r.date.slice(0, 7) === thisMonth).sort((a, b) => a.date.localeCompare(b.date)),
+    leftToDo: (c.reminders || []).filter((r) => String(r.id).startsWith("sched-task-") && !r.done && r.date.slice(0, 7) === thisMonth).sort((a, b) => a.date.localeCompare(b.date)),
   })).filter((x) => x.leftToDo.length > 0);
 
   const typeColor = (t) => (t === "Task" ? T.tealDark : t === "Workflow" ? T.blue : "#8B6BA8");
@@ -11038,7 +11043,11 @@ export default function App() {
           )}
           {module === "systems" && <SystemsView clients={clients} selectedId={selectedClient} setSelectedId={setSelectedClient} documentTemplates={documentTemplates} saveDocumentTemplate={saveDocumentTemplate} systemReviewLog={systemReviewLog} addSystemReviewLogEntry={addSystemReviewLogEntry} customErpItems={customErpItems} addCustomErpItem={addCustomErpItem} />}
           {module === "sales" && <SalesView leads={leads} convertLeadToClient={convertLeadToClient} />}
-          {module === "overview" && <OverviewView clients={clients} tasks={tasks} onboardings={onboardings} goToClient={goToClient} />}
+          {module === "overview" && (
+            <ErrorBoundary>
+              <OverviewView clients={clients} tasks={tasks} onboardings={onboardings} goToClient={goToClient} />
+            </ErrorBoundary>
+          )}
           {module === "hours" && <HoursView clients={clients} />}
           {module === "billing" && canSeeBilling && <BillingOverview clients={clients} resellers={resellers} />}
           {module === "dashboards" && <DashboardsView clients={clients} tasks={tasks} touchpointBaselines={touchpointBaselines} updateTouchpointBaseline={updateTouchpointBaseline} />}

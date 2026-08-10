@@ -4880,10 +4880,12 @@ function ClientScheduling({ client, updateClient, toggleReminderDone }) {
           <div className="flex flex-col gap-1.5">
             {leftToDoThisMonth.map((r) => (
               <div key={r.id} className="flex items-center justify-between text-xs py-1" style={{ borderBottom: `1px solid ${T.border}` }}>
-                <label className="flex items-center gap-2 min-w-0">
-                  <input type="checkbox" checked={false} onChange={() => toggleReminderDone && toggleReminderDone(r.id)} />
+                <div className="flex items-center gap-2 min-w-0">
+                  <button onClick={() => toggleReminderDone && toggleReminderDone(r.id)} title="Mark done">
+                    <Circle size={14} color={T.slate} />
+                  </button>
                   <span className="truncate" style={{ color: T.ink }}>{r.text}</span>
-                </label>
+                </div>
                 <span className="shrink-0 ml-2" style={{ color: T.slateLight }}>{r.assignee} · {fmtDate(r.date)}</span>
               </div>
             ))}

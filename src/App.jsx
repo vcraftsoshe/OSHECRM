@@ -5067,6 +5067,28 @@ function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, wor
       return { ...inst, steps };
     }));
   };
+  // An "Email to client" step doesn't get a plain checkbox — clicking it queues the actual
+  // email (same mail-collection pipeline as the Sales tab's sign-up link) to whichever
+  // address is on file for the client, substituting {{clientName}} in the body, then marks
+  // the step done via the normal markDone flow so recurring email steps behave the same
+  // way any other recurring step does.
+  const sendStepEmail = async (inst, step) => {
+    const to = client.billing?.email || client.contacts?.[0]?.email;
+    if (!to) { alert(`No email address on file for ${client.name} — add one on the Overview tab first.`); return; }
+    try {
+      await setDoc(doc(collection(db, "mail")), {
+        to: [to],
+        message: {
+          subject: (step.emailSubject || step.title).replaceAll("{{clientName}}", client.name),
+          html: (step.emailBody || "").replaceAll("{{clientName}}", client.name).replaceAll("\n", "<br>"),
+        },
+      });
+      markDone(inst.id, step.id);
+    } catch (err) {
+      console.error("Couldn't queue workflow step email:", err);
+      alert(`Couldn't send this email: ${err.message || err}`);
+    }
+  };
 
   const startOnboarding = () => {
     const wf = workflows.find((w) => w.id === pickerWorkflowId);
@@ -5164,9 +5186,12 @@ function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, wor
                       <div className="flex items-center gap-2.5">
                         {s.done ? <CheckCircle2 size={16} color={T.tealDark} /> : <Circle size={16} color={isCurrent ? T.amber : T.slateLight} />}
                         <div>
-                          <div className="text-sm" style={{ color: T.ink, textDecoration: s.done ? "line-through" : "none" }}>{s.title}</div>
+                          <div className="text-sm flex items-center gap-1.5" style={{ color: T.ink, textDecoration: s.done ? "line-through" : "none" }}>
+                            {s.type === "email" && <Mail size={12} color={T.blue} />}
+                            {s.title}
+                          </div>
                           <div className="text-xs flex items-center gap-2" style={{ color: T.slate }}>
-                            <span>{s.owner}</span>
+                            <span>{s.type === "email" ? `${s.owner} to send` : s.owner}</span>
                             {!s.done && s.dueDate && (
                               <span className="flex items-center gap-1" style={{ color: urgencyColor(s.dueDate) }}>
                                 <Calendar size={10} /> {daysUntil(s.dueDate) < 0 ? `Overdue · was due ${fmtDate(s.dueDate)}` : `Due ${fmtDate(s.dueDate)}`}
@@ -5179,9 +5204,15 @@ function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, wor
                         </div>
                       </div>
                       {isCurrent && !s.done && (
-                        <button onClick={() => markDone(inst.id, s.id)} className="text-xs font-semibold px-3 py-1.5 rounded-lg" style={{ background: T.tealDark, color: "#fff" }}>
-                          Mark done &amp; hand off
-                        </button>
+                        s.type === "email" ? (
+                          <button onClick={() => sendStepEmail(inst, s)} className="text-xs font-semibold px-3 py-1.5 rounded-lg flex items-center gap-1.5" style={{ background: T.blue, color: "#fff" }}>
+                            <Mail size={13} /> Send email to client
+                          </button>
+                        ) : (
+                          <button onClick={() => markDone(inst.id, s.id)} className="text-xs font-semibold px-3 py-1.5 rounded-lg" style={{ background: T.tealDark, color: "#fff" }}>
+                            Mark done &amp; hand off
+                          </button>
+                        )
                       )}
                     </div>
                   );
@@ -7667,12 +7698,14 @@ function SalesView({ leads, convertLeadToClient }) {
     updateDoc(doc(db, "leads", lead.id), { files: (lead.files || []).filter((f) => f.id !== fileId) });
   };
 
-  // Writes to a "mail" collection in the exact shape the official Firebase "Trigger Email"
-  // extension expects (https://extensions.dev/extensions/firebase/firestore-send-email) —
-  // that extension watches this collection and actually sends through whatever SMTP
-  // provider it's configured with. Without that extension (or an equivalent Cloud Function)
-  // installed in the Firebase project, this write just sits there and nothing gets sent —
-  // that installation step happens in the Firebase console, not in this file.
+  // Writes to a "mail" collection — a Cloud Function (sendQueuedEmail, in functions/index.js)
+  // watches this collection and sends through Resend, then writes a status ("sent" or
+  // "error") back onto the same document. If sending isn't working, that document's status
+  // field is the fastest way to see why — not something visible from here in the app.
+  // Once the "Sign-up link" template is created in Resend, paste its Template ID here —
+  // switches sendForm over to using it (with the same personalisation) instead of the raw
+  // HTML below. Leave as null and nothing changes from how it works right now.
+  const SIGNUP_EMAIL_TEMPLATE_ID = null;
   const sendForm = async (lead) => {
     const email = emailDrafts[lead.id];
     if (!email) return;
@@ -7680,10 +7713,14 @@ function SalesView({ leads, convertLeadToClient }) {
     try {
       await setDoc(doc(collection(db, "mail")), {
         to: [email],
-        message: {
-          subject: `${lead.company} — complete your OSHE sign-up`,
-          html: `<p>Hi ${lead.contact || "there"},</p><p>Thanks for choosing OSHE. Please complete your sign-up using the link below:</p><p><a href="${link}">${link}</a></p><p>If you have any questions, just reply to this email.</p>`,
-        },
+        ...(SIGNUP_EMAIL_TEMPLATE_ID
+          ? { template: { id: SIGNUP_EMAIL_TEMPLATE_ID, variables: { COMPANY: lead.company, CONTACT_NAME: lead.contact || "there", SIGNUP_LINK: link } } }
+          : {
+              message: {
+                subject: `${lead.company} — complete your OSHE sign-up`,
+                html: `<p>Hi ${lead.contact || "there"},</p><p>Thanks for choosing OSHE. Please complete your sign-up using the link below:</p><p><a href="${link}">${link}</a></p><p>If you have any questions, just reply to this email.</p>`,
+              },
+            }),
       });
       updateDoc(doc(db, "leads", lead.id), { formEmail: email, formStatus: "sent" });
     } catch (err) {
@@ -7794,7 +7831,7 @@ function SalesView({ leads, convertLeadToClient }) {
                           <button onClick={() => navigator.clipboard.writeText(`https://signup.oshe.co.nz/${l.id}`)}
                             className="text-xs font-semibold px-2 py-1.5 rounded-lg shrink-0" style={{ background: T.paperAlt, color: T.tealDark }}>Copy</button>
                         </div>
-                        <div className="text-[11px]" style={{ color: T.slateLight }}>Emails through this only send once the Firebase "Trigger Email" extension is set up on the project — copy the link below as a backup either way.</div>
+                        <div className="text-[11px]" style={{ color: T.slateLight }}>Sends via Resend once queued — copy the link below as a backup either way, in case anything's still being set up on that end.</div>
                         <button onClick={() => convertLeadToClient(l)} className="flex items-center justify-center gap-1.5 text-xs font-semibold py-1.5 rounded-lg" style={{ background: T.paperAlt, color: T.tealDark }}>
                           <ArrowUpRight size={12} /> Simulate form completed
                         </button>
@@ -8913,32 +8950,52 @@ function WorkflowsView({ workflows }) {
 
           <div className="flex flex-col gap-2">
             {wf.steps.map((step, i) => (
-              <div key={step.id} className="flex items-center gap-2 text-sm">
-                <span className="w-5 text-xs font-semibold" style={{ color: T.slateLight }}>{i + 1}</span>
-                <input value={step.title} onChange={(e) => updateWorkflow(wf.id, (w) => ({ ...w, steps: w.steps.map((s) => (s.id === step.id ? { ...s, title: e.target.value } : s)) }))}
-                  className="flex-1 px-2 py-1.5 rounded-lg outline-none text-sm" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
-                <select value={step.owner} onChange={(e) => updateWorkflow(wf.id, (w) => ({ ...w, steps: w.steps.map((s) => (s.id === step.id ? { ...s, owner: e.target.value } : s)) }))}
-                  className="px-2 py-1.5 rounded-lg outline-none text-xs" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
-                  {TEAM.map((m) => <option key={m} value={m}>{m}</option>)}
-                </select>
-                <input type="number" value={step.dueDays} onChange={(e) => updateWorkflow(wf.id, (w) => ({ ...w, steps: w.steps.map((s) => (s.id === step.id ? { ...s, dueDays: Number(e.target.value) } : s)) }))}
-                  className="w-16 px-2 py-1.5 rounded-lg outline-none text-xs" style={{ border: `1px solid ${T.border}`, color: T.ink }} title="Due, days from onboarding start" />
-                <span className="text-[11px] shrink-0" style={{ color: T.slateLight }}>days</span>
-                <input type="number" min="0" step="0.5" value={step.estHours ?? ""} onChange={(e) => updateWorkflow(wf.id, (w) => ({ ...w, steps: w.steps.map((s) => (s.id === step.id ? { ...s, estHours: e.target.value ? Number(e.target.value) : 0 } : s)) }))}
-                  className="w-14 px-2 py-1.5 rounded-lg outline-none text-xs" style={{ border: `1px solid ${T.border}`, color: T.ink }} title="Estimated hours — counts toward Schedule workload" placeholder="hrs" />
-                <span className="text-[11px] shrink-0" style={{ color: T.slateLight }}>hrs</span>
-                <select value={step.recurring || "none"} onChange={(e) => updateWorkflow(wf.id, (w) => ({ ...w, steps: w.steps.map((s) => (s.id === step.id ? { ...s, recurring: e.target.value } : s)) }))}
-                  className="px-2 py-1.5 rounded-lg outline-none text-xs" style={{ border: `1px solid ${T.border}`, color: T.ink }} title="Some steps need redoing on a schedule rather than being a one-time thing">
-                  <option value="none">One-time</option>
-                  <option value="monthly">Monthly</option>
-                  <option value="quarterly">Quarterly</option>
-                  <option value="yearly">Yearly</option>
-                </select>
-                <button onClick={() => updateWorkflow(wf.id, (w) => ({ ...w, steps: w.steps.filter((s) => s.id !== step.id) }))}><Trash2 size={14} color={T.slateLight} /></button>
+              <div key={step.id} className="flex flex-col gap-1.5 rounded-lg p-2" style={{ background: step.type === "email" ? T.paperAlt : "transparent" }}>
+                <div className="flex items-center gap-2 text-sm">
+                  <span className="w-5 text-xs font-semibold" style={{ color: T.slateLight }}>{i + 1}</span>
+                  <input value={step.title} onChange={(e) => updateWorkflow(wf.id, (w) => ({ ...w, steps: w.steps.map((s) => (s.id === step.id ? { ...s, title: e.target.value } : s)) }))}
+                    className="flex-1 px-2 py-1.5 rounded-lg outline-none text-sm" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+                  <select value={step.type || "task"} onChange={(e) => updateWorkflow(wf.id, (w) => ({ ...w, steps: w.steps.map((s) => (s.id === step.id ? { ...s, type: e.target.value } : s)) }))}
+                    className="px-2 py-1.5 rounded-lg outline-none text-xs" style={{ border: `1px solid ${T.border}`, color: T.ink }} title="An email step sends to the client instead of being a task someone ticks off">
+                    <option value="task">Task</option>
+                    <option value="email">Email to client</option>
+                  </select>
+                  <select value={step.owner} onChange={(e) => updateWorkflow(wf.id, (w) => ({ ...w, steps: w.steps.map((s) => (s.id === step.id ? { ...s, owner: e.target.value } : s)) }))}
+                    className="px-2 py-1.5 rounded-lg outline-none text-xs" style={{ border: `1px solid ${T.border}`, color: T.ink }} title={step.type === "email" ? "Who's responsible for sending it" : "Owner"}>
+                    {TEAM.map((m) => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                  <input type="number" value={step.dueDays} onChange={(e) => updateWorkflow(wf.id, (w) => ({ ...w, steps: w.steps.map((s) => (s.id === step.id ? { ...s, dueDays: Number(e.target.value) } : s)) }))}
+                    className="w-16 px-2 py-1.5 rounded-lg outline-none text-xs" style={{ border: `1px solid ${T.border}`, color: T.ink }} title="Due, days from onboarding start" />
+                  <span className="text-[11px] shrink-0" style={{ color: T.slateLight }}>days</span>
+                  {step.type !== "email" && (
+                    <>
+                      <input type="number" min="0" step="0.5" value={step.estHours ?? ""} onChange={(e) => updateWorkflow(wf.id, (w) => ({ ...w, steps: w.steps.map((s) => (s.id === step.id ? { ...s, estHours: e.target.value ? Number(e.target.value) : 0 } : s)) }))}
+                        className="w-14 px-2 py-1.5 rounded-lg outline-none text-xs" style={{ border: `1px solid ${T.border}`, color: T.ink }} title="Estimated hours — counts toward Schedule workload" placeholder="hrs" />
+                      <span className="text-[11px] shrink-0" style={{ color: T.slateLight }}>hrs</span>
+                    </>
+                  )}
+                  <select value={step.recurring || "none"} onChange={(e) => updateWorkflow(wf.id, (w) => ({ ...w, steps: w.steps.map((s) => (s.id === step.id ? { ...s, recurring: e.target.value } : s)) }))}
+                    className="px-2 py-1.5 rounded-lg outline-none text-xs" style={{ border: `1px solid ${T.border}`, color: T.ink }} title="Some steps need redoing on a schedule rather than being a one-time thing">
+                    <option value="none">One-time</option>
+                    <option value="monthly">Monthly</option>
+                    <option value="quarterly">Quarterly</option>
+                    <option value="yearly">Yearly</option>
+                  </select>
+                  <button onClick={() => updateWorkflow(wf.id, (w) => ({ ...w, steps: w.steps.filter((s) => s.id !== step.id) }))}><Trash2 size={14} color={T.slateLight} /></button>
+                </div>
+                {step.type === "email" && (
+                  <div className="flex flex-col gap-1.5 pl-7">
+                    <input placeholder="Subject" value={step.emailSubject || ""} onChange={(e) => updateWorkflow(wf.id, (w) => ({ ...w, steps: w.steps.map((s) => (s.id === step.id ? { ...s, emailSubject: e.target.value } : s)) }))}
+                      className="px-2 py-1.5 rounded-lg outline-none text-xs" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+                    <textarea placeholder="Email body — {{clientName}} gets replaced with the actual client name" rows={2} value={step.emailBody || ""}
+                      onChange={(e) => updateWorkflow(wf.id, (w) => ({ ...w, steps: w.steps.map((s) => (s.id === step.id ? { ...s, emailBody: e.target.value } : s)) }))}
+                      className="px-2 py-1.5 rounded-lg outline-none text-xs resize-y" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+                  </div>
+                )}
               </div>
             ))}
           </div>
-          <button onClick={() => updateWorkflow(wf.id, (w) => ({ ...w, steps: [...w.steps, { id: "step" + Date.now(), title: "New step", owner: TEAM[0], dueDays: 7, estHours: 1, recurring: "none" }] }))}
+          <button onClick={() => updateWorkflow(wf.id, (w) => ({ ...w, steps: [...w.steps, { id: "step" + Date.now(), title: "New step", owner: TEAM[0], dueDays: 7, estHours: 1, recurring: "none", type: "task" }] }))}
             className="flex items-center gap-1.5 text-xs font-semibold mt-3" style={{ color: T.tealDark }}>
             <Plus size={13} /> Add step
           </button>

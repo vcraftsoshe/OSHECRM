@@ -8423,10 +8423,21 @@ function OverviewView({ clients, tasks, onboardings, goToClient }) {
   // Same underlying data as the Scheduling tab's "left to do" — just condensed to a
   // left/total count here instead of listing every task, so this stays a quick scan rather
   // than another full list to read through.
+  // Same computation as the Scheduling tab's Monthly Targets section — target progress is
+  // matched by targetId against this month's schedule occurrences (not against any stored
+  // task list), so a deleted schedule entry or target drops out of this the moment it's
+  // gone, nothing stale left to clean up separately.
   const enterpriseSummaries = clients.filter((c) => !c.archived && c.profile === "Enterprise Client").map((c) => {
-    const thisMonthTasks = (c.reminders || []).filter((r) => String(r.id).startsWith("sched-task-") && r.date.slice(0, 7) === thisMonth);
-    return { client: c, left: thisMonthTasks.filter((r) => !r.done).length, total: thisMonthTasks.length };
-  }).filter((x) => x.total > 0);
+    const targets = c.scheduleTargets || [];
+    const visibleTargets = targets.filter((t) => t.repeat === "monthly" || t.monthYear === thisMonth);
+    if (visibleTargets.length === 0) return null;
+    const monthStart = `${thisMonth}-01`;
+    const monthEnd = `${addMonthsToMonthYear(thisMonth, 1)}-01`;
+    const occurrences = expandScheduleEntriesInRange(c.scheduleEntries || [], monthStart, monthEnd);
+    const done = visibleTargets.reduce((sum, t) => sum + occurrences.filter((o) => o.targetId === t.id).length, 0);
+    const target = visibleTargets.reduce((sum, t) => sum + t.targetCount, 0);
+    return { client: c, done, target };
+  }).filter(Boolean);
 
   const typeColor = (t) => (t === "Task" ? T.tealDark : t === "Workflow" ? T.blue : "#8B6BA8");
 
@@ -8461,13 +8472,13 @@ function OverviewView({ clients, tasks, onboardings, goToClient }) {
 
       {enterpriseSummaries.length > 0 && (
         <div>
-          <div className="text-sm font-semibold mb-3" style={{ color: T.ink }}>Enterprise clients — this month's schedule</div>
+          <div className="text-sm font-semibold mb-3" style={{ color: T.ink }}>Enterprise clients — monthly targets</div>
           <div className="grid grid-cols-3 gap-3">
-            {enterpriseSummaries.map(({ client, left, total }) => (
+            {enterpriseSummaries.map(({ client, done, target }) => (
               <button key={client.id} onClick={() => goToClient(client.id, "scheduling")} className="text-left">
                 <Card style={{ padding: 14 }} className="flex items-center justify-between">
                   <span className="text-sm font-semibold truncate" style={{ color: T.ink }}>{client.name}</span>
-                  <span className="text-xs font-bold px-2 py-1 rounded-full shrink-0 ml-2" style={{ background: T.paperAlt, color: left === 0 ? T.tealDark : T.amber }}>{left}/{total}</span>
+                  <span className="text-xs font-bold px-2 py-1 rounded-full shrink-0 ml-2" style={{ background: T.paperAlt, color: done >= target ? T.tealDark : T.amber }}>{done}/{target}</span>
                 </Card>
               </button>
             ))}

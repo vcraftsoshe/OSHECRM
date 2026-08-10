@@ -4720,9 +4720,10 @@ function ClientScheduling({ client, updateClient }) {
     try {
       const thisMonth = currentMonth();
       const rangeStart = `${thisMonth}-01`;
-      const rangeEnd = `${addMonthsToMonthYear(thisMonth, 2)}-01`; // this month + next, so there's some lead time
+      // Just the current month now, not +2 — creating 2 months of tasks at once for every
+      // recurring item was the main thing making this feel cluttered.
+      const rangeEnd = `${addMonthsToMonthYear(thisMonth, 1)}-01`;
       const upcoming = expandScheduleEntriesInRange(entries, rangeStart, rangeEnd);
-      if (upcoming.length === 0) return;
       const existingIds = new Set((client.reminders || []).map((r) => r.id));
       const deletedIds = new Set(client.deletedScheduleTaskIds || []);
       const newReminders = [];
@@ -4732,8 +4733,42 @@ function ClientScheduling({ client, updateClient }) {
           newReminders.push({ id: taskId, text: occ.title, date: occ.occurrenceDate, assignee: occ.assignee, estHours: occ.hours || 0, done: false, recurring: "none" });
         }
       });
-      if (newReminders.length > 0) {
-        updateClient((c) => ({ ...c, reminders: [...(c.reminders || []), ...newReminders] }));
+
+      // Cleanup pass, two related but distinct cases:
+      // 1) The entry still exists but its computed date shifted (the timezone fix) — the OLD
+      //    wrong-date task sits next to a newly-created correct one.
+      // 2) The entry was deleted outright at some point before removeEntry's own cleanup
+      //    existed, leaving its tasks orphaned with no parent entry left to check a date
+      //    against at all — case 1's check alone doesn't catch this, since "does the date
+      //    match a valid occurrence" only makes sense for an entry that's still there.
+      // Either way, only NOT-DONE tasks are touched — done ones are real (possibly already
+      // billed) history and are never removed just because their source entry is gone.
+      const wideStart = `${addMonthsToMonthYear(thisMonth, -1)}-01`;
+      const wideEnd = `${addMonthsToMonthYear(thisMonth, 3)}-01`;
+      const currentEntryIds = new Set(entries.map((e) => e.id));
+      const validDatesByEntry = {};
+      entries.forEach((e) => {
+        validDatesByEntry[e.id] = new Set(expandScheduleEntriesInRange([e], wideStart, wideEnd).map((occ) => occ.occurrenceDate));
+      });
+      const staleIds = new Set(
+        (client.reminders || [])
+          .filter((r) => String(r.id).startsWith("sched-task-") && !r.done)
+          .filter((r) => {
+            const match = String(r.id).match(/^sched-task-(.+)-(\d{4}-\d{2}-\d{2})$/);
+            if (!match) return false;
+            const [, entryId, dateStr] = match;
+            if (!currentEntryIds.has(entryId)) return true; // case 2: orphaned, entry gone entirely
+            const validDates = validDatesByEntry[entryId];
+            return validDates && !validDates.has(dateStr); // case 1: entry exists, date no longer valid
+          })
+          .map((r) => r.id)
+      );
+
+      if (newReminders.length > 0 || staleIds.size > 0) {
+        updateClient((c) => ({
+          ...c,
+          reminders: [...(c.reminders || []).filter((r) => !staleIds.has(r.id)), ...newReminders],
+        }));
       }
     } catch (err) {
       console.error("Client Scheduling task sync failed:", err);
@@ -8385,12 +8420,13 @@ function OverviewView({ clients, tasks, onboardings, goToClient }) {
     return { person, items };
   });
 
-  // Same "left to do this month" logic as the Scheduling tab itself, rolled up across every
-  // Enterprise client so it's visible here without opening each one individually.
-  const enterpriseSummaries = clients.filter((c) => !c.archived && c.profile === "Enterprise Client").map((c) => ({
-    client: c,
-    leftToDo: (c.reminders || []).filter((r) => String(r.id).startsWith("sched-task-") && !r.done && r.date.slice(0, 7) === thisMonth).sort((a, b) => a.date.localeCompare(b.date)),
-  })).filter((x) => x.leftToDo.length > 0);
+  // Same underlying data as the Scheduling tab's "left to do" — just condensed to a
+  // left/total count here instead of listing every task, so this stays a quick scan rather
+  // than another full list to read through.
+  const enterpriseSummaries = clients.filter((c) => !c.archived && c.profile === "Enterprise Client").map((c) => {
+    const thisMonthTasks = (c.reminders || []).filter((r) => String(r.id).startsWith("sched-task-") && r.date.slice(0, 7) === thisMonth);
+    return { client: c, left: thisMonthTasks.filter((r) => !r.done).length, total: thisMonthTasks.length };
+  }).filter((x) => x.total > 0);
 
   const typeColor = (t) => (t === "Task" ? T.tealDark : t === "Workflow" ? T.blue : "#8B6BA8");
 
@@ -8425,23 +8461,15 @@ function OverviewView({ clients, tasks, onboardings, goToClient }) {
 
       {enterpriseSummaries.length > 0 && (
         <div>
-          <div className="text-sm font-semibold mb-3" style={{ color: T.ink }}>Enterprise clients — left to do this month</div>
-          <div className="flex flex-col gap-3">
-            {enterpriseSummaries.map(({ client, leftToDo }) => (
-              <Card key={client.id} style={{ padding: 16 }}>
-                <button onClick={() => goToClient(client.id, "scheduling")} className="flex items-center justify-between w-full mb-2 text-left">
-                  <div className="text-sm font-semibold" style={{ color: T.ink }}>{client.name}</div>
-                  <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{ background: T.paperAlt, color: T.amber }}>{leftToDo.length} left</span>
-                </button>
-                <div className="flex flex-col gap-1">
-                  {leftToDo.map((r) => (
-                    <div key={r.id} className="flex items-center justify-between text-xs py-1" style={{ borderBottom: `1px solid ${T.border}` }}>
-                      <span style={{ color: T.ink }}>{r.text} <span style={{ color: T.slateLight }}>— {r.assignee}</span></span>
-                      <span style={{ color: T.slateLight }}>{fmtDate(r.date)}</span>
-                    </div>
-                  ))}
-                </div>
-              </Card>
+          <div className="text-sm font-semibold mb-3" style={{ color: T.ink }}>Enterprise clients — this month's schedule</div>
+          <div className="grid grid-cols-3 gap-3">
+            {enterpriseSummaries.map(({ client, left, total }) => (
+              <button key={client.id} onClick={() => goToClient(client.id, "scheduling")} className="text-left">
+                <Card style={{ padding: 14 }} className="flex items-center justify-between">
+                  <span className="text-sm font-semibold truncate" style={{ color: T.ink }}>{client.name}</span>
+                  <span className="text-xs font-bold px-2 py-1 rounded-full shrink-0 ml-2" style={{ background: T.paperAlt, color: left === 0 ? T.tealDark : T.amber }}>{left}/{total}</span>
+                </Card>
+              </button>
             ))}
           </div>
         </div>

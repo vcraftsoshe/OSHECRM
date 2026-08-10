@@ -4691,7 +4691,7 @@ function expandScheduleEntriesInRange(entries, start, end) {
   return out.sort((a, b) => a.occurrenceDate.localeCompare(b.occurrenceDate));
 }
 
-function ClientScheduling({ client, updateClient }) {
+function ClientScheduling({ client, updateClient, toggleReminderDone }) {
   const [monthYear, setMonthYear] = useState(currentMonth());
   const [draft, setDraft] = useState({ title: "", assignee: TEAM[0], date: today(), hours: "", repeat: "none", targetId: "", nth: 1, weekday: 4 });
   const [targetDraft, setTargetDraft] = useState({ title: "", count: "", repeat: "monthly" });
@@ -4730,7 +4730,7 @@ function ClientScheduling({ client, updateClient }) {
       upcoming.forEach((occ) => {
         const taskId = `sched-task-${occ.id}-${occ.occurrenceDate}`;
         if (!existingIds.has(taskId) && !deletedIds.has(taskId)) {
-          newReminders.push({ id: taskId, text: occ.title, date: occ.occurrenceDate, assignee: occ.assignee, estHours: occ.hours || 0, done: false, recurring: "none" });
+          newReminders.push({ id: taskId, text: occ.title, date: occ.occurrenceDate, assignee: occ.assignee, estHours: occ.hours || 0, done: false, recurring: "none", targetId: occ.targetId || null });
         }
       });
 
@@ -4801,13 +4801,15 @@ function ClientScheduling({ client, updateClient }) {
     }));
   };
 
-  // Monthly targets ("we need 8 site reviews this month") — a quota checked against the
-  // calendar. Progress matches by targetId, set when a scheduled item is explicitly linked
-  // to a target in the add-entry form below — not by comparing title text, which broke on
-  // anything less than an exact match (casing, plurals, extra words). "Repeats monthly"
-  // targets apply to every month you look at; "This month only" targets are scoped to the
-  // specific month they were created in and only show while viewing that month.
-  const progressFor = (target) => occurrences.filter((o) => o.targetId === target.id).length;
+  // Monthly targets ("we need 8 site reviews this month") — a quota checked against actual
+  // completed work, not just what's scheduled. Progress counts DONE tasks linked to this
+  // target (matched by targetId, set when a scheduled item is explicitly linked to a target
+  // in the add-entry form below) whose date falls in the month being viewed — a target with
+  // 4 Fridays scheduled this month reads 0/4 until those Friday tasks actually get ticked
+  // off, not 4/4 the moment they're on the calendar. "Repeats monthly" targets apply to
+  // every month you look at; "This month only" targets are scoped to the specific month
+  // they were created in and only show while viewing that month.
+  const progressFor = (target) => (client.reminders || []).filter((r) => r.targetId === target.id && r.done && r.date.slice(0, 7) === monthYear).length;
   const visibleTargets = targets.filter((t) => t.repeat === "monthly" || t.monthYear === monthYear);
   const addTarget = () => {
     if (!targetDraft.title.trim() || !targetDraft.count) return;
@@ -4873,12 +4875,16 @@ function ClientScheduling({ client, updateClient }) {
     <div className="flex flex-col gap-4">
       <div className="grid grid-cols-2 gap-4">
         <Card style={{ padding: 16 }}>
-          <div className="text-sm font-semibold mb-2" style={{ color: T.ink }}>Left to do this month</div>
+          <div className="text-sm font-semibold mb-1" style={{ color: T.ink }}>Left to do this month</div>
+          <div className="text-[11px] mb-2" style={{ color: T.slateLight }}>Tick these off as they're actually done — that's what moves target progress and billing, not just being on the calendar.</div>
           <div className="flex flex-col gap-1.5">
             {leftToDoThisMonth.map((r) => (
               <div key={r.id} className="flex items-center justify-between text-xs py-1" style={{ borderBottom: `1px solid ${T.border}` }}>
-                <span style={{ color: T.ink }}>{r.text}</span>
-                <span style={{ color: T.slateLight }}>{r.assignee} · {fmtDate(r.date)}</span>
+                <label className="flex items-center gap-2 min-w-0">
+                  <input type="checkbox" checked={false} onChange={() => toggleReminderDone && toggleReminderDone(r.id)} />
+                  <span className="truncate" style={{ color: T.ink }}>{r.text}</span>
+                </label>
+                <span className="shrink-0 ml-2" style={{ color: T.slateLight }}>{r.assignee} · {fmtDate(r.date)}</span>
               </div>
             ))}
             {leftToDoThisMonth.length === 0 && <div className="text-xs" style={{ color: T.slateLight }}>Nothing outstanding for this month.</div>}
@@ -6125,7 +6131,7 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
           )}
           {tab === "scheduling" && client.profile === "Enterprise Client" && (
             <ErrorBoundary>
-              <ClientScheduling client={client} updateClient={updateClient} />
+              <ClientScheduling client={client} updateClient={updateClient} toggleReminderDone={toggleReminderDone} />
             </ErrorBoundary>
           )}
         </div>
@@ -8431,10 +8437,7 @@ function OverviewView({ clients, tasks, onboardings, goToClient }) {
     const targets = c.scheduleTargets || [];
     const visibleTargets = targets.filter((t) => t.repeat === "monthly" || t.monthYear === thisMonth);
     if (visibleTargets.length === 0) return null;
-    const monthStart = `${thisMonth}-01`;
-    const monthEnd = `${addMonthsToMonthYear(thisMonth, 1)}-01`;
-    const occurrences = expandScheduleEntriesInRange(c.scheduleEntries || [], monthStart, monthEnd);
-    const done = visibleTargets.reduce((sum, t) => sum + occurrences.filter((o) => o.targetId === t.id).length, 0);
+    const done = visibleTargets.reduce((sum, t) => sum + (c.reminders || []).filter((r) => r.targetId === t.id && r.done && r.date.slice(0, 7) === thisMonth).length, 0);
     const target = visibleTargets.reduce((sum, t) => sum + t.targetCount, 0);
     return { client: c, done, target };
   }).filter(Boolean);

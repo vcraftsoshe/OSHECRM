@@ -8302,6 +8302,8 @@ function HoursView({ clients }) {
   const [monthYear, setMonthYear] = useState(currentMonth());
   const [expandedHoursPerson, setExpandedHoursPerson] = useState({});
   const toggleHoursPersonExpand = (person) => setExpandedHoursPerson((prev) => ({ ...prev, [person]: !prev[person] }));
+  const [expandedHoursClient, setExpandedHoursClient] = useState({});
+  const toggleHoursClientExpand = (key) => setExpandedHoursClient((prev) => ({ ...prev, [key]: !prev[key] }));
 
   // Hourly/Subscription+Hours clients are tracked regardless (that's their whole billing
   // model) — flat-fee clients don't normally need tracking here, but if hours genuinely got
@@ -8321,6 +8323,48 @@ function HoursView({ clients }) {
     set.add(currentMonth());
     return [...set].sort().reverse();
   })();
+
+  // Shared by both the weekly and monthly "By person" views — a person's entries for
+  // whatever window is active, grouped by client with a total each, and each client
+  // further expandable to the actual individual entries (date, description, hours) rather
+  // than just a lump sum.
+  const PersonBreakdown = ({ person, entries }) => {
+    const byClient = {};
+    entries.forEach((e) => { (byClient[e.clientName] = byClient[e.clientName] || []).push(e); });
+    const clientRows = Object.entries(byClient)
+      .map(([name, list]) => ({ name, list, total: Math.round(list.reduce((s, e) => s + e.hours, 0) * 100) / 100 }))
+      .sort((a, b) => b.total - a.total);
+    return (
+      <div className="px-4 pb-3" style={{ background: T.paperAlt }}>
+        {clientRows.map((r) => {
+          const key = `${person}::${r.name}`;
+          const clientExpanded = expandedHoursClient[key];
+          return (
+            <div key={r.name}>
+              <button onClick={() => toggleHoursClientExpand(key)} className="flex items-center justify-between w-full text-xs py-1 text-left" style={{ borderBottom: `1px solid ${T.border}` }}>
+                <span className="flex items-center gap-1.5" style={{ color: T.ink }}>
+                  <ChevronDown size={10} color={T.slateLight} style={{ transform: clientExpanded ? "none" : "rotate(-90deg)" }} />
+                  {r.name}
+                </span>
+                <span className="font-semibold" style={{ color: T.tealDark }}>{r.total}h</span>
+              </button>
+              {clientExpanded && (
+                <div className="pl-4 py-1 flex flex-col gap-1">
+                  {[...r.list].sort((a, b) => (a.date || "").localeCompare(b.date || "")).map((e) => (
+                    <div key={e.id} className="flex items-center justify-between text-[11px] py-0.5">
+                      <span style={{ color: T.slate }}>{fmtDate(e.date)} — {e.description || "—"}</span>
+                      <span className="font-semibold shrink-0 ml-2" style={{ color: T.ink }}>{e.hours}h</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {clientRows.length === 0 && <div className="text-xs py-1" style={{ color: T.slateLight }}>Nothing logged in this window.</div>}
+      </div>
+    );
+  };
 
   return (
     <div className="flex flex-col gap-4">
@@ -8405,16 +8449,25 @@ function HoursView({ clients }) {
             <div className="text-[10px] text-center font-semibold self-center" style={{ color: T.slateLight }}>Total</div>
 
             {TEAM.map((person) => {
-              const personEntries = allEntries.filter((e) => e.member === person);
+              const personEntries = allEntries.filter((e) => e.member === person && days.includes(e.date));
               const dayTotals = days.map((d) => personEntries.filter((e) => e.date === d).reduce((s, e) => s + e.hours, 0));
               const weekTotal = Math.round(dayTotals.reduce((s, v) => s + v, 0) * 100) / 100;
+              const expanded = expandedHoursPerson[person];
               return (
                 <React.Fragment key={person}>
-                  <div className="text-xs font-medium py-2 truncate" style={{ color: T.ink }}>{person}</div>
+                  <button onClick={() => toggleHoursPersonExpand(person)} className="text-xs font-medium py-2 truncate text-left flex items-center gap-1" style={{ color: T.ink }}>
+                    <ChevronDown size={10} color={T.slateLight} style={{ transform: expanded ? "none" : "rotate(-90deg)" }} />
+                    {person}
+                  </button>
                   {dayTotals.map((v, i) => (
                     <div key={i} className="text-xs text-center py-2" style={{ color: v > 0 ? T.ink : T.border }}>{v > 0 ? v : "—"}</div>
                   ))}
                   <div className="text-xs text-center py-2 font-bold" style={{ color: T.tealDark }}>{weekTotal}h</div>
+                  {expanded && (
+                    <div style={{ gridColumn: "1 / -1" }}>
+                      <PersonBreakdown person={person} entries={personEntries} />
+                    </div>
+                  )}
                 </React.Fragment>
               );
             })}
@@ -8450,9 +8503,6 @@ function HoursView({ clients }) {
           {TEAM.map((person) => {
             const monthEntries = allEntries.filter((e) => e.member === person && e.date.slice(0, 7) === monthYear);
             const logged = Math.round(monthEntries.reduce((s, e) => s + e.hours, 0) * 100) / 100;
-            const byClient = {};
-            monthEntries.forEach((e) => { byClient[e.clientName] = (byClient[e.clientName] || 0) + e.hours; });
-            const clientRows = Object.entries(byClient).map(([name, hours]) => ({ name, hours: Math.round(hours * 100) / 100 })).sort((a, b) => b.hours - a.hours);
             const expanded = expandedHoursPerson[person];
             return (
               <div key={person} style={{ borderBottom: `1px solid ${T.border}` }}>
@@ -8463,17 +8513,7 @@ function HoursView({ clients }) {
                   </div>
                   <div style={{ color: T.tealDark }} className="font-bold">{logged}h</div>
                 </button>
-                {expanded && (
-                  <div className="px-4 pb-3" style={{ background: T.paperAlt }}>
-                    {clientRows.map((r) => (
-                      <div key={r.name} className="flex items-center justify-between text-xs py-1" style={{ borderBottom: `1px solid ${T.border}` }}>
-                        <span style={{ color: T.ink }}>{r.name}</span>
-                        <span className="font-semibold" style={{ color: T.tealDark }}>{r.hours}h</span>
-                      </div>
-                    ))}
-                    {clientRows.length === 0 && <div className="text-xs py-1" style={{ color: T.slateLight }}>Nothing logged for {monthYear === currentMonth() ? "this month" : monthLabel(monthYear)}.</div>}
-                  </div>
-                )}
+                {expanded && <PersonBreakdown person={person} entries={monthEntries} />}
               </div>
             );
           })}

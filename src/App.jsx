@@ -5824,7 +5824,7 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
                     )}
 
                     {client.intake.signedTermsPath && (
-                      <div className="col-span-2">
+                      <div>
                         <div className="text-xs font-semibold mb-1" style={{ color: T.slate }}>SIGNED TERMS &amp; CONDITIONS</div>
                         <button type="button" onClick={async () => {
                           try {
@@ -5836,6 +5836,22 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
                           }
                         }} className="text-xs text-left underline" style={{ color: T.tealDark }}>
                           Open signed T&amp;Cs
+                        </button>
+                      </div>
+                    )}
+                    {client.intake.questionnairePath && (
+                      <div>
+                        <div className="text-xs font-semibold mb-1" style={{ color: T.slate }}>SIGN-UP QUESTIONNAIRE</div>
+                        <button type="button" onClick={async () => {
+                          try {
+                            const url = await getDownloadURL(storageRef(storage, client.intake.questionnairePath));
+                            window.open(url, "_blank");
+                          } catch (err) {
+                            console.error("Couldn't open questionnaire:", err);
+                            alert("Couldn't open the questionnaire PDF — it may not have finished uploading, or the link has expired.");
+                          }
+                        }} className="text-xs text-left underline" style={{ color: T.tealDark }}>
+                          Open questionnaire
                         </button>
                       </div>
                     )}
@@ -8270,6 +8286,8 @@ function HoursView({ clients }) {
   const [groupBy, setGroupBy] = useState("client");
   const [weekStart, setWeekStart] = useState(startOfWeek(today()));
   const [monthYear, setMonthYear] = useState(currentMonth());
+  const [expandedHoursPerson, setExpandedHoursPerson] = useState({});
+  const toggleHoursPersonExpand = (person) => setExpandedHoursPerson((prev) => ({ ...prev, [person]: !prev[person] }));
 
   // Hourly/Subscription+Hours clients are tracked regardless (that's their whole billing
   // model) — flat-fee clients don't normally need tracking here, but if hours genuinely got
@@ -8416,11 +8434,32 @@ function HoursView({ clients }) {
             <div>Person</div><div>Hours logged this month</div>
           </div>
           {TEAM.map((person) => {
-            const logged = Math.round(allEntries.filter((e) => e.member === person && e.date.slice(0, 7) === monthYear).reduce((s, e) => s + e.hours, 0) * 100) / 100;
+            const monthEntries = allEntries.filter((e) => e.member === person && e.date.slice(0, 7) === monthYear);
+            const logged = Math.round(monthEntries.reduce((s, e) => s + e.hours, 0) * 100) / 100;
+            const byClient = {};
+            monthEntries.forEach((e) => { byClient[e.clientName] = (byClient[e.clientName] || 0) + e.hours; });
+            const clientRows = Object.entries(byClient).map(([name, hours]) => ({ name, hours: Math.round(hours * 100) / 100 })).sort((a, b) => b.hours - a.hours);
+            const expanded = expandedHoursPerson[person];
             return (
-              <div key={person} className="grid items-center px-4 py-3 text-sm" style={{ gridTemplateColumns: "2fr 1fr", borderBottom: `1px solid ${T.border}` }}>
-                <div style={{ color: T.ink }} className="font-medium">{person}</div>
-                <div style={{ color: T.tealDark }} className="font-bold">{logged}h</div>
+              <div key={person} style={{ borderBottom: `1px solid ${T.border}` }}>
+                <button onClick={() => toggleHoursPersonExpand(person)} className="grid items-center px-4 py-3 text-sm w-full text-left" style={{ gridTemplateColumns: "2fr 1fr" }}>
+                  <div style={{ color: T.ink }} className="font-medium flex items-center gap-1.5">
+                    <ChevronDown size={12} color={T.slateLight} style={{ transform: expanded ? "none" : "rotate(-90deg)" }} />
+                    {person}
+                  </div>
+                  <div style={{ color: T.tealDark }} className="font-bold">{logged}h</div>
+                </button>
+                {expanded && (
+                  <div className="px-4 pb-3" style={{ background: T.paperAlt }}>
+                    {clientRows.map((r) => (
+                      <div key={r.name} className="flex items-center justify-between text-xs py-1" style={{ borderBottom: `1px solid ${T.border}` }}>
+                        <span style={{ color: T.ink }}>{r.name}</span>
+                        <span className="font-semibold" style={{ color: T.tealDark }}>{r.hours}h</span>
+                      </div>
+                    ))}
+                    {clientRows.length === 0 && <div className="text-xs py-1" style={{ color: T.slateLight }}>Nothing logged for {monthYear === currentMonth() ? "this month" : monthLabel(monthYear)}.</div>}
+                  </div>
+                )}
               </div>
             );
           })}

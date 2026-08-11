@@ -5335,6 +5335,7 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
   const [noteDraft, setNoteDraft] = useState({ text: "", tags: [] });
   const [newReminder, setNewReminder] = useState({ text: "", date: "", recurring: "none", assignee: TEAM[0], estHours: "" });
   const [showAddClient, setShowAddClient] = useState(false);
+  const [showGeneratedDocs, setShowGeneratedDocs] = useState(false);
   // If the clients list is ever completely empty (freshly cleared, brand new install, or
   // testing), fall straight into the Add Client form instead of letting the detail pane try
   // to render around a client that doesn't exist — that's what was crashing before.
@@ -5572,6 +5573,7 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
             const d = daysUntil(c.ohsmsDue);
             const dot = d < 0 ? T.coral : d <= 30 ? T.amber : T.tealDark;
             const fromNztg = (c.intake?.hearAboutUs || "").toLowerCase().includes("nztg");
+            const wantsReports = Boolean(c.intake?.wantsMonthlyReports);
             return (
               <button key={c.id} onClick={() => setSelectedId(c.id)} className="text-left p-3 rounded-xl transition-colors"
                 style={{ background: c.id === client?.id ? T.paperAlt : T.card, border: `1px solid ${c.id === client?.id ? T.tealDark : T.border}`, opacity: c.archived ? 0.6 : 1 }}>
@@ -5579,9 +5581,10 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
                   <span className="text-sm font-semibold" style={{ color: T.ink }}>{c.name}</span>
                   <span style={{ width: 8, height: 8, borderRadius: 999, background: dot }} />
                 </div>
-                <div className="text-xs mt-1 flex items-center gap-1.5" style={{ color: T.slate }}>
+                <div className="text-xs mt-1 flex items-center gap-1.5 flex-wrap" style={{ color: T.slate }}>
                   {c.contract.plan}
                   {fromNztg && <Pill color={T.blue} bg={T.paperAlt}>NZTG</Pill>}
+                  {wantsReports && <Pill color={T.amber} bg={T.paperAlt}>Monthly Reports</Pill>}
                 </div>
               </button>
             );
@@ -5686,6 +5689,7 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
               <div className="text-lg font-bold flex items-center gap-2" style={{ color: T.ink }}>
                 {client.name}
                 {(client.intake?.hearAboutUs || "").toLowerCase().includes("nztg") && <Pill color={T.blue} bg={T.paperAlt}>NZTG</Pill>}
+                {Boolean(client.intake?.wantsMonthlyReports) && <Pill color={T.amber} bg={T.paperAlt}>Monthly Reports</Pill>}
               </div>
               <div className="text-sm" style={{ color: T.slate }}>{client.legalName}</div>
             </div>
@@ -6076,23 +6080,33 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
                 <div className="text-[11px] mt-1.5" style={{ color: T.slateLight }}>Any file type — save an email as a .eml/.msg/PDF first if you're uploading correspondence.</div>
               </Card>
               <Card style={{ padding: 14 }}>
-                <div className="text-sm font-semibold mb-2" style={{ color: T.ink }}>Generated documents</div>
-                <div className="text-[11px] mb-2" style={{ color: T.slateLight }}>Every Manual, Policy, Procedure, ERP, and Monthly Report generated for {client.name} — a running record of what's actually been produced.</div>
-                <div className="flex flex-col gap-1.5">
-                  {[...(client.generatedDocuments || [])].reverse().map((d) => (
-                    <div key={d.id} className="flex items-center justify-between text-xs rounded-lg px-2.5 py-1.5" style={{ background: T.paperAlt }}>
-                      <button onClick={() => viewGeneratedDocument(d.path)} className="truncate text-left flex-1 flex items-center gap-2" style={{ color: T.tealDark }} title={d.name}>
-                        <Pill color={T.blue} bg={T.card}>{d.category}</Pill>
-                        <span className="truncate">{d.name}</span>
-                      </button>
-                      <div className="flex items-center gap-2 shrink-0">
-                        <span style={{ color: T.slateLight }}>{fmtDate(d.date)}</span>
-                        <ConfirmButton onConfirm={() => removeGeneratedDocument(d.id)} title="Remove from history" iconSize={12} />
-                      </div>
+                <button onClick={() => setShowGeneratedDocs((v) => !v)} className="w-full flex items-center justify-between text-left">
+                  <div className="flex items-center gap-1.5">
+                    <ChevronDown size={13} color={T.slateLight} style={{ transform: showGeneratedDocs ? "none" : "rotate(-90deg)" }} />
+                    <span className="text-sm font-semibold" style={{ color: T.ink }}>Generated documents</span>
+                  </div>
+                  <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{ background: T.paperAlt, color: T.slate }}>{(client.generatedDocuments || []).length}</span>
+                </button>
+                {showGeneratedDocs && (
+                  <>
+                    <div className="text-[11px] mt-2 mb-2" style={{ color: T.slateLight }}>Every Manual, Policy, Procedure, ERP, and Monthly Report generated for {client.name} — a running record of what's actually been produced.</div>
+                    <div className="flex flex-col gap-1.5">
+                      {[...(client.generatedDocuments || [])].reverse().map((d) => (
+                        <div key={d.id} className="flex items-center justify-between text-xs rounded-lg px-2.5 py-1.5" style={{ background: T.paperAlt }}>
+                          <button onClick={() => viewGeneratedDocument(d.path)} className="truncate text-left flex-1 flex items-center gap-2" style={{ color: T.tealDark }} title={d.name}>
+                            <Pill color={T.blue} bg={T.card}>{d.category}</Pill>
+                            <span className="truncate">{d.name}</span>
+                          </button>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span style={{ color: T.slateLight }}>{fmtDate(d.date)}</span>
+                            <ConfirmButton onConfirm={() => removeGeneratedDocument(d.id)} title="Remove from history" iconSize={12} />
+                          </div>
+                        </div>
+                      ))}
+                      {(client.generatedDocuments || []).length === 0 && <div className="text-xs" style={{ color: T.slateLight }}>Nothing generated yet — anything downloaded from Systems or Reports will show up here automatically.</div>}
                     </div>
-                  ))}
-                  {(client.generatedDocuments || []).length === 0 && <div className="text-xs" style={{ color: T.slateLight }}>Nothing generated yet — anything downloaded from Systems or Reports will show up here automatically.</div>}
-                </div>
+                  </>
+                )}
               </Card>
               <Card style={{ padding: 14 }}>
                 <textarea placeholder="Write a client note..." rows={2} value={noteDraft.text} onChange={(e) => setNoteDraft({ ...noteDraft, text: e.target.value })}

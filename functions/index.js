@@ -261,6 +261,93 @@ async function generateSignedPdf({ companyName, contactName, submittedDate, sign
   return pdfDoc.save();
 }
 
+// A plain record of what they actually answered on the sign-up form — separate from the
+// T&Cs PDF (which is the legal agreement itself). Company/contact details, the plan and
+// safety questions, which emergencies they flagged, and — where relevant — the OHSMS pack
+// those answers worked out to (the same sections/procedures/policies list shown in the app),
+// so there's a standalone document of "this is what they told us" to keep on file.
+async function generateQuestionnairePdf({ form, submittedDate, emergencies, emergencyOther, pack }) {
+  const pdfDoc = await PDFDocument.create();
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const margin = 50;
+  const pageWidth = 595;
+  const pageHeight = 842;
+  const maxWidth = pageWidth - margin * 2;
+  const lineHeight = 14;
+
+  let page = pdfDoc.addPage([pageWidth, pageHeight]);
+  let y = pageHeight - margin;
+  const newPage = () => { page = pdfDoc.addPage([pageWidth, pageHeight]); y = pageHeight - margin; };
+  const ensureSpace = (needed) => { if (y - needed < margin) newPage(); };
+  const drawLine = (text, opts = {}) => {
+    const { size = 10, bold = false, gap = lineHeight, indent = 0 } = opts;
+    ensureSpace(gap);
+    page.drawText(text, { x: margin + indent, y, size, font: bold ? boldFont : font, color: rgb(0.08, 0.16, 0.14) });
+    y -= gap;
+  };
+  const drawWrapped = (text, opts = {}) => {
+    const { size = 10, gap = lineHeight, indent = 0 } = opts;
+    wrapText(text, font, size, maxWidth - indent).forEach((line) => drawLine(line, { size, gap, indent }));
+  };
+  const drawField = (label, value) => {
+    if (value === null || value === undefined || value === "") return;
+    ensureSpace(lineHeight + 4);
+    page.drawText(label, { x: margin, y, size: 9, font: boldFont, color: rgb(0.36, 0.45, 0.45) });
+    y -= 12;
+    drawWrapped(String(value), { size: 10, gap: lineHeight });
+    y -= 8;
+  };
+
+  drawLine("OSHE Limited — Sign-Up Questionnaire", { size: 16, bold: true, gap: 24 });
+  drawLine(`Client: ${form.company}`, { size: 12, bold: true, gap: 18 });
+  drawLine(`Submitted: ${submittedDate}`, { size: 9, gap: 22 });
+
+  drawLine("Company & Contact", { size: 12, bold: true, gap: 18 });
+  drawField("Contact name", form.contactName);
+  drawField("Email", form.email);
+  drawField("Accounts email", form.accountsEmail);
+  drawField("Phone", form.phone);
+  drawField("Address", form.address);
+  drawField("Start date", form.startDate);
+
+  ensureSpace(20);
+  y -= 6;
+  drawLine("Plan & Safety Details", { size: 12, bold: true, gap: 18 });
+  drawField("General work tasks", form.workTasks);
+  drawField("App tier selected", form.appUsers);
+  drawField("Payment frequency", form.paymentFreq);
+  drawField("Requires an OHSMS", form.requireOhsms);
+  drawField("Monthly Reports add-on requested", form.wantsMonthlyReports ? "Yes" : "No");
+  drawField("Where they heard about us", form.hearAboutUs);
+
+  if (Array.isArray(emergencies) && emergencies.length > 0) {
+    ensureSpace(20);
+    y -= 6;
+    drawLine("Emergencies Identified", { size: 12, bold: true, gap: 18 });
+    emergencies.forEach((e) => drawLine(`•  ${e}`, { size: 10, gap: lineHeight, indent: 8 }));
+    if (emergencyOther) drawLine(`•  Other: ${emergencyOther}`, { size: 10, gap: lineHeight, indent: 8 });
+    y -= 8;
+  }
+
+  if (pack) {
+    ensureSpace(20);
+    y -= 6;
+    drawLine("OHSMS Pack (from these answers)", { size: 12, bold: true, gap: 18 });
+    const drawPackList = (title, list) => {
+      if (!list || list.length === 0) return;
+      drawLine(title, { size: 10, bold: true, gap: 14, indent: 4 });
+      list.forEach((item) => drawLine(`•  ${item}`, { size: 9.5, gap: 13, indent: 12 }));
+      y -= 6;
+    };
+    drawPackList("Manual Sections", pack.sections);
+    drawPackList("Procedures", pack.procedures);
+    drawPackList("Policies", pack.policies);
+  }
+
+  return pdfDoc.save();
+}
+
 /* ---------- Main function ---------- */
 exports.submitSignup = onCall({ cors: true }, async (request) => {
   const data = request.data || {};
@@ -327,6 +414,11 @@ exports.submitSignup = onCall({ cors: true }, async (request) => {
   const wantsOhsms = form.requireOhsms === "Yes";
   const pack = wantsOhsms && triggers ? computeOhsmsPack(triggers) : null;
 
+  // A record of the actual sign-up answers themselves, separate from the signed T&Cs PDF.
+  const questionnaireBytes = await generateQuestionnairePdf({ form, submittedDate, emergencies, emergencyOther, pack });
+  const questionnaireFile = bucket.file(`questionnaires/${clientId}.pdf`);
+  await questionnaireFile.save(Buffer.from(questionnaireBytes), { metadata: { contentType: "application/pdf" } });
+
   const intake = {
     submittedDate,
     contactEmail: form.email,
@@ -346,6 +438,7 @@ exports.submitSignup = onCall({ cors: true }, async (request) => {
     emergencyOther: emergencyOther || null,
     ohsmsPack: pack,
     signedTermsPath: pdfFile.name,
+    questionnairePath: questionnaireFile.name,
     existingFiles: existingFilePaths,
     logoPath,
   };
@@ -394,28 +487,34 @@ exports.submitSignup = onCall({ cors: true }, async (request) => {
 });
 
 /* ---------- Email sending (Resend) ----------
-   App.jsx writes a doc to the "mail" collection ({ to: [...], message: { subject, html } })
-   whenever it needs to send something — right now that's the Sales tab's "send sign-up
-   link" button. This function fires automatically the moment a new doc lands there, sends
-   it through Resend, and writes the outcome back onto the same document so it's visible in
-   the Firestore console if anything ever needs checking. */
+   App.jsx writes a doc to the "mail" collection whenever it needs to send something —
+   either { to: [...], message: { subject, html } } for raw content, or
+   { to: [...], template: { id, variables } } to use a Resend Template instead. This
+   function fires automatically the moment a new doc lands there, sends it through Resend,
+   and writes the outcome back onto the same document so it's visible in the Firestore
+   console if anything ever needs checking. */
 exports.sendQueuedEmail = onDocumentCreated(
   { document: "mail/{mailId}", secrets: [resendApiKey] },
   async (event) => {
     const snap = event.data;
     const data = snap.data();
-    if (!data || !data.to || !data.message) return;
+    if (!data || !data.to || (!data.message && !data.template)) return;
 
     const resend = new Resend(resendApiKey.value());
     try {
-      await resend.emails.send({
+      const payload = {
         // Must be a verified sending domain in Resend (or onboarding@resend.dev for testing
         // before oshe.co.nz is verified there) — see the setup notes for this part.
         from: "OSHE Limited <hello@oshe.co.nz>",
         to: data.to,
-        subject: data.message.subject,
-        html: data.message.html,
-      });
+      };
+      if (data.template && data.template.id) {
+        payload.template = { id: data.template.id, variables: data.template.variables || {} };
+      } else {
+        payload.subject = data.message.subject;
+        payload.html = data.message.html;
+      }
+      await resend.emails.send(payload);
       await snap.ref.update({ status: "sent", sentAt: today() });
     } catch (err) {
       console.error("Resend send failed:", err);

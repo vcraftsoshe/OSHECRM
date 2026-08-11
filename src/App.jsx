@@ -5090,21 +5090,33 @@ function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, wor
   const markDone = (instId, stepId) => {
     updateOnboardingsForClient(client.id, (clientList) => clientList.map((inst) => {
       if (inst.id !== instId) return inst;
-      const step = inst.steps.find((s) => s.id === stepId);
-      let steps;
-      if (step && step.recurring && step.recurring !== "none") {
-        // Some steps aren't one-time — annual policy reviews and the like need redoing on
-        // a schedule, so completing one reopens it at the next due date instead of leaving
-        // it permanently ticked off, same idea as a recurring client reminder.
-        const days = step.recurring === "monthly" ? 30 : step.recurring === "quarterly" ? 90 : 365;
-        const nextDate = addDays(step.dueDate, days);
-        steps = inst.steps.map((s) => (s.id === stepId ? { ...s, done: false, dueDate: nextDate } : s));
-      } else {
-        steps = inst.steps.map((s) => (s.id === stepId ? { ...s, done: true } : s));
-      }
+      // Recurring steps complete like any other step here — they don't reopen themselves or
+      // block the workflow from progressing. What "recurring" actually means only kicks in
+      // once the whole workflow finishes (below): that's when it becomes an ongoing task
+      // instead of a one-time onboarding step.
+      const steps = inst.steps.map((s) => (s.id === stepId ? { ...s, done: true } : s));
       const nowComplete = steps.every((s) => s.done);
       if (nowComplete) {
         pushNotification({ forPerson: "Vanessa", clientId: client.id, clientName: client.name, message: `${client.name} — ${inst.workflowName} complete, add to billing` });
+        // Every recurring step in this now-finished workflow becomes a real client task —
+        // due 30 days before it's next actually due (same lead time as the OHSMS reminder),
+        // and genuinely recurring from there via the normal reminder recurring mechanism
+        // (see toggleReminderDone), not the workflow itself. Fixed id per step per instance,
+        // so re-completing an already-finished workflow instance never creates a duplicate.
+        const recurringSteps = steps.filter((s) => s.recurring && s.recurring !== "none");
+        if (recurringSteps.length > 0) {
+          const intervalDays = { monthly: 30, quarterly: 90, yearly: 365 };
+          const newReminders = recurringSteps.map((s) => ({
+            id: `workflow-recurring-${inst.id}-${s.id}`,
+            text: s.title, assignee: s.owner, estHours: s.estHours || 0, done: false, recurring: s.recurring,
+            date: addDays(addDays(s.dueDate || today(), intervalDays[s.recurring] || 30), -30),
+          }));
+          const existingIds = new Set((client.reminders || []).map((r) => r.id));
+          const toAdd = newReminders.filter((r) => !existingIds.has(r.id));
+          if (toAdd.length > 0) {
+            updateDoc(doc(db, "clients", client.id), { reminders: [...(client.reminders || []), ...toAdd] });
+          }
+        }
         return { ...inst, steps, completedDate: today() };
       }
       return { ...inst, steps };
@@ -5504,7 +5516,8 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
       const completing = !reminder.done;
       let reminders;
       if (completing && reminder.recurring !== "none") {
-        const nextDate = addDays(reminder.date, reminder.recurring === "yearly" ? 365 : 30);
+        const intervalDays = { monthly: 30, quarterly: 90, yearly: 365 }[reminder.recurring] || 30;
+        const nextDate = addDays(reminder.date, intervalDays);
         reminders = c.reminders.map((r) => (r.id === id ? { ...r, date: nextDate, done: false } : r));
       } else {
         reminders = c.reminders.map((r) => (r.id === id ? { ...r, done: !r.done } : r));
@@ -5811,7 +5824,20 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
                     )}
 
                     {client.intake.signedTermsPath && (
-                      <div className="col-span-2 text-xs" style={{ color: T.slateLight }}>Signed T&amp;Cs PDF stored at: {client.intake.signedTermsPath}</div>
+                      <div className="col-span-2">
+                        <div className="text-xs font-semibold mb-1" style={{ color: T.slate }}>SIGNED TERMS &amp; CONDITIONS</div>
+                        <button type="button" onClick={async () => {
+                          try {
+                            const url = await getDownloadURL(storageRef(storage, client.intake.signedTermsPath));
+                            window.open(url, "_blank");
+                          } catch (err) {
+                            console.error("Couldn't open signed T&Cs:", err);
+                            alert("Couldn't open the signed T&Cs PDF — it may not have finished uploading, or the link has expired.");
+                          }
+                        }} className="text-xs text-left underline" style={{ color: T.tealDark }}>
+                          Open signed T&amp;Cs
+                        </button>
+                      </div>
                     )}
                     {Array.isArray(client.intake.existingFiles) && client.intake.existingFiles.length > 0 && (
                       <div className="col-span-2">
@@ -6125,6 +6151,7 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
                   className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
                   <option value="none">One-off</option>
                   <option value="monthly">Monthly</option>
+                  <option value="quarterly">Quarterly</option>
                   <option value="yearly">Yearly</option>
                 </select>
                 <button onClick={addReminder} className="text-xs font-semibold px-3 py-1.5 rounded-lg shrink-0" style={{ background: T.tealDark, color: "#fff" }}>Add</button>
@@ -8244,7 +8271,11 @@ function HoursView({ clients }) {
   const [weekStart, setWeekStart] = useState(startOfWeek(today()));
   const [monthYear, setMonthYear] = useState(currentMonth());
 
-  const trackedClients = clients.filter((c) => !c.archived && (c.billingType || "FlatFee") !== "FlatFee");
+  // Hourly/Subscription+Hours clients are tracked regardless (that's their whole billing
+  // model) — flat-fee clients don't normally need tracking here, but if hours genuinely got
+  // logged against one (an ad-hoc job, a one-off), that shouldn't just be invisible on this
+  // tab. included stays 0 for these, so they show up with no target rather than a false one.
+  const trackedClients = clients.filter((c) => !c.archived && ((c.billingType || "FlatFee") !== "FlatFee" || (c.hours?.log || []).length > 0));
   const days = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
   const dayHeaderLabel = (d) => new Date(d + "T00:00:00").toLocaleDateString("en-NZ", { weekday: "short" });
 
@@ -8558,7 +8589,16 @@ function BillingOverview({ clients, resellers }) {
                     <div><span style={{ color: T.slateLight }}>Phone: </span><span style={{ color: T.ink, fontWeight: 600 }}>{phone}</span></div>
                     <div><span style={{ color: T.slateLight }}>Payment terms: </span><span style={{ color: T.ink, fontWeight: 600 }}>{c.billing?.terms || "—"}</span></div>
                     <div><span style={{ color: T.slateLight }}>Plan: </span><span style={{ color: T.ink, fontWeight: 600 }}>{billingTypeMeta[c.billingType || "FlatFee"].label}</span></div>
-                    <div><span style={{ color: T.slateLight }}>Contract value: </span><span style={{ color: T.ink, fontWeight: 600 }}>{c.contract?.value || "—"}</span></div>
+                    <div><span style={{ color: T.slateLight }}>Tier picked at sign-up: </span><span style={{ color: T.ink, fontWeight: 600 }}>{c.intake?.appUsers || "—"}</span></div>
+                    {c.intake?.wantsMonthlyReports && (
+                      <div className="col-span-2"><Pill color={T.amber} bg={T.paperAlt}>Add-on requested: Monthly Reports ($130+/month)</Pill></div>
+                    )}
+                    <div className="flex items-center gap-1.5">
+                      <span style={{ color: T.slateLight }}>Contract value:</span>
+                      <input defaultValue={c.contract?.value || ""} placeholder="e.g. $249/month"
+                        onBlur={(e) => updateDoc(doc(db, "clients", c.id), { contract: { ...c.contract, value: e.target.value } })}
+                        className="text-xs font-semibold px-1.5 py-1 rounded-lg outline-none flex-1" style={{ color: T.ink, border: `1px solid ${T.border}` }} />
+                    </div>
                   </div>
                   <button
                     onClick={() => {
@@ -8570,6 +8610,8 @@ function BillingOverview({ clients, resellers }) {
                         `Phone: ${phone}`,
                         `Payment terms: ${c.billing?.terms || "—"}`,
                         `Plan: ${billingTypeMeta[c.billingType || "FlatFee"].label}`,
+                        `Tier picked at sign-up: ${c.intake?.appUsers || "—"}`,
+                        ...(c.intake?.wantsMonthlyReports ? ["Add-on requested: Monthly Reports ($130+/month)"] : []),
                         `Contract value: ${c.contract?.value || "—"}`,
                       ];
                       navigator.clipboard.writeText(lines.join("\n"))

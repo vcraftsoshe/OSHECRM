@@ -5573,6 +5573,7 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
             const d = daysUntil(c.ohsmsDue);
             const dot = d < 0 ? T.coral : d <= 30 ? T.amber : T.tealDark;
             const fromNztg = (c.intake?.hearAboutUs || "").toLowerCase().includes("nztg");
+            const fromBmc = (c.intake?.hearAboutUs || "").toLowerCase().includes("bmc");
             const wantsReports = Boolean(c.intake?.wantsMonthlyReports);
             return (
               <button key={c.id} onClick={() => setSelectedId(c.id)} className="text-left p-3 rounded-xl transition-colors"
@@ -5584,6 +5585,7 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
                 <div className="text-xs mt-1 flex items-center gap-1.5 flex-wrap" style={{ color: T.slate }}>
                   {c.contract.plan}
                   {fromNztg && <Pill color={T.blue} bg={T.paperAlt}>NZTG</Pill>}
+                  {fromBmc && <Pill color="#8B6BA8" bg={T.paperAlt}>BMC</Pill>}
                   {wantsReports && <Pill color={T.amber} bg={T.paperAlt}>Monthly Reports</Pill>}
                 </div>
               </button>
@@ -5689,6 +5691,7 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
               <div className="text-lg font-bold flex items-center gap-2" style={{ color: T.ink }}>
                 {client.name}
                 {(client.intake?.hearAboutUs || "").toLowerCase().includes("nztg") && <Pill color={T.blue} bg={T.paperAlt}>NZTG</Pill>}
+                {(client.intake?.hearAboutUs || "").toLowerCase().includes("bmc") && <Pill color="#8B6BA8" bg={T.paperAlt}>BMC</Pill>}
                 {Boolean(client.intake?.wantsMonthlyReports) && <Pill color={T.amber} bg={T.paperAlt}>Monthly Reports</Pill>}
               </div>
               <div className="text-sm" style={{ color: T.slate }}>{client.legalName}</div>

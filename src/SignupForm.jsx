@@ -368,6 +368,7 @@ export default function SignupForm() {
                   <option>$249+ per month for upto 20 users</option>
                   <option>20+ users, enterprise cost quoted</option>
                   <option>Sole Trader</option>
+                  <option>Custom pricing</option>
                 </select>
               </Field>
               <Field label="Would you like your payments monthly or annually" required>

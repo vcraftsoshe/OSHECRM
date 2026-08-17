@@ -10789,6 +10789,26 @@ export default function App() {
     const unsub = onSnapshot(collection(db, "customErpItems"), (snap) => setCustomErpItems(snap.docs.map((d) => ({ id: d.id, ...d.data() }))), (err) => console.error("Custom ERP items subscription failed:", err));
     return unsub;
   }, []);
+  // One-time cleanup: "Sync from sign-up form" used to create a custom ERP item for any
+  // emergency type that didn't have a proper base item yet (see SIGNUP_TO_ERP_LABELS), using
+  // whatever casing the sign-up form itself used ("Vehicle accident"). Now that Vehicle
+  // Accident, Confined Space Rescue, Excavation Collapse, and Violence or Aggressive
+  // Behaviour are proper base items, any custom item created before that fix is a pure
+  // duplicate sitting alongside the real one. This removes those specific leftovers.
+  // "Serious injury or fatality" has no base item at all since it was removed from the
+  // sign-up form entirely, so any custom item for it just gets deleted outright.
+  useEffect(() => {
+    if (customErpItems.length === 0) return;
+    const NOW_HAS_BASE_ITEM = ["vehicle accident", "confined space rescue", "excavation collapse", "violence or aggressive behaviour"];
+    const REMOVED_ENTIRELY = ["serious injury or fatality"];
+    customErpItems.forEach((item) => {
+      const lower = (item.label || "").toLowerCase();
+      if (NOW_HAS_BASE_ITEM.includes(lower) || REMOVED_ENTIRELY.includes(lower)) {
+        deleteDoc(doc(db, "customErpItems", item.id));
+        deleteDoc(doc(db, "documentTemplates", templateKey("erp", item.label))).catch(() => {});
+      }
+    });
+  }, [customErpItems]);
   const addCustomErpItem = (label) => {
     const trimmed = label.trim();
     if (!trimmed) return;

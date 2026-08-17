@@ -218,7 +218,7 @@ export default function SignupForm() {
   const [step, setStep] = useState(0);
   const [form, setForm] = useState({
     company: "", email: "", contactName: "", accountsEmail: "", phone: "", startDate: "",
-    address: "", workTasks: "", appUsers: "", paymentFreq: "", requireOhsms: "", hearAboutUs: "", wantsMonthlyReports: false,
+    address: "", workTasks: "", appUsers: "", paymentFreq: "", requireOhsms: "",
   });
   const [t, setT] = useState({
     contractors: null, physicalWorkplace: null, plant: null, vehicles: null, ppe: null,
@@ -351,9 +351,6 @@ export default function SignupForm() {
             <Field label="Please list your General Work Tasks">
               <textarea rows={3} value={form.workTasks} onChange={(e) => set("workTasks", e.target.value)} className="w-full text-sm px-3 py-2.5 rounded-lg outline-none resize-none" style={inputStyle} />
             </Field>
-            <Field label="Where did you hear about us?">
-              <input value={form.hearAboutUs} onChange={(e) => set("hearAboutUs", e.target.value)} className="w-full text-sm px-3 py-2.5 rounded-lg outline-none" style={inputStyle} />
-            </Field>
           </div>
         )}
 
@@ -368,7 +365,6 @@ export default function SignupForm() {
                   <option>$249+ per month for upto 20 users</option>
                   <option>20+ users, enterprise cost quoted</option>
                   <option>Sole Trader</option>
-                  <option>Custom pricing</option>
                 </select>
               </Field>
               <Field label="Would you like your payments monthly or annually" required>
@@ -384,12 +380,6 @@ export default function SignupForm() {
                     <option>Yes</option>
                   </select>
                 </Field>
-              </div>
-              <div className="col-span-2 flex items-center gap-2.5 rounded-lg p-3" style={{ background: T.paperAlt }}>
-                <input type="checkbox" id="wantsMonthlyReports" checked={form.wantsMonthlyReports} onChange={(e) => set("wantsMonthlyReports", e.target.checked)} />
-                <label htmlFor="wantsMonthlyReports" className="text-sm" style={{ color: T.ink }}>
-                  Add Monthly Reports — <span style={{ color: T.slate }}>$130+ per month</span>
-                </label>
               </div>
             </div>
 
@@ -513,12 +503,12 @@ export default function SignupForm() {
         )}
 
         <div className="flex items-center justify-between pb-6">
-          <button onClick={() => setStep((s) => Math.max(0, s - 1))} disabled={step === 0}
+          <button onClick={() => { setSubmitError(null); setStep((s) => Math.max(0, s - 1)); }} disabled={step === 0}
             className="flex items-center gap-1.5 text-sm font-semibold px-4 py-2.5 rounded-lg" style={{ color: step === 0 ? T.slateLight : T.slate, cursor: step === 0 ? "default" : "pointer" }}>
             <ChevronLeft size={16} /> Back
           </button>
           {step < steps.length - 1 ? (
-            <button onClick={() => canAdvance && setStep((s) => s + 1)} disabled={!canAdvance}
+            <button onClick={() => { if (canAdvance) { setSubmitError(null); setStep((s) => s + 1); } }} disabled={!canAdvance}
               className="flex items-center gap-1.5 text-sm font-semibold px-5 py-2.5 rounded-lg"
               style={{ background: canAdvance ? T.tealDark : T.slateLight, color: "#fff", cursor: canAdvance ? "pointer" : "not-allowed" }}>
               Next <ChevronRight size={16} />

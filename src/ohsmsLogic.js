@@ -122,6 +122,10 @@ export const EMERGENCY_TYPES = [
   "Elevated Work Platform Rescue (Harness Use)",
   "Elevated Work Platforms (EWP)",
   "Lone Workers",
+  "Vehicle Accident",
+  "Confined Space Rescue",
+  "Excavation Collapse",
+  "Violence or Aggressive Behaviour",
 ];
 
 // Contact items are always included by default (every client needs a numbers page); the

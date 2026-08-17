@@ -11153,11 +11153,14 @@ export default function App() {
 
   const convertLeadToClient = async (lead) => {
     const id = "c" + Date.now();
-    const intake = {
-      submittedDate: today(), contactEmail: lead.formEmail, contactName: lead.contact,
-      requestedSections: ["policy", "hazard", "induction", "ppe"], supportHours: 6,
-      existingWork: "No formal OHSMS in place yet — currently relying on a basic site safety folder.",
-    };
+    // This button never actually asks the client anything — it's a manual shortcut to
+    // fast-track a lead into a client without them filling out the real sign-up form. It
+    // used to invent placeholder answers here ("6 hours support requested", "no formal
+    // OHSMS in place", etc.) and show them as if the client had genuinely said that, which
+    // was misleading. Only what's actually known from the sales pipeline gets carried
+    // through now — everything else is left for whoever's setting the client up to fill in
+    // properly, rather than presenting a guess as fact.
+    const intake = { submittedDate: today(), contactEmail: lead.formEmail, contactName: lead.contact };
     // Carry the sales-stage history through rather than starting the client record blank —
     // Reminder entries become real client reminders (still due, still assigned); Notes and
     // Touchpoint logs both become client notes (touchpointCounts() on the Dashboards tab
@@ -11175,7 +11178,7 @@ export default function App() {
       billing: { contact: lead.contact, email: lead.formEmail, terms: "TBC", status: "Current" },
       billingType: "FlatFee", billingSetupDone: false, profile: "Standard Client",
       notes: carriedNotes, reminders: carriedReminders, contacts: [], ohsmsLastIssued: null, ohsmsDue: addDays(today(), 90),
-      extras: [], hours: { included: intake.supportHours, log: [] }, users: { log: [] }, intake,
+      extras: [], hours: { included: 0, log: [] }, users: { log: [] }, intake,
     };
     await setDoc(doc(db, "clients", id), newClient);
     const wf = workflows.find((w) => w.isDefault) || workflows[0];

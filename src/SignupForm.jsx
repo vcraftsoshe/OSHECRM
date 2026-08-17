@@ -98,7 +98,7 @@ function Field({ label, required, hint, children }) {
 
 const inputStyle = { border: `1px solid ${T.border}`, color: T.ink, background: "#fff" };
 
-const emergencyOptions = ["Fire", "Medical emergency", "Serious injury or fatality", "Hazardous substance spill", "Vehicle accident", "Plant roll over", "Natural disaster", "Electrical incident", "Working at Heights rescue", "Confined Space rescue", "Excavation collapse", "Violence or aggressive behaviour", "Lone working", "Service strike", "Chainsaw", "Other"];
+const emergencyOptions = ["Fire", "Medical emergency", "Hazardous substance spill", "Vehicle accident", "Plant roll over", "Natural disaster", "Electrical incident", "Working at Heights rescue", "Confined Space rescue", "Excavation collapse", "Violence or aggressive behaviour", "Lone working", "Service strike", "Chainsaw", "Other"];
 
 function ChipGroup({ options, selected, onToggle }) {
   return (

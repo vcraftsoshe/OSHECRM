@@ -192,19 +192,28 @@ const termsSections = [
 
 /* ---------- PDF generation ---------- */
 function wrapText(text, font, size, maxWidth) {
-  const words = text.split(" ");
+  // Split on newlines first — a raw "\n" character passed straight into page.drawText()
+  // is what was crashing this: pdf-lib's WinAnsi encoder can't render it, and any free-text
+  // form answer with a line break in it (someone just pressing Enter in a textarea) would
+  // trigger that immediately. Blank lines (someone pressing Enter twice) are preserved as
+  // empty lines rather than silently disappearing.
+  const paragraphs = text.split("\n");
   const lines = [];
-  let line = "";
-  for (const word of words) {
-    const test = line ? `${line} ${word}` : word;
-    if (font.widthOfTextAtSize(test, size) > maxWidth && line) {
-      lines.push(line);
-      line = word;
-    } else {
-      line = test;
+  paragraphs.forEach((para) => {
+    if (para === "") { lines.push(""); return; }
+    const words = para.split(" ");
+    let line = "";
+    for (const word of words) {
+      const test = line ? `${line} ${word}` : word;
+      if (font.widthOfTextAtSize(test, size) > maxWidth && line) {
+        lines.push(line);
+        line = word;
+      } else {
+        line = test;
+      }
     }
-  }
-  if (line) lines.push(line);
+    if (line) lines.push(line);
+  });
   return lines;
 }
 
@@ -349,7 +358,7 @@ async function generateQuestionnairePdf({ form, submittedDate, emergencies, emer
 }
 
 /* ---------- Main function ---------- */
-exports.submitSignup = onCall({ cors: true }, async (request) => {
+exports.submitSignup = onCall({ cors: true, memory: "512MiB" }, async (request) => {
   const data = request.data || {};
   const { leadId, form, triggers, emergencies, emergencyOther, logoDataUrl, signatureDataUrl, existingFiles } = data;
 

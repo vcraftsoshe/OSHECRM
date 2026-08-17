@@ -10650,6 +10650,29 @@ export default function App() {
       }
     });
   }, [clientsLoaded, clients]);
+  // One-time cleanup: "Simulate form completed" (Sales tab) used to invent placeholder
+  // intake answers — a fixed "6 hours support requested", a fixed set of "requested
+  // sections", and a fixed "no formal OHSMS in place" sentence — and show them on the
+  // client's Overview tab as if the client had actually said that, which was misleading
+  // since that button never asks the client anything. Only strips those three specific
+  // fields, and only from a client whose intake matches the exact old placeholder values —
+  // a real sign-up submission would essentially never coincidentally match all three
+  // exactly, so this can't mistake genuine answers for the fake ones. Leaves
+  // submittedDate/contactEmail/contactName alone either way, since those were always real.
+  useEffect(() => {
+    if (!clientsLoaded) return;
+    const FAKE_EXISTING_WORK = "No formal OHSMS in place yet — currently relying on a basic site safety folder.";
+    const FAKE_SECTIONS = JSON.stringify(["policy", "hazard", "induction", "ppe"]);
+    clients.forEach((c) => {
+      const intake = c.intake;
+      if (!intake) return;
+      const matchesFakeData = intake.supportHours === 6 && intake.existingWork === FAKE_EXISTING_WORK && JSON.stringify(intake.requestedSections) === FAKE_SECTIONS;
+      if (matchesFakeData) {
+        const { supportHours, existingWork, requestedSections, ...cleanIntake } = intake;
+        updateDoc(doc(db, "clients", c.id), { intake: cleanIntake });
+      }
+    });
+  }, [clientsLoaded, clients]);
   // Leads now live in Firestore, same pattern as clients: live subscription plus a
   // one-time seed of the mock data using the same ids so nothing else breaks.
   const [leads, setLeads] = useState([]);

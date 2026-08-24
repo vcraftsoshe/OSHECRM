@@ -218,7 +218,7 @@ export default function SignupForm() {
   const [step, setStep] = useState(0);
   const [form, setForm] = useState({
     company: "", email: "", contactName: "", accountsEmail: "", phone: "", startDate: "",
-    address: "", workTasks: "", appUsers: "", paymentFreq: "", requireOhsms: "",
+    address: "", workTasks: "", appUsers: "", paymentFreq: "", requireOhsms: "", hearAboutUs: "", wantsMonthlyReports: false,
   });
   const [t, setT] = useState({
     contractors: null, physicalWorkplace: null, plant: null, vehicles: null, ppe: null,
@@ -277,7 +277,7 @@ export default function SignupForm() {
       setSubmitted(true);
     } catch (err) {
       console.error("Sign-up submission failed:", err);
-      setSubmitError("Something went wrong submitting this — please try again, or contact OSHE directly if it keeps happening.");
+      setSubmitError("Something went wrong submitting this. Please try again, or contact OSHE directly if it keeps happening.");
     } finally {
       setSubmitting(false);
     }
@@ -351,6 +351,9 @@ export default function SignupForm() {
             <Field label="Please list your General Work Tasks">
               <textarea rows={3} value={form.workTasks} onChange={(e) => set("workTasks", e.target.value)} className="w-full text-sm px-3 py-2.5 rounded-lg outline-none resize-none" style={inputStyle} />
             </Field>
+            <Field label="Where did you hear about us?">
+              <input value={form.hearAboutUs} onChange={(e) => set("hearAboutUs", e.target.value)} className="w-full text-sm px-3 py-2.5 rounded-lg outline-none" style={inputStyle} />
+            </Field>
           </div>
         )}
 
@@ -365,6 +368,7 @@ export default function SignupForm() {
                   <option>$249+ per month for upto 20 users</option>
                   <option>20+ users, enterprise cost quoted</option>
                   <option>Sole Trader</option>
+                  <option>Custom pricing</option>
                 </select>
               </Field>
               <Field label="Would you like your payments monthly or annually" required>
@@ -381,12 +385,18 @@ export default function SignupForm() {
                   </select>
                 </Field>
               </div>
+              <div className="col-span-2">
+                <label className="flex items-center gap-2 text-sm cursor-pointer" style={{ color: T.ink }}>
+                  <input type="checkbox" checked={form.wantsMonthlyReports} onChange={(e) => set("wantsMonthlyReports", e.target.checked)} />
+                  Add Monthly Reports, $130+ per month
+                </label>
+              </div>
             </div>
 
             {wantsOhsms && (
               <>
                 <div className="rounded-2xl p-6" style={{ background: T.card, border: `1px solid ${T.border}` }}>
-                  <div className="text-sm mb-3" style={{ color: T.slate }}>Answer Yes/No — this decides exactly what goes into your safety system, nothing more.</div>
+                  <div className="text-sm mb-3" style={{ color: T.slate }}>Answer Yes/No. This decides exactly what goes into your safety system, nothing more.</div>
 
                   <div className="text-xs font-bold uppercase tracking-wide mt-2 mb-1" style={{ color: T.tealDark }}>1. Contractors</div>
                   <YesNo question="Do you engage contractors?" value={t.contractors} onChange={(v) => setTrig("contractors", v)} />
@@ -418,7 +428,7 @@ export default function SignupForm() {
                   <YesNo question="Do you need to meet SiteWise and/or Totika?" value={t.compliance} onChange={(v) => setTrig("compliance", v)} />
                 </div>
                 {/* `pack` is computed above from the trigger answers and is what drives document generation
-                    internally (the CRM's Systems builder) — deliberately not displayed to the client here. */}
+                    internally (the CRM's Systems builder), deliberately not displayed to the client here. */}
               </>
             )}
           </div>
@@ -432,7 +442,7 @@ export default function SignupForm() {
                 <label className="w-full flex flex-col items-center justify-center gap-2 py-8 rounded-lg text-sm cursor-pointer"
                   style={{ border: `1.5px dashed ${T.slateLight}`, color: T.slate, background: T.paperAlt }}>
                   {logo ? <ImageIcon size={22} color={T.tealDark} /> : <Upload size={20} />}
-                  {logo ? "Logo attached — click to change" : "Click to upload your logo"}
+                  {logo ? "Logo attached, click to change" : "Click to upload your logo"}
                   <input type="file" accept="image/*" className="hidden" onChange={(e) => {
                     const file = e.target.files?.[0];
                     if (!file) return;
@@ -445,7 +455,7 @@ export default function SignupForm() {
             </div>
 
             <div className="rounded-2xl p-6" style={{ background: T.card, border: `1px solid ${T.border}` }}>
-              <Field label="Do you have any existing documents you'd like to send us?" hint="Anything you already have — old H&S folders, registers, policies — attach them here and we'll work them into your system.">
+              <Field label="Do you have any existing documents you'd like to send us?" hint="Anything you already have, old H&S folders, registers, policies, attach them here and we'll work them into your system.">
                 <label className="w-full flex flex-col items-center justify-center gap-2 py-8 rounded-lg text-sm cursor-pointer"
                   style={{ border: `1.5px dashed ${T.slateLight}`, color: T.slate, background: T.paperAlt }}>
                   <Upload size={20} />

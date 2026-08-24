@@ -457,7 +457,7 @@ exports.submitSignup = onCall({ cors: true, memory: "512MiB" }, async (request) 
     legalName: form.company,
     logo: logoPath,
     contract: { start: submittedDate, renewal: addDays(submittedDate, 365), plan: "New client — plan to confirm" },
-    billing: { contact: form.contactName, email: form.accountsEmail || form.email, terms: "TBC", status: "Current" },
+    billing: { contact: form.contactName, email: form.accountsEmail || form.email, terms: "20th of following month", status: "Current" },
     billingType: "FlatFee",
     billingSetupDone: false,
     profile: "Standard Client",

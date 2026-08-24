@@ -66,7 +66,6 @@ export const CONDITIONAL_PROCEDURES = [
   { key: "ppe", label: "PPE Procedure" },
   { key: "hazardousSubstances", label: "Hazardous Substances Procedure" },
   { key: "healthMonitoring", label: "Health Monitoring Procedure" },
-  { key: "erp", label: "Emergency Response Plan" },
   { key: "physicalWorkplace", label: "Workplace Inspection Procedure" },
   { key: "workers", label: "Induction & Training Procedure" },
   { key: "continualImprovement", label: "Continual Improvement Procedure" },

@@ -20,7 +20,7 @@ function addDays(dateStr, days) {
   return d.toISOString().slice(0, 10);
 }
 
-/* ---------- OHSMS builder logic — keep in sync with SignupForm.jsx and ohsms-builder-logic.md ---------- */
+/* ---------- OHSMS builder logic, keep in sync with SignupForm.jsx and ohsms-builder-logic.md ---------- */
 const SECTION_ITEMS = [
   { label: "1. Introduction", always: true },
   { label: "2. Purpose", always: true },
@@ -117,7 +117,7 @@ function computeOhsmsPack(t) {
   return { sections, procedures, policies, forms: [] };
 }
 
-/* ---------- T&Cs text — keep in sync with SignupForm.jsx ---------- */
+/* ---------- T&Cs text, keep in sync with SignupForm.jsx ---------- */
 const termsSections = [
   { title: "1. Subscription and Access", body: [
     "OSHE Limited grants the Company access to the OSHE App and its associated resources on a subscription basis for the agreed term.",
@@ -192,7 +192,7 @@ const termsSections = [
 
 /* ---------- PDF generation ---------- */
 function wrapText(text, font, size, maxWidth) {
-  // Split on newlines first — a raw "\n" character passed straight into page.drawText()
+  // Split on newlines first. A raw "\n" character passed straight into page.drawText()
   // is what was crashing this: pdf-lib's WinAnsi encoder can't render it, and any free-text
   // form answer with a line break in it (someone just pressing Enter in a textarea) would
   // trigger that immediately. Blank lines (someone pressing Enter twice) are preserved as
@@ -242,7 +242,7 @@ async function generateSignedPdf({ companyName, contactName, submittedDate, sign
     y -= gap;
   };
 
-  drawLine("OSHE Limited — Terms & Conditions", { size: 16, bold: true, gap: 24 });
+  drawLine("OSHE Limited: Terms & Conditions", { size: 16, bold: true, gap: 24 });
   drawLine(`Client: ${companyName}`, { size: 11, bold: true, gap: 16 });
   drawLine(`Signed by: ${contactName}     Date: ${submittedDate}`, { size: 10, gap: 22 });
 
@@ -270,9 +270,9 @@ async function generateSignedPdf({ companyName, contactName, submittedDate, sign
   return pdfDoc.save();
 }
 
-// A plain record of what they actually answered on the sign-up form — separate from the
+// A plain record of what they actually answered on the sign-up form, separate from the
 // T&Cs PDF (which is the legal agreement itself). Company/contact details, the plan and
-// safety questions, which emergencies they flagged, and — where relevant — the OHSMS pack
+// safety questions, which emergencies they flagged, and, where relevant, the OHSMS pack
 // those answers worked out to (the same sections/procedures/policies list shown in the app),
 // so there's a standalone document of "this is what they told us" to keep on file.
 async function generateQuestionnairePdf({ form, submittedDate, emergencies, emergencyOther, pack }) {
@@ -308,7 +308,7 @@ async function generateQuestionnairePdf({ form, submittedDate, emergencies, emer
     y -= 8;
   };
 
-  drawLine("OSHE Limited — Sign-Up Questionnaire", { size: 16, bold: true, gap: 24 });
+  drawLine("OSHE Limited: Sign-Up Questionnaire", { size: 16, bold: true, gap: 24 });
   drawLine(`Client: ${form.company}`, { size: 12, bold: true, gap: 18 });
   drawLine(`Submitted: ${submittedDate}`, { size: 9, gap: 22 });
 
@@ -456,7 +456,7 @@ exports.submitSignup = onCall({ cors: true, memory: "512MiB" }, async (request) 
     name: form.company,
     legalName: form.company,
     logo: logoPath,
-    contract: { start: submittedDate, renewal: addDays(submittedDate, 365), plan: "New client — plan to confirm" },
+    contract: { start: submittedDate, renewal: addDays(submittedDate, 365), plan: "New client, plan to confirm" },
     billing: { contact: form.contactName, email: form.accountsEmail || form.email, terms: "20th of following month", status: "Current" },
     billingType: "FlatFee",
     billingSetupDone: false,
@@ -496,7 +496,7 @@ exports.submitSignup = onCall({ cors: true, memory: "512MiB" }, async (request) 
 });
 
 /* ---------- Email sending (Resend) ----------
-   App.jsx writes a doc to the "mail" collection whenever it needs to send something —
+   App.jsx writes a doc to the "mail" collection whenever it needs to send something,
    either { to: [...], message: { subject, html } } for raw content, or
    { to: [...], template: { id, variables } } to use a Resend Template instead. This
    function fires automatically the moment a new doc lands there, sends it through Resend,
@@ -513,7 +513,7 @@ exports.sendQueuedEmail = onDocumentCreated(
     try {
       const payload = {
         // Must be a verified sending domain in Resend (or onboarding@resend.dev for testing
-        // before oshe.co.nz is verified there) — see the setup notes for this part.
+        // before oshe.co.nz is verified there). See the setup notes for this part.
         from: "OSHE Limited <hello@oshe.co.nz>",
         to: data.to,
       };

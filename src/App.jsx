@@ -5109,18 +5109,34 @@ function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, wor
       if (nowComplete) {
         pushNotification({ forPerson: "Vanessa", clientId: client.id, clientName: client.name, message: `${client.name} — ${inst.workflowName} complete, add to billing` });
         // Every recurring step in this now-finished workflow becomes a real client task —
-        // due 30 days before it's next actually due (same lead time as the OHSMS reminder),
-        // and genuinely recurring from there via the normal reminder recurring mechanism
-        // (see toggleReminderDone), not the workflow itself. Fixed id per step per instance,
-        // so re-completing an already-finished workflow instance never creates a duplicate.
+        // due on its actual next anniversary date, and genuinely recurring from there via
+        // the normal reminder recurring mechanism (see toggleReminderDone), not the workflow
+        // itself. Fixed id per step per instance, so re-completing an already-finished
+        // workflow instance never creates a duplicate. Yearly steps (the common case for
+        // things like annual pre-qualification) also get 3 staged early-warning
+        // notifications at 90/60/30 days before the due date, so it's flagged well ahead of
+        // time rather than surfacing only once it's already close — monthly/quarterly steps
+        // keep the simpler single reminder fired 30 days early, since 90-day advance notice
+        // doesn't make sense on something that recurs monthly.
         const recurringSteps = steps.filter((s) => s.recurring && s.recurring !== "none");
         if (recurringSteps.length > 0) {
           const intervalDays = { monthly: 30, quarterly: 90, yearly: 365 };
-          const newReminders = recurringSteps.map((s) => ({
-            id: `workflow-recurring-${inst.id}-${s.id}`,
-            text: s.title, assignee: s.owner, estHours: s.estHours || 0, done: false, recurring: s.recurring,
-            date: addDays(addDays(s.dueDate || today(), intervalDays[s.recurring] || 30), -30),
-          }));
+          const newReminders = recurringSteps.flatMap((s) => {
+            const baseId = `workflow-recurring-${inst.id}-${s.id}`;
+            if (s.recurring === "yearly") {
+              const dueDate = addDays(s.dueDate || today(), intervalDays.yearly);
+              const mainReminder = { id: baseId, text: s.title, assignee: s.owner, estHours: s.estHours || 0, done: false, recurring: "yearly", date: dueDate };
+              const staged = [90, 60, 30].map((days) => ({
+                id: `${baseId}-${days}d`, text: `${s.title}, due in ${days} days`, assignee: s.owner, estHours: 0, done: false, recurring: "none",
+                date: addDays(dueDate, -days),
+              }));
+              return [mainReminder, ...staged];
+            }
+            return [{
+              id: baseId, text: s.title, assignee: s.owner, estHours: s.estHours || 0, done: false, recurring: s.recurring,
+              date: addDays(addDays(s.dueDate || today(), intervalDays[s.recurring] || 30), -30),
+            }];
+          });
           const existingIds = new Set((client.reminders || []).map((r) => r.id));
           const toAdd = newReminders.filter((r) => !existingIds.has(r.id));
           if (toAdd.length > 0) {
@@ -5526,7 +5542,23 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
       if (!reminder) return c;
       const completing = !reminder.done;
       let reminders;
-      if (completing && reminder.recurring !== "none") {
+      // A workflow-spawned annual task (not one of its own -90d/-60d/-30d staged notification
+      // siblings) needs special handling on completion: recomputing just its own date isn't
+      // enough, since the 3 staged notifications leading up to it also need to move forward
+      // to the new cycle and reset to not-done, or they'd stay stuck pointing at last year's
+      // dates. Monthly/quarterly workflow tasks and every other recurring reminder keep the
+      // simple single-date reopen below, since staged notifications are only built for yearly.
+      const isWorkflowMainTask = String(id).startsWith("workflow-recurring-") && !/-(90|60|30)d$/.test(id);
+      if (completing && reminder.recurring === "yearly" && isWorkflowMainTask) {
+        const nextDate = addDays(reminder.date, 365);
+        const stageDays = [90, 60, 30];
+        reminders = c.reminders.map((r) => {
+          if (r.id === id) return { ...r, date: nextDate, done: false };
+          const staged = stageDays.find((d) => r.id === `${id}-${d}d`);
+          if (staged) return { ...r, date: addDays(nextDate, -staged), done: false };
+          return r;
+        });
+      } else if (completing && reminder.recurring !== "none") {
         const intervalDays = { monthly: 30, quarterly: 90, yearly: 365 }[reminder.recurring] || 30;
         const nextDate = addDays(reminder.date, intervalDays);
         reminders = c.reminders.map((r) => (r.id === id ? { ...r, date: nextDate, done: false } : r));
@@ -10735,6 +10767,26 @@ export default function App() {
       }
     });
   }, [clientsLoaded, clients]);
+  // Second, separate cleanup: the fix above only ever touched client.intake. The fake "6
+  // hours support requested" also got written into client.hours.included at creation time,
+  // as a completely separate field that the intake cleanup never reached, which is why
+  // these clients could still show "6" long after their fake intake text was gone.
+  // Detecting this safely (without risking a genuinely intentional client with 6 included
+  // hours getting reset by mistake) relies on a specific signal: a client that went through
+  // "Simulate form completed" always has an intake object with submittedDate/contactEmail/
+  // contactName but never has appUsers/paymentFreq/requireOhsms, since those only ever get
+  // set by someone actually answering the real sign-up form. A fully manual client (added
+  // via "Add client") has intake: null entirely, so this never touches those either.
+  useEffect(() => {
+    if (!clientsLoaded) return;
+    clients.forEach((c) => {
+      const intake = c.intake;
+      const looksSimulated = intake && !intake.appUsers && !intake.paymentFreq && !intake.requireOhsms;
+      if (looksSimulated && c.hours?.included === 6) {
+        updateDoc(doc(db, "clients", c.id), { hours: { ...c.hours, included: 0 } });
+      }
+    });
+  }, [clientsLoaded, clients]);
   // Leads now live in Firestore, same pattern as clients: live subscription plus a
   // one-time seed of the mock data using the same ids so nothing else breaks.
   const [leads, setLeads] = useState([]);
@@ -11064,6 +11116,28 @@ export default function App() {
       "Excavation Collapse": "\u2022 Do not enter the excavation. A second collapse is common and can bury or injure would-be rescuers.\n\u2022 Call 111 immediately and clearly state it is a trench or excavation collapse with a person buried or trapped.\n\u2022 Evacuate all other workers from the immediate area and keep plant and vehicles well back from the edge. Vibration and extra load can trigger further collapse.\n\u2022 If any part of the person is visible and it is safe to do so without entering the excavation, try to keep them talking and reassured while waiting for emergency services.\n\u2022 Do not attempt to dig the person out by hand or machine. This must be left to trained emergency services with proper shoring equipment.\n\u2022 Identify and inform emergency services of any underground services (gas, electrical, water) in the area.\n\u2022 Once the incident is over, the excavation must be assessed by a competent person before any work resumes.",
       "Violence or Aggressive Behaviour": "\u2022 Your safety comes first. Do not put yourself at risk trying to protect property or resolve the situation yourself.\n\u2022 Stay calm, keep your voice low and steady, and avoid actions that could be seen as threatening (raised voice, sudden movements, pointing).\n\u2022 Where possible, keep a clear exit route between yourself and the door. Do not let yourself become trapped in a corner or small room.\n\u2022 If you feel unsafe, remove yourself from the situation and get to a safe area. Do not attempt to physically restrain or engage with an aggressive person.\n\u2022 Alert other workers using an agreed code word or the site's duress alarm if one is available.\n\u2022 Call 111 if there is a weapon involved, a physical assault, or you believe anyone is in danger.\n\u2022 Once safe, report the incident to your manager immediately and complete an incident report. Include a description of the person, what was said or done, and any witnesses.\n\u2022 Support is available afterwards. Speak to your manager about accessing EAP or other support services if you've been affected.",
     };
+    // Real, verified regional emergency numbers for the ERP's per-region Emergency Contact
+    // Numbers pages (client.erpRegion picks which one a client uses). National numbers
+    // (Police/Fire/Ambulance, WorkSafe, Poisons Centre, Healthline) are included in every
+    // region's box, with the region-specific power, Civil Defence, environmental/pollution,
+    // hospital and gas leak lines set per region.
+    const realRegionalNumbers = {
+      "Emergency Contact Numbers (Northland)": "Police / Ambulance / Fire: 111\n\nWorkSafe New Zealand: 0800 030 040\n\nNational Poisons Centre: 0800 764 766\n\nHealthline: 0800 611 116\n\nPower / Electrical Fault: Northpower 0800 104 040. Far North / Top Energy 0800 867 363.\n\nCivil Defence: 0800 002 004\n\nEnvironmental / Pollution: Northland Regional Council 0800 504 639, 24/7\n\nMain Hospital: Whangarei Hospital 09 430 4100\n\nGas Leak: Firstgas: residential 0800 802 332. Damaged/leaking pipe 0800 734 567.",
+      "Emergency Contact Numbers (Auckland)": "Police / Ambulance / Fire: 111\n\nWorkSafe New Zealand: 0800 030 040\n\nNational Poisons Centre: 0800 764 766\n\nHealthline: 0800 611 116\n\nPower / Electrical Fault: Vector 0508 832 867. Counties Power 0800 100 202.\n\nCivil Defence: Auckland Emergency Management 0800 22 22 00\n\nEnvironmental / Pollution: Auckland Council Pollution Hotline 09 377 3107, 24/7\n\nMain Hospital: Auckland City Hospital 09 367 0000\n\nGas Leak: Vector Gas 0800 764 764",
+      "Emergency Contact Numbers (Waikato)": "Police / Ambulance / Fire: 111\n\nWorkSafe New Zealand: 0800 030 040\n\nNational Poisons Centre: 0800 764 766\n\nHealthline: 0800 611 116\n\nPower / Electrical Fault: WEL Networks 0800 800 935. Powerco areas 0800 27 27 27.\n\nCivil Defence: Contact the relevant local council / Waikato CDEM. For regional assistance Waikato Regional Council 0800 800 401.\n\nEnvironmental / Pollution: Waikato Regional Council 0800 800 401, 24/7\n\nMain Hospital: Waikato Hospital 0800 276 216 or 07 839 8899\n\nGas Leak: Firstgas 0800 802 332 / leaking pipe 0800 734 567. Powerco gas areas 0800 111 848.",
+      "Emergency Contact Numbers (Bay of Plenty)": "Police / Ambulance / Fire: 111\n\nWorkSafe New Zealand: 0800 030 040\n\nNational Poisons Centre: 0800 764 766\n\nHealthline: 0800 611 116\n\nPower / Electrical Fault: Powerco 0800 27 27 27. Other network providers may apply by district.\n\nCivil Defence: Emergency Management Bay of Plenty 0800 884 880\n\nEnvironmental / Pollution: BOP Regional Council Pollution Hotline 0800 884 883\n\nMain Hospital: Tauranga Hospital 07 579 8000\n\nGas Leak: Firstgas 0800 802 332 / leaking pipe 0800 734 567. Powerco network 0800 111 848.",
+      "Emergency Contact Numbers (Gisborne)": "Police / Ambulance / Fire: 111\n\nWorkSafe New Zealand: 0800 030 040\n\nNational Poisons Centre: 0800 764 766\n\nHealthline: 0800 611 116\n\nPower / Electrical Fault: Firstlight Network 0800 206 207, 24/7\n\nCivil Defence: Tairawhiti Civil Defence / Gisborne District Council 0800 653 800, 24/7\n\nEnvironmental / Pollution: Gisborne District Council 0800 653 800, 24/7\n\nMain Hospital: Gisborne Hospital 0800 800 620 or 06 869 0500\n\nGas Leak: Firstgas 0800 802 332 / leaking pipe 0800 734 567.",
+      "Emergency Contact Numbers (Hawke's Bay)": "Police / Ambulance / Fire: 111\n\nWorkSafe New Zealand: 0800 030 040\n\nNational Poisons Centre: 0800 764 766\n\nHealthline: 0800 611 116\n\nPower / Electrical Fault: Unison 0800 2 UNISON, 0800 286 476. Wairoa / Firstlight 0800 206 207.\n\nCivil Defence: Hawke's Bay Emergency Management 06 835 9200 for general contact. Immediate threat: 111.\n\nEnvironmental / Pollution: Hawke's Bay Regional Council 0800 108 838, 24/7\n\nMain Hospital: Hawke's Bay Hospital 06 878 8109\n\nGas Leak: Powerco gas network 0800 111 848. Firstgas transmission/damaged pipeline 0800 734 567.",
+      "Emergency Contact Numbers (Taranaki)": "Police / Ambulance / Fire: 111\n\nWorkSafe New Zealand: 0800 030 040\n\nNational Poisons Centre: 0800 764 766\n\nHealthline: 0800 611 116\n\nPower / Electrical Fault: Powerco 0800 27 27 27\n\nCivil Defence: Taranaki Civil Defence 0800 900 049\n\nEnvironmental / Pollution: Taranaki Regional Council 0800 736 222\n\nMain Hospital: Taranaki Base Hospital 06 753 6139\n\nGas Leak: Powerco Gas 0800 111 848",
+      "Emergency Contact Numbers (Manawatu-Whanganui)": "Police / Ambulance / Fire: 111\n\nWorkSafe New Zealand: 0800 030 040\n\nNational Poisons Centre: 0800 764 766\n\nHealthline: 0800 611 116\n\nPower / Electrical Fault: Powerco 0800 27 27 27. Other networks include Electra, Centralines, Scanpower and The Lines Company depending on location.\n\nCivil Defence: Manawatu-Whanganui CDEM / Horizons 0508 800 800\n\nEnvironmental / Pollution: Horizons Regional Council 0508 800 800, 24/7\n\nMain Hospital: Palmerston North Hospital ED 06 350 8750. Main hospital 06 356 9169.\n\nGas Leak: Powerco Gas 0800 111 848. Firstgas transmission/damaged pipeline 0800 734 567.",
+      "Emergency Contact Numbers (Wellington)": "Police / Ambulance / Fire: 111\n\nWorkSafe New Zealand: 0800 030 040\n\nNational Poisons Centre: 0800 764 766\n\nHealthline: 0800 611 116\n\nPower / Electrical Fault: Wellington Electricity 0800 248 148. Other networks apply in Kapiti/Wairarapa.\n\nCivil Defence: WREMO 04 830 4279\n\nEnvironmental / Pollution: Greater Wellington Environmental Hotline 0800 496 734\n\nMain Hospital: Wellington Regional Hospital 04 385 5999\n\nGas Leak: Powerco gas network 0800 111 848. Firstgas network including Kapiti 0800 802 332 / damaged pipe 0800 734 567.",
+      "Emergency Contact Numbers (Tasman-Nelson)": "Police / Ambulance / Fire: 111\n\nWorkSafe New Zealand: 0800 030 040\n\nNational Poisons Centre: 0800 764 766\n\nHealthline: 0800 611 116\n\nPower / Electrical Fault: Network Tasman 0800 508 100, 24/7\n\nCivil Defence: Nelson Tasman Emergency Management 03 543 7290. After hours 03 546 0200 or 03 543 8400.\n\nEnvironmental / Pollution: Nelson 0800 NO POLLUTE, 0800 667 655883. Tasman 03 543 8400, 24/7.\n\nMain Hospital: Nelson Hospital 03 546 1800\n\nGas Leak: No reticulated natural gas network. For LPG emergencies contact the LPG supplier and call 111 where there is immediate danger.",
+      "Emergency Contact Numbers (Marlborough)": "Police / Ambulance / Fire: 111\n\nWorkSafe New Zealand: 0800 030 040\n\nNational Poisons Centre: 0800 764 766\n\nHealthline: 0800 611 116\n\nPower / Electrical Fault: Marlborough Lines 03 577 7007, 24/7\n\nCivil Defence: Marlborough CDEM / Marlborough District Council 03 520 7400, 24/7\n\nEnvironmental / Pollution: Marlborough District Council 03 520 7400, 24/7\n\nMain Hospital: Wairau Hospital 03 520 9999\n\nGas Leak: No reticulated natural gas network. LPG supplier / 111 for immediate danger.",
+      "Emergency Contact Numbers (West Coast)": "Police / Ambulance / Fire: 111\n\nWorkSafe New Zealand: 0800 030 040\n\nNational Poisons Centre: 0800 764 766\n\nHealthline: 0800 611 116\n\nPower / Electrical Fault: Westpower 0800 768 241, 24/7\n\nCivil Defence: West Coast Emergency Management 03 769 9323\n\nEnvironmental / Pollution: West Coast Regional Council 0508 800 118, 24/7\n\nMain Hospital: Te Nikau Hospital 03 769 7400\n\nGas Leak: No reticulated natural gas network. LPG supplier / 111 for immediate danger.",
+      "Emergency Contact Numbers (Canterbury)": "Police / Ambulance / Fire: 111\n\nWorkSafe New Zealand: 0800 030 040\n\nNational Poisons Centre: 0800 764 766\n\nHealthline: 0800 611 116\n\nPower / Electrical Fault: Orion 0800 363 9898. North Canterbury MainPower 0800 30 90 80. Other networks, including Alpine Energy, apply further south.\n\nCivil Defence: Canterbury CDEM / Environment Canterbury general 0800 324 636. Immediate danger 111.\n\nEnvironmental / Pollution: Environment Canterbury urgent environmental incident 0800 765 588, 24/7\n\nMain Hospital: Christchurch Hospital 03 364 0640. ED patient enquiries 03 364 0600.\n\nGas Leak: No reticulated natural gas network. LPG supplier / 111 for immediate danger.",
+      "Emergency Contact Numbers (Otago)": "Police / Ambulance / Fire: 111\n\nWorkSafe New Zealand: 0800 030 040\n\nNational Poisons Centre: 0800 764 766\n\nHealthline: 0800 611 116\n\nPower / Electrical Fault: Aurora Energy 0800 22 00 05. PowerNet 0800 808 587 in parts of Central Otago/Queenstown Lakes.\n\nCivil Defence: Emergency Management Otago 0800 474 082\n\nEnvironmental / Pollution: Otago Regional Council Pollution Hotline 0800 800 033, 24/7\n\nMain Hospital: Dunedin Hospital 03 474 0999\n\nGas Leak: No reticulated natural gas network. LPG supplier / 111 for immediate danger.",
+      "Emergency Contact Numbers (Southland)": "Police / Ambulance / Fire: 111\n\nWorkSafe New Zealand: 0800 030 040\n\nNational Poisons Centre: 0800 764 766\n\nHealthline: 0800 611 116\n\nPower / Electrical Fault: PowerNet 0800 808 587, 24/7\n\nCivil Defence: Emergency Management Southland 0800 76 88 45 or 03 211 5115\n\nEnvironmental / Pollution: Environment Southland Pollution Hotline 0800 76 88 45, 24/7\n\nMain Hospital: Southland Hospital 03 218 1949\n\nGas Leak: No reticulated natural gas network. LPG supplier / 111 for immediate danger.",
+    };
     (async () => {
       try {
         // Sections and Policies: only fill in if genuinely empty, so any edits already made
@@ -11072,6 +11146,7 @@ export default function App() {
           ...Object.entries(realSectionContent).map(([label, content]) => ["sections", label, content]),
           ...Object.entries(realPolicyContent).map(([label, content]) => ["policies", label, content]),
           ...Object.entries(realErpContent).map(([label, content]) => ["erp", label, content]),
+          ...Object.entries(realRegionalNumbers).map(([label, content]) => ["erp", label, content]),
         ];
         await Promise.all(
           conditionalContent.map(async ([catKey, label, content]) => {

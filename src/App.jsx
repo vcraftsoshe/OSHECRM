@@ -9,7 +9,7 @@ import { collection, doc, onSnapshot, updateDoc, setDoc, getDocs, getDoc, delete
 import { signOut } from "firebase/auth";
 import { ref as storageRef, getDownloadURL, uploadBytes } from "firebase/storage";
 import { db, auth, storage } from "./firebase";
-import { SECTION_ITEMS, ALWAYS_PROCEDURES, CONDITIONAL_PROCEDURES, COMPLIANCE_EXTRA_PROCEDURES, ALWAYS_POLICIES, CONDITIONAL_POLICIES, ERP_ITEMS, ERP_CONTACT_ITEMS } from "./ohsmsLogic";
+import { SECTION_ITEMS, ALWAYS_PROCEDURES, CONDITIONAL_PROCEDURES, COMPLIANCE_EXTRA_PROCEDURES, ALWAYS_POLICIES, CONDITIONAL_POLICIES, ERP_ITEMS, ERP_CONTACT_ITEMS, ERP_ALWAYS_TICKED_EMERGENCIES } from "./ohsmsLogic";
 
 /* ---------- Resilient dynamic import ----------
    Vite splits `await import("pdf-lib")` into its own hashed chunk file
@@ -4450,6 +4450,14 @@ const initialResellers = [
 // day for that whole window, which is what was causing due dates and similar to land a day
 // early. This is the one place that matters — everything else in the app (addDays,
 // currentMonth, etc.) is built from this, so fixing it here fixes it everywhere at once.
+// Used for every generated PDF's filename — keeps real spaces (not underscores or hyphens)
+// since spaces are perfectly valid in filenames on every OS this matters for, and only strips
+// the handful of characters that genuinely break as a filename (/ \ : * ? " < > |), such as
+// "Internal Auditing / Monitoring" containing a forward slash. Collapses any resulting double
+// spaces and trims the ends.
+function safeFilenamePart(str) {
+  return String(str || "").replace(/[\/\\:*?"<>|]/g, "").replace(/\s+/g, " ").trim();
+}
 function today() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -5100,22 +5108,22 @@ function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, wor
   const markDone = (instId, stepId) => {
     updateOnboardingsForClient(client.id, (clientList) => clientList.map((inst) => {
       if (inst.id !== instId) return inst;
-      // Recurring steps complete like any other step here — they don't reopen themselves or
+      // Recurring steps complete like any other step here. They don't reopen themselves or
       // block the workflow from progressing. What "recurring" actually means only kicks in
       // once the whole workflow finishes (below): that's when it becomes an ongoing task
       // instead of a one-time onboarding step.
       const steps = inst.steps.map((s) => (s.id === stepId ? { ...s, done: true } : s));
       const nowComplete = steps.every((s) => s.done);
       if (nowComplete) {
-        pushNotification({ forPerson: "Vanessa", clientId: client.id, clientName: client.name, message: `${client.name} — ${inst.workflowName} complete, add to billing` });
-        // Every recurring step in this now-finished workflow becomes a real client task —
+        pushNotification({ forPerson: "Vanessa", clientId: client.id, clientName: client.name, message: `${client.name}: ${inst.workflowName} complete, add to billing` });
+        // Every recurring step in this now-finished workflow becomes a real client task,
         // due on its actual next anniversary date, and genuinely recurring from there via
         // the normal reminder recurring mechanism (see toggleReminderDone), not the workflow
         // itself. Fixed id per step per instance, so re-completing an already-finished
         // workflow instance never creates a duplicate. Yearly steps (the common case for
         // things like annual pre-qualification) also get 3 staged early-warning
         // notifications at 90/60/30 days before the due date, so it's flagged well ahead of
-        // time rather than surfacing only once it's already close — monthly/quarterly steps
+        // time rather than surfacing only once it's already close. Monthly/quarterly steps
         // keep the simpler single reminder fired 30 days early, since 90-day advance notice
         // doesn't make sense on something that recurs monthly.
         const recurringSteps = steps.filter((s) => s.recurring && s.recurring !== "none");
@@ -5148,14 +5156,14 @@ function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, wor
       return { ...inst, steps };
     }));
   };
-  // An "Email to client" step doesn't get a plain checkbox — clicking it queues the actual
+  // An "Email to client" step doesn't get a plain checkbox. Clicking it queues the actual
   // email (same mail-collection pipeline as the Sales tab's sign-up link) to whichever
   // address is on file for the client, substituting {{clientName}} in the body, then marks
   // the step done via the normal markDone flow so recurring email steps behave the same
   // way any other recurring step does.
   const sendStepEmail = async (inst, step) => {
     const to = client.billing?.email || client.contacts?.[0]?.email;
-    if (!to) { alert(`No email address on file for ${client.name} — add one on the Overview tab first.`); return; }
+    if (!to) { alert(`No email address on file for ${client.name}. Add one on the Overview tab first.`); return; }
     try {
       await setDoc(doc(collection(db, "mail")), {
         to: [to],
@@ -5186,7 +5194,7 @@ function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, wor
     updateOnboardingsForClient(client.id, (clientList) => clientList.filter((i) => i.id !== instId));
   };
 
-  // Billable hours on a workflow instance aren't a separate number sitting off to the side —
+  // Billable hours on a workflow instance aren't a separate number sitting off to the side.
   // they're a real entry in this client's hours log (same one the Activity tab's "Hours
   // this month" and Monthly Hours list already read from), keyed by a fixed id derived from
   // the instance so changing the hours updates that same entry instead of creating another.
@@ -5196,9 +5204,26 @@ function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, wor
     const logId = "wf-billable-" + inst.id;
     const withoutOld = (client.hours?.log || []).filter((h) => h.id !== logId);
     const nextLog = billable && safeHours
-      ? [...withoutOld, { id: logId, date: inst.completedDate || today(), member: "—", hours: Number(safeHours) || 0, description: `Billable: ${inst.workflowName}` }]
+      ? [...withoutOld, { id: logId, date: inst.completedDate || today(), member: "Workflow", hours: Number(safeHours) || 0, description: `Billable: ${inst.workflowName}` }]
       : withoutOld;
     updateDoc(doc(db, "clients", client.id), { hours: { ...client.hours, log: nextLog } });
+  };
+
+  // Once a workflow's actually running for a client, the due date and assignee set on the
+  // template rarely stays exactly right. A step might genuinely need to happen later, or
+  // land with a different person than the template's default. Editing them here only ever
+  // touches this one client's instance, never the shared workflow template itself.
+  const updateStepField = (instId, stepId, field, value) => {
+    updateOnboardingsForClient(client.id, (clientList) => clientList.map((inst) => {
+      if (inst.id !== instId) return inst;
+      return { ...inst, steps: inst.steps.map((s) => (s.id === stepId ? { ...s, [field]: value } : s)) };
+    }));
+  };
+  // One free-text note per running workflow instance, for anything worth flagging about
+  // this specific client's run of it that doesn't fit anywhere else, distinct from a
+  // step: a delay explanation, why the date got pushed, who to chase, etc.
+  const updateInstanceNote = (instId, note) => {
+    updateOnboardingsForClient(client.id, (clientList) => clientList.map((inst) => (inst.id === instId ? { ...inst, note } : inst)));
   };
 
   return (
@@ -5249,11 +5274,11 @@ function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, wor
               </label>
               {inst.billable && (
                 <>
-                  <span>—</span>
+                  <span>&middot;</span>
                   <input type="number" min="0" step="0.5" value={inst.billableHours ?? ""}
                     onChange={(e) => setInstanceBillable(inst, true, e.target.value ? Number(e.target.value) : 0)}
                     placeholder="0" className="w-16 px-2 py-1 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
-                  <span>hrs for this workflow — added to this client's Activity hours log</span>
+                  <span>hrs for this workflow, added to this client's Activity hours log</span>
                 </>
               )}
             </div>
@@ -5271,12 +5296,15 @@ function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, wor
                             {s.type === "email" && <Mail size={12} color={T.blue} />}
                             {s.title}
                           </div>
-                          <div className="text-xs flex items-center gap-2" style={{ color: T.slate }}>
-                            <span>{s.type === "email" ? `${s.owner} to send` : s.owner}</span>
-                            {!s.done && s.dueDate && (
-                              <span className="flex items-center gap-1" style={{ color: urgencyColor(s.dueDate) }}>
-                                <Calendar size={10} /> {daysUntil(s.dueDate) < 0 ? `Overdue · was due ${fmtDate(s.dueDate)}` : `Due ${fmtDate(s.dueDate)}`}
-                              </span>
+                          <div className="text-xs flex items-center gap-2 flex-wrap" style={{ color: T.slate }}>
+                            {s.type === "email" && <span className="text-[11px]">to send:</span>}
+                            <select value={s.owner} onChange={(e) => updateStepField(inst.id, s.id, "owner", e.target.value)}
+                              className="text-xs px-1.5 py-0.5 rounded-md outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink, background: "transparent" }}>
+                              {TEAM.map((m) => <option key={m} value={m}>{m}</option>)}
+                            </select>
+                            {!s.done && (
+                              <input type="date" value={s.dueDate || ""} onChange={(e) => updateStepField(inst.id, s.id, "dueDate", e.target.value)}
+                                className="text-xs px-1.5 py-0.5 rounded-md outline-none" style={{ border: `1px solid ${T.border}`, color: urgencyColor(s.dueDate) }} />
                             )}
                             {s.recurring && s.recurring !== "none" && (
                               <span className="flex items-center gap-1" style={{ color: T.slateLight }}><Repeat size={10} /> {s.recurring}</span>
@@ -5299,6 +5327,17 @@ function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, wor
                   );
                 })}
               </div>
+            </Card>
+            <Card style={{ padding: 14 }}>
+              <div className="text-xs font-semibold uppercase tracking-wide mb-1.5" style={{ color: T.slate }}>Note for this workflow</div>
+              <textarea
+                defaultValue={inst.note || ""}
+                onBlur={(e) => updateInstanceNote(inst.id, e.target.value)}
+                placeholder="Anything worth flagging about this client's run of this workflow, why a date moved, who to chase, etc."
+                rows={2}
+                className="w-full text-sm px-3 py-2 rounded-lg outline-none resize-y"
+                style={{ border: `1px solid ${T.border}`, color: T.ink }}
+              />
             </Card>
           </div>
         );
@@ -5476,7 +5515,7 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
       const justDone = extras.find((e) => e.id === extraId && e.status === "Done");
       let hours = c.hours;
       if (justDone) {
-        hours = { ...c.hours, log: [...c.hours.log, { id: Date.now(), date: today(), member: "—", hours: justDone.hours, description: `Extra: ${justDone.description}`, archived: false }] };
+        hours = { ...c.hours, log: [...c.hours.log, { id: Date.now(), date: today(), member: "Extra work", hours: justDone.hours, description: `Extra: ${justDone.description}`, archived: false }] };
       }
       return { ...c, extras, hours };
     });
@@ -6269,7 +6308,7 @@ const DOCUMENT_CATEGORIES = [
   {
     key: "erp", label: "Emergency Response Plan",
     itemList: ERP_ITEMS,
-    alwaysLabels: ERP_CONTACT_ITEMS,
+    alwaysLabels: [...ERP_CONTACT_ITEMS, ...ERP_ALWAYS_TICKED_EMERGENCIES],
     complianceExtraLabels: [],
   },
 ];
@@ -6790,7 +6829,7 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
     }
 
     const bytes = await pdfDoc.save();
-    const manualFilename = `${displayName.replace(/\s+/g, "_")}-Health_and_Safety_Manual-${new Date().getFullYear()}.pdf`;
+    const manualFilename = `${safeFilenamePart(displayName)} Health and Safety Manual ${new Date().getFullYear()}.pdf`;
     saveGeneratedDocument(client, bytes, manualFilename, "Manual");
     const blob = new Blob([bytes], { type: "application/pdf" });
     const url = URL.createObjectURL(blob);
@@ -6868,16 +6907,41 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
       return { role, name: c.name || "", number: c.number || "" };
     });
 
-    // Table sits flush against the bottom margin — compute its exact height first (title +
-    // both tables' headers/rows) and start drawing from there, rather than butting straight
-    // up against the title block, so the logo/title stay where they are and the table anchors
-    // to the bottom of the page instead.
-    const tableTitleH = 24, tableHeaderH = 20, tableRowH = 22, tableGap = 24;
-    const numTableH = tableHeaderH + numberRows.length * tableRowH;
-    const compTableH = tableHeaderH + companyRows.length * tableRowH;
-    const tableBlockH = tableTitleH + numTableH + tableGap + compTableH;
+    // Cell text now wraps within its own column instead of being drawn as one unbroken line
+    // that could run straight off the edge of the page — some regional entries (e.g. "Powerco
+    // 0800 27 27 27. Other networks include Electra, Centralines, Scanpower and The Lines
+    // Company depending on location.") are far longer than a single line comfortably fits.
+    // Row height is computed per row from whichever cell needs the most wrapped lines, rather
+    // than a flat height that assumed every cell was short.
+    const CELL_PAD = 8, CELL_FONT_SIZE = 9, CELL_LINE_H = 11, CELL_ROW_MIN_H = 22;
+    const wrapCells = (cells, widths) => cells.map((c, i) => wrapTextLines(String(c || ""), font, CELL_FONT_SIZE, widths[i] - CELL_PAD * 2));
+    const rowHeightFor = (cellLines) => Math.max(CELL_ROW_MIN_H, Math.max(1, ...cellLines.map((lines) => lines.length)) * CELL_LINE_H + 11);
 
-    let y = margin + tableBlockH;
+    const numWidths = [200, maxWidth - 200];
+    const compWidths = [110, 190, maxWidth - 300];
+    const numberRowsWrapped = numberRows.map((r) => wrapCells([r.label, r.value], numWidths));
+    const companyRowsWrapped = companyRows.map((r) => wrapCells([r.role, r.name, r.number], compWidths));
+    const numberRowHeights = numberRowsWrapped.map(rowHeightFor);
+    const companyRowHeights = companyRowsWrapped.map(rowHeightFor);
+
+    // Table sits flush against the bottom margin when it fits below the cover content, same
+    // as before — but with regions now adding up to 9 number rows, some spanning multiple
+    // wrapped lines, on top of the company contacts table, it can end up taller than the
+    // space actually available under the logo/title block. Falling back to a fresh page when
+    // that happens keeps it from overlapping the cover content instead of assuming it fits.
+    const tableTitleH = 24, tableHeaderH = 20, tableGap = 24;
+    const numTableH = tableHeaderH + numberRowHeights.reduce((a, b) => a + b, 0);
+    const compTableH = tableHeaderH + companyRowHeights.reduce((a, b) => a + b, 0);
+    const tableBlockH = tableTitleH + numTableH + tableGap + compTableH;
+    const spaceBelowCover = cy - margin;
+
+    let y;
+    if (tableBlockH <= spaceBelowCover) {
+      y = margin + tableBlockH;
+    } else {
+      newPage();
+      y = pageHeight - topGap;
+    }
     page.drawText("Emergency Numbers & Site Contacts", { x: margin, y, size: 14, font: boldFont, color: teal });
     y -= tableTitleH;
 
@@ -6885,26 +6949,28 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
       const totalW = widths.reduce((a, b) => a + b, 0);
       page.drawRectangle({ x: margin, y: y - 20, width: totalW, height: 20, color: charcoal });
       let cx = margin;
-      cols.forEach((c, i) => { page.drawText(c, { x: cx + 8, y: y - 15, size: 9, font: boldFont, color: rgb(1, 1, 1) }); cx += widths[i]; });
+      cols.forEach((c, i) => { page.drawText(c, { x: cx + CELL_PAD, y: y - 15, size: 9, font: boldFont, color: rgb(1, 1, 1) }); cx += widths[i]; });
       y -= 20;
     };
-    const drawTableRow = (cells, widths, shade) => {
-      const rowH = 22, totalW = widths.reduce((a, b) => a + b, 0);
+    const drawTableRow = (cellLines, widths, rowH, shade) => {
+      const totalW = widths.reduce((a, b) => a + b, 0);
       if (shade) page.drawRectangle({ x: margin, y: y - rowH, width: totalW, height: rowH, color: rgb(0.96, 0.98, 0.97) });
       let cx = margin;
-      cells.forEach((c, i) => { page.drawText(String(c || ""), { x: cx + 8, y: y - rowH + 7, size: 9.5, font, color: ink }); cx += widths[i]; });
+      cellLines.forEach((lines, i) => {
+        let ly = y - CELL_LINE_H + 2;
+        lines.forEach((line) => { page.drawText(line, { x: cx + CELL_PAD, y: ly, size: CELL_FONT_SIZE, font, color: ink }); ly -= CELL_LINE_H; });
+        cx += widths[i];
+      });
       page.drawLine({ start: { x: margin, y: y - rowH }, end: { x: margin + totalW, y: y - rowH }, thickness: 0.5, color: rgb(0.88, 0.88, 0.88) });
       y -= rowH;
     };
 
-    const numWidths = [260, maxWidth - 260];
     drawTableHeader(["Service", "Number"], numWidths);
-    numberRows.forEach((r, i) => drawTableRow([r.label, r.value], numWidths, i % 2 === 1));
+    numberRowsWrapped.forEach((cellLines, i) => drawTableRow(cellLines, numWidths, numberRowHeights[i], i % 2 === 1));
 
     y -= tableGap;
-    const compWidths = [140, 220, maxWidth - 360];
     drawTableHeader(["Role", "Name", "Number"], compWidths);
-    companyRows.forEach((r, i) => drawTableRow([r.role, r.name, r.number], compWidths, i % 2 === 1));
+    companyRowsWrapped.forEach((cellLines, i) => drawTableRow(cellLines, compWidths, companyRowHeights[i], i % 2 === 1));
 
     // --- Emergencies flow continuously from here, sections stacking normally ---
     const splitHeading = (text) => {
@@ -6977,7 +7043,7 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
     }
 
     const bytes = await pdfDoc.save();
-    const erpFilename = `${displayName.replace(/\s+/g, "_")}-Emergency_Response_Plan.pdf`;
+    const erpFilename = `${safeFilenamePart(displayName)} Emergency Response Plan.pdf`;
     saveGeneratedDocument(client, bytes, erpFilename, "Emergency Response Plan");
     const blob = new Blob([bytes], { type: "application/pdf" });
     const url = URL.createObjectURL(blob);
@@ -7037,7 +7103,7 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
       }
 
       const bytes = await pdfDoc.save();
-      const policyFilename = `${displayName.replace(/\s+/g, "_")}-Health_Safety_Policy-${new Date().getFullYear()}.pdf`;
+      const policyFilename = `${safeFilenamePart(displayName)} Health Safety Policy ${new Date().getFullYear()}.pdf`;
       saveGeneratedDocument(client, bytes, policyFilename, "Policy");
       const blob = new Blob([bytes], { type: "application/pdf" });
       const url = URL.createObjectURL(blob);
@@ -7101,7 +7167,7 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
       }
 
       const bytes = await pdfDoc.save();
-      const itemFilename = `${displayName.replace(/\s+/g, "_")}-${label.replace(/\s+/g, "_")}-${new Date().getFullYear()}.pdf`;
+      const itemFilename = `${safeFilenamePart(displayName)} ${safeFilenamePart(label)} ${new Date().getFullYear()}.pdf`;
       saveGeneratedDocument(client, bytes, itemFilename, categoryKey === "policies" ? "Policy" : "Procedure");
       const blob = new Blob([bytes], { type: "application/pdf" });
       const url = URL.createObjectURL(blob);
@@ -7355,8 +7421,7 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
     }
 
     const bytes = await pdfDoc.save();
-    const safeName = label.replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "");
-    const finalFilename = `${displayName.replace(/\s+/g, "_")}-${safeName}-${new Date().getFullYear()}.pdf`;
+    const finalFilename = `${safeFilenamePart(displayName)} ${safeFilenamePart(label)} ${new Date().getFullYear()}.pdf`;
     saveGeneratedDocument(client, bytes, finalFilename, categoryKey === "policies" ? "Policy" : "Procedure");
     const blob = new Blob([bytes], { type: "application/pdf" });
     const url = URL.createObjectURL(blob);
@@ -8010,6 +8075,18 @@ function SalesView({ leads, convertLeadToClient }) {
                       className="text-xs w-full outline-none bg-transparent" style={{ color: T.slate }} />
                     <div className="text-xs font-bold mt-1.5" style={{ color: T.tealDark }}>{l.value}</div>
 
+                    <div className="flex items-center gap-1.5 mt-2 pt-2" style={{ borderTop: `1px solid ${T.border}` }}>
+                      <ArrowUpRight size={11} color={T.slateLight} className="shrink-0" />
+                      <input type="date" value={l.followUpDate || ""} onChange={(e) => updateDoc(doc(db, "leads", l.id), { followUpDate: e.target.value })}
+                        title="Follow-up date, shows up in that person's My Tasks and the Follow Up tab"
+                        className="text-[11px] px-1.5 py-1 rounded-md outline-none flex-1" style={{ border: `1px solid ${T.border}`, color: l.followUpDate ? urgencyColor(l.followUpDate) : T.slateLight }} />
+                      <select value={l.followUpAssignee || ""} onChange={(e) => updateDoc(doc(db, "leads", l.id), { followUpAssignee: e.target.value })}
+                        className="text-[11px] px-1.5 py-1 rounded-md outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
+                        <option value="">Who?</option>
+                        {TEAM.map((m) => <option key={m} value={m}>{m}</option>)}
+                      </select>
+                    </div>
+
                     {stage === "Won" && l.formStatus === "none" && (
                       <div className="mt-3 pt-3 flex flex-col gap-2" style={{ borderTop: `1px solid ${T.border}` }}>
                         <input placeholder="Client email for sign-up form" value={emailDrafts[l.id] ?? l.formEmail ?? ""} onChange={(e) => setEmailDrafts({ ...emailDrafts, [l.id]: e.target.value })}
@@ -8108,6 +8185,59 @@ function SalesView({ leads, convertLeadToClient }) {
           );
         })}
       </div>
+    </div>
+  );
+}
+
+/* ---------- Follow Up (every lead with a follow-up date set, across the whole pipeline) ---------- */
+function FollowUpView({ leads, goToSales }) {
+  const withFollowUp = [...leads]
+    .filter((l) => l.followUpDate)
+    .sort((a, b) => a.followUpDate.localeCompare(b.followUpDate));
+  const withoutFollowUp = leads.filter((l) => !l.followUpDate && !["Won", "Lost"].includes(l.stage));
+  const clearFollowUp = (leadId) => updateDoc(doc(db, "leads", leadId), { followUpDate: "", followUpAssignee: "" });
+
+  return (
+    <div className="flex flex-col gap-6">
+      <div className="text-sm" style={{ color: T.slate }}>Every lead with a follow-up date set, across the whole pipeline, sorted by when it's due. Set or change a follow-up date on the Sales tab.</div>
+      <div className="flex flex-col gap-2">
+        {withFollowUp.map((l) => (
+          <Card key={l.id} style={{ padding: 14 }} className="flex items-center justify-between">
+            <button onClick={() => goToSales()} className="flex items-center gap-3 text-left flex-1 min-w-0">
+              <span className="shrink-0" style={{ width: 8, height: 8, borderRadius: 999, background: stageMeta[l.stage]?.color || T.slateLight }} />
+              <div className="min-w-0">
+                <div className="text-sm font-semibold truncate" style={{ color: T.ink }}>{l.company}</div>
+                <div className="text-xs flex items-center gap-2 mt-0.5" style={{ color: T.slate }}>
+                  <Pill color={stageMeta[l.stage]?.color || T.slateLight} bg={T.paperAlt}>{l.stage}</Pill>
+                  <span>{l.followUpAssignee || "Unassigned"}</span>
+                </div>
+              </div>
+            </button>
+            <div className="flex items-center gap-3 shrink-0 ml-3">
+              <span className="text-sm font-semibold flex items-center gap-1" style={{ color: urgencyColor(l.followUpDate) }}>
+                <Calendar size={12} /> {daysUntil(l.followUpDate) < 0 ? `Overdue, ${fmtDate(l.followUpDate)}` : fmtDate(l.followUpDate)}
+              </span>
+              <ConfirmButton onConfirm={() => clearFollowUp(l.id)} title="Clear follow-up (followed up already)" icon={Check} iconColor={T.tealDark} confirmText="Clear it?" />
+            </div>
+          </Card>
+        ))}
+        {withFollowUp.length === 0 && <div className="text-sm text-center py-6" style={{ color: T.slateLight }}>No follow-ups scheduled right now.</div>}
+      </div>
+
+      {withoutFollowUp.length > 0 && (
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: T.slate }}>
+            No follow-up date set ({withoutFollowUp.length})
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {withoutFollowUp.map((l) => (
+              <button key={l.id} onClick={() => goToSales()} className="text-xs font-medium px-3 py-1.5 rounded-full" style={{ background: T.paperAlt, color: T.slate }}>
+                {l.company}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -8926,7 +9056,7 @@ function BillingOverview({ clients, resellers }) {
 }
 
 /* ---------- My Tasks (per person) ---------- */
-function TasksView({ tasks, clients, onboardings, currentUser, goToClient, resellers, goToReseller }) {
+function TasksView({ tasks, clients, onboardings, currentUser, goToClient, resellers, goToReseller, leads, goToFollowUp }) {
   const [person, setPerson] = useState(currentUser || TEAM[0]);
   const [draft, setDraft] = useState({ title: "", priority: "Medium", clientId: "", dueDate: "", estHours: "" });
 
@@ -8934,6 +9064,16 @@ function TasksView({ tasks, clients, onboardings, currentUser, goToClient, resel
   // year out — only show it once it's actually coming up, or if it never had a due date to
   // begin with (nothing to judge "coming up" against, so those always show).
   const isComingUpOrUndated = (dueDate) => !dueDate || daysUntil(dueDate) <= 14;
+
+  const leadFollowUps = useMemo(() => {
+    const out = [];
+    (leads || []).forEach((l) => {
+      if (l.followUpAssignee === person && l.followUpDate && isComingUpOrUndated(l.followUpDate)) {
+        out.push({ id: `lead-${l.id}`, leadId: l.id, title: `Follow up with ${l.company}`, dueDate: l.followUpDate, stage: l.stage });
+      }
+    });
+    return out;
+  }, [leads, person]);
 
   const resellerTasks = useMemo(() => {
     const out = [];
@@ -9039,6 +9179,24 @@ function TasksView({ tasks, clients, onboardings, currentUser, goToClient, resel
                 </div>
               </div>
               <Pill color={T.amber} bg={T.paperAlt}>Client task</Pill>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      {leadFollowUps.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: T.slate }}>Sales follow-ups</div>
+          {leadFollowUps.map((t) => (
+            <Card key={t.id} onClick={() => goToFollowUp && goToFollowUp()} style={{ padding: 14, borderLeft: `3px solid #8B6BA8`, cursor: "pointer" }} className="flex items-center justify-between hover:opacity-80">
+              <div>
+                <div className="text-sm font-medium" style={{ color: T.ink }}>{t.title}</div>
+                <div className="text-xs mt-0.5 flex items-center gap-2" style={{ color: T.slate }}>
+                  <span>{t.stage}</span>
+                  <span className="flex items-center gap-1" style={{ color: urgencyColor(t.dueDate) }}><Calendar size={10} /> {daysUntil(t.dueDate) < 0 ? `Overdue · ${fmtDate(t.dueDate)}` : fmtDate(t.dueDate)}</span>
+                </div>
+              </div>
+              <Pill color="#8B6BA8" bg={T.paperAlt}>Follow up</Pill>
             </Card>
           ))}
         </div>
@@ -9791,7 +9949,7 @@ async function downloadResellerPdf({ reseller, monthYear, usersForMonth }) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `${reseller.name.replace(/\s+/g, "_")}-Usage-${monthYear}.pdf`;
+  a.download = `${safeFilenamePart(reseller.name)} Usage ${monthYear}.pdf`;
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -10045,7 +10203,7 @@ async function downloadMonthlyReportPdf({ client, monthYear, sections, highlight
   }
 
   const bytes = await pdfDoc.save();
-  const reportFilename = `${client.name.replace(/\s+/g, "_")}-Monthly_Report-${monthYear}.pdf`;
+  const reportFilename = `${safeFilenamePart(client.name)} Monthly Report ${monthYear}.pdf`;
   saveGeneratedDocument(client, bytes, reportFilename, "Monthly Report");
   const blob = new Blob([bytes], { type: "application/pdf" });
   const url = URL.createObjectURL(blob);
@@ -10860,6 +11018,7 @@ export default function App() {
     setSelectedReseller(resellerId);
     setModule("resellers");
   };
+  const goToFollowUp = () => setModule("followup");
   const [selectedClient, setSelectedClient] = useState("");
   const [clientTabRequest, setClientTabRequest] = useState({ tab: null, nonce: 0 });
   const goToClient = (clientId, tab) => {
@@ -11469,6 +11628,7 @@ export default function App() {
         <NavItem icon={Users} label="Clients" active={module === "clients"} onClick={() => setModule("clients")} />
         <NavItem icon={Layers} label="Systems" active={module === "systems"} onClick={() => setModule("systems")} />
         <NavItem icon={TrendingUp} label="Sales" active={module === "sales"} onClick={() => setModule("sales")} />
+        <NavItem icon={ArrowUpRight} label="Follow Up" active={module === "followup"} onClick={() => setModule("followup")} />
         <NavItem icon={Clock} label="Hours" active={module === "hours"} onClick={() => setModule("hours")} />
         {canSeeBilling && <NavItem icon={ClipboardList} label="Billing" active={module === "billing"} onClick={() => setModule("billing")} />}
         <NavItem icon={PieChart} label="Dashboards" active={module === "dashboards"} onClick={() => setModule("dashboards")} />
@@ -11490,7 +11650,7 @@ export default function App() {
         <div className="flex items-center justify-between px-8 py-5" style={{ borderBottom: `1px solid ${T.border}` }}>
           <div>
             <div className="text-xl font-bold" style={{ color: T.ink }}>
-              {{ overview: "Overview", clients: "Clients", systems: "Systems", sales: "Sales", billing: "Billing", workflows: "Workflows", resellers: "Resellers", tasks: "My Tasks", dashboards: "Dashboards", reports: "Reports", schedule: "Schedule", hours: "Hours" }[module]}
+              {{ overview: "Overview", clients: "Clients", systems: "Systems", sales: "Sales", followup: "Follow Up", billing: "Billing", workflows: "Workflows", resellers: "Resellers", tasks: "My Tasks", dashboards: "Dashboards", reports: "Reports", schedule: "Schedule", hours: "Hours" }[module]}
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -11509,6 +11669,7 @@ export default function App() {
           )}
           {module === "systems" && <SystemsView clients={clients} selectedId={selectedClient} setSelectedId={setSelectedClient} documentTemplates={documentTemplates} saveDocumentTemplate={saveDocumentTemplate} systemReviewLog={systemReviewLog} addSystemReviewLogEntry={addSystemReviewLogEntry} customErpItems={customErpItems} addCustomErpItem={addCustomErpItem} />}
           {module === "sales" && <SalesView leads={leads} convertLeadToClient={convertLeadToClient} />}
+          {module === "followup" && <FollowUpView leads={leads} goToSales={() => setModule("sales")} />}
           {module === "overview" && (
             <ErrorBoundary>
               <OverviewView clients={clients} tasks={tasks} onboardings={onboardings} goToClient={goToClient} />
@@ -11519,7 +11680,7 @@ export default function App() {
           {module === "dashboards" && <DashboardsView clients={clients} tasks={tasks} touchpointBaselines={touchpointBaselines} updateTouchpointBaseline={updateTouchpointBaseline} />}
           {module === "workflows" && <WorkflowsView workflows={workflows} />}
           {module === "resellers" && <ResellersView resellers={resellers} selectedId={selectedReseller} setSelectedId={setSelectedReseller} />}
-          {module === "tasks" && <TasksView tasks={tasks} clients={clients} onboardings={onboardings} currentUser={currentUser} goToClient={goToClient} resellers={resellers} goToReseller={goToReseller} />}
+          {module === "tasks" && <TasksView tasks={tasks} clients={clients} onboardings={onboardings} currentUser={currentUser} goToClient={goToClient} resellers={resellers} goToReseller={goToReseller} leads={leads} goToFollowUp={goToFollowUp} />}
           {module === "reports" && <ReportsView clients={clients} reportTemplates={reportTemplates} addReportTemplate={addReportTemplate} renameReportTemplate={renameReportTemplate} deleteReportTemplate={deleteReportTemplate} addTemplateSection={addTemplateSection} removeTemplateSection={removeTemplateSection} />}
           {module === "schedule" && <ScheduleView tasks={tasks} clients={clients} onboardings={onboardings} scheduleBlocks={scheduleBlocks} addScheduleBlock={addScheduleBlock} removeScheduleBlock={removeScheduleBlock} goToClient={goToClient} />}
         </div>

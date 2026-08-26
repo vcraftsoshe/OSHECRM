@@ -36,7 +36,7 @@ export const SECTION_ITEMS = [
   { label: "9.1 Incident Reporting", always: true },
   { label: "10. Plant & Equipment", key: "plant" },
   { label: "11. Contractors", key: "contractors" },
-  { label: "12. Emergency Preparedness and Response", key: "erp" },
+  { label: "12. Emergency Preparedness and Response", always: true },
   { label: "13. Personal Protective Equipment (PPE)", key: "ppe" },
   { label: "14. Exposure and Health Monitoring", key: "healthMonitoring" },
   { label: "15. Hazardous Substances", key: "hazardousSubstances" },
@@ -103,6 +103,14 @@ export const CONDITIONAL_POLICIES = [
 // is the full multi-emergency plan with real content per emergency type, built the same
 // checkbox + editable-template way as everything else in the app).
 export const ERP_CONTACT_ITEMS = ["Emergency Contact Numbers", "Company Emergency Contacts"];
+// Emergency types ticked by default for every client, regardless of what they answered on
+// the sign-up form's emergency checklist. Kept separate from ERP_CONTACT_ITEMS above, since
+// that list is also used to exclude the two contact pages from the emergency-content PDF
+// flow, and Fire/Medical Emergency/etc still need to flow through as real emergency pages.
+export const ERP_ALWAYS_TICKED_EMERGENCIES = [
+  "Fire", "Medical Emergency", "Earthquake", "Tsunami", "Cyclone / Severe Storm", "Tornado",
+  "Explosion / Structural Damage", "Vehicle Accident",
+];
 
 export const EMERGENCY_TYPES = [
   "Fire",

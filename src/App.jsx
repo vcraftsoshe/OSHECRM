@@ -3,7 +3,7 @@ import {
   Users, TrendingUp, Bell, Building2, CreditCard, StickyNote,
   ChevronRight, ChevronLeft, Plus, Check, Upload, Calendar, X, Search, Clock, PieChart,
   ClipboardList, Layers, Circle, CheckCircle2, Image as ImageIcon,
-  Repeat, Trash2, ListChecks, ListTodo, Mail, ArrowUpRight, Store, LayoutDashboard, ChevronDown, Smartphone, FileText, CalendarClock, MessageCircle
+  Repeat, Trash2, ListChecks, ListTodo, Mail, ArrowUpRight, Store, LayoutDashboard, ChevronDown, Smartphone, FileText, CalendarClock, MessageCircle, Archive
 } from "lucide-react";
 import { collection, doc, onSnapshot, updateDoc, setDoc, getDocs, getDoc, deleteDoc, arrayUnion } from "firebase/firestore";
 import { signOut } from "firebase/auth";
@@ -51,10 +51,11 @@ const T = {
 
 const TEAM = ["Vanessa", "Sophie", "Judith", "Jo"];
 
-const stageOrder = ["New Lead", "Contacted", "Proposal Sent", "Nurture", "Won", "Lost"];
+const stageOrder = ["New Lead", "Contacted", "Follow Up", "Proposal Sent", "Nurture", "Won", "Lost"];
 const stageMeta = {
   "New Lead": { color: T.slateLight, bg: "#EEF2F2" },
   "Contacted": { color: T.blue, bg: "#EAF1F4" },
+  "Follow Up": { color: "#C99A3D", bg: "#FBF1DE" },
   "Proposal Sent": { color: T.amber, bg: "#FBF1E3" },
   "Nurture": { color: "#8B6BA8", bg: "#F2ECF7" },
   "Won": { color: T.tealDark, bg: "#E4F8F5" },
@@ -6569,37 +6570,65 @@ function drawCenteredText(page, text, centerX, y, size, font, color) {
 // Each ROW is sized to its own tallest box (not one global height across all 4), so a
 // shorter list doesn't leave a big gap of empty space at the bottom of its box. Returns
 // the bottom y.
-function drawPolicyGrid({ page, x, y0, maxWidth, font, boldFont, rgb, clientName }) {
+function drawPolicyGrid({ page, x, y0, maxWidth, font, boldFont, rgb, clientName, availableHeight }) {
   const quadrants = getPolicyQuadrants(clientName);
-  const colGap = 14, rowGap = 8;
+  const colGap = 10, rowGap = 5;
   const colW = (maxWidth - colGap) / 2;
-  const headerH = 20, cellPad = 8;
-  const bulletSize = 9, lineHeight = 11;
+  const cellPad = 5;
 
-  const cellContentHeight = (items) => {
-    let h = 0;
-    items.forEach((item) => {
-      h += wrapTextLines("•  " + item, font, bulletSize, colW - 2 * cellPad).length * lineHeight + 3;
-    });
-    return h;
+  // Compute the total grid height a given font size would need, without drawing anything -
+  // used below to test candidate sizes and find the largest one that actually fits the space
+  // available on the page, instead of the grid always rendering at the smallest safe size
+  // even when there's plenty of room and it ends up looking tiny with a big empty gap below.
+  const BULLET_INDENT = 9;
+  const measureAt = (bulletSize, lineHeight, headerH) => {
+    const cellContentHeight = (items) => {
+      let h = 0;
+      items.forEach((item) => {
+        h += wrapTextLines(item, font, bulletSize, colW - 2 * cellPad - BULLET_INDENT).length * lineHeight + Math.max(1, lineHeight * 0.12);
+      });
+      return h;
+    };
+    const row1H = headerH + Math.max(cellContentHeight(quadrants[0].items), cellContentHeight(quadrants[1].items)) + cellPad * 2;
+    const row2H = headerH + Math.max(cellContentHeight(quadrants[2].items), cellContentHeight(quadrants[3].items)) + cellPad * 2;
+    return { row1H, row2H, total: row1H + rowGap + row2H };
   };
+
+  // Candidate sizes from most to least comfortable, [bulletSize, lineHeight, headerH]. Picks
+  // the first (largest) one whose total height fits within availableHeight, only falling
+  // back to smaller sizes for clients whose policy content is genuinely longer.
+  const candidates = [
+    [10, 12, 20], [9.5, 11, 19], [9, 10.5, 18], [8.5, 10, 17], [8, 9.5, 16], [7.5, 8.5, 16],
+  ];
+  let chosen = candidates[candidates.length - 1];
+  let measured = measureAt(...chosen);
+  if (availableHeight) {
+    for (const c of candidates) {
+      const m = measureAt(...c);
+      if (m.total <= availableHeight) { chosen = c; measured = m; break; }
+    }
+  }
+  const [bulletSize, lineHeight, headerH] = chosen;
+  const { row1H, row2H } = measured;
 
   const drawCell = (cx, yTop, item, cellH) => {
     page.drawRectangle({ x: cx, y: yTop - headerH, width: colW, height: headerH, color: rgb(item.color[0], item.color[1], item.color[2]) });
-    page.drawText(item.label, { x: cx + cellPad, y: yTop - headerH + 6, size: 9.5, font: boldFont, color: rgb(1, 1, 1) });
-    let cy = yTop - headerH - cellPad - 7;
+    page.drawText(item.label, { x: cx + cellPad, y: yTop - headerH + headerH / 2 - 3, size: Math.min(9.5, bulletSize + 0.5), font: boldFont, color: rgb(1, 1, 1) });
+    let cy = yTop - headerH - cellPad - lineHeight * 0.7;
     item.items.forEach((line) => {
-      wrapTextLines("•  " + line, font, bulletSize, colW - 2 * cellPad).forEach((wl) => {
-        page.drawText(wl, { x: cx + cellPad, y: cy, size: bulletSize, font, color: rgb(0.2, 0.25, 0.25) });
+      // Bullet character sits on its own, drawn only once at the un-indented left edge; every
+      // wrapped line (including the first) lands at the same indented x, so a bullet that
+      // wraps to a second line reads as a clean paragraph continuation instead of looking
+      // like the text just restarted flush against the cell's edge.
+      wrapTextLines(line, font, bulletSize, colW - 2 * cellPad - BULLET_INDENT).forEach((wl, i) => {
+        if (i === 0) page.drawText("•", { x: cx + cellPad, y: cy, size: bulletSize, font, color: rgb(0.2, 0.25, 0.25) });
+        page.drawText(wl, { x: cx + cellPad + BULLET_INDENT, y: cy, size: bulletSize, font, color: rgb(0.2, 0.25, 0.25) });
         cy -= lineHeight;
       });
-      cy -= 3;
+      cy -= Math.max(1, lineHeight * 0.12);
     });
     page.drawRectangle({ x: cx, y: yTop - cellH, width: colW, height: cellH, borderColor: rgb(0.75, 0.8, 0.8), borderWidth: 1 });
   };
-
-  const row1H = headerH + Math.max(cellContentHeight(quadrants[0].items), cellContentHeight(quadrants[1].items)) + cellPad * 2;
-  const row2H = headerH + Math.max(cellContentHeight(quadrants[2].items), cellContentHeight(quadrants[3].items)) + cellPad * 2;
 
   drawCell(x, y0, quadrants[0], row1H);
   drawCell(x + colW + colGap, y0, quadrants[1], row1H);
@@ -7080,15 +7109,23 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
         page.drawImage(logoImage, { x: lw - lMargin - w, y: lh - bandHeight / 2 - h / 2, width: w, height: h });
       }
 
-      let y = lh - bandHeight - 16;
-      const introSize = 10;
-      const introLines = wrapTextLines(getPolicyIntro(displayName), font, introSize, lMaxWidth * 0.85);
-      introLines.forEach((line) => { drawCenteredText(page, line, lw / 2, y, introSize, font, ink); y -= introSize + 3; });
-      y -= 6;
+      let y = lh - bandHeight - 12;
+      const introSize = 9;
+      const introLines = wrapTextLines(getPolicyIntro(displayName), font, introSize, lMaxWidth * 0.96);
+      introLines.forEach((line) => { drawCenteredText(page, line, lw / 2, y, introSize, font, ink); y -= introSize + 2; });
+      y -= 4;
 
-      const bottomY = drawPolicyGrid({ page, x: lMargin, y0: y, maxWidth: lMaxWidth, font, boldFont, rgb, clientName: displayName });
+      const signOffAnchorY = margin + 25;
+      const availableGridHeight = y - (signOffAnchorY + 24 + 12); // leaves clear space above the sign-off lines
+      const bottomY = drawPolicyGrid({ page, x: lMargin, y0: y, maxWidth: lMaxWidth, font, boldFont, rgb, clientName: displayName, availableHeight: availableGridHeight });
 
-      let sy = bottomY - 20;
+      // The sign-off block now anchors to a fixed, generous position near the bottom margin
+      // (same approach already used successfully on the other policy sign-off block below)
+      // instead of floating directly under wherever the grid happened to end, which could
+      // land right on top of the footer if the grid's content ran long for a client with a
+      // lot of bullet points. Kept to a single page, so the grid itself is drawn more
+      // compactly (see drawPolicyGrid) to reliably leave this much room clear every time.
+      let sy = signOffAnchorY;
       const rightColX = lw - lMargin - 200;
       page.drawText("Director Name: _______________________________", { x: lMargin, y: sy, size: 9, font, color: rgb(0.2, 0.25, 0.25) });
       page.drawText(`Date: ${fmtDate(today())}`, { x: rightColX, y: sy, size: 9, font, color: rgb(0.2, 0.25, 0.25) });
@@ -7925,8 +7962,12 @@ function SalesView({ leads, convertLeadToClient }) {
   const [noteDrafts, setNoteDrafts] = useState({});
   const [showAddLead, setShowAddLead] = useState(false);
   const [newLead, setNewLead] = useState({ company: "", contact: "", value: "" });
+  const [showArchived, setShowArchived] = useState(false);
+  const [showSummary, setShowSummary] = useState(true);
 
   const setStage = (id, stage) => updateDoc(doc(db, "leads", id), { stage });
+  const archiveLead = (id) => updateDoc(doc(db, "leads", id), { archived: true });
+  const unarchiveLead = (id) => updateDoc(doc(db, "leads", id), { archived: false });
   const deleteLead = (id) => {
     deleteDoc(doc(db, "leads", id));
     setDoc(doc(db, "meta", "deletedImports"), { leadIds: arrayUnion(id) }, { merge: true }).catch((err) => console.error("Couldn't record deletion tombstone:", err));
@@ -8030,9 +8071,14 @@ function SalesView({ leads, convertLeadToClient }) {
   return (
     <div className="flex flex-col h-full gap-4">
       <div className="flex items-center justify-between">
-        <button onClick={() => setShowAddLead((v) => !v)} className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold" style={{ background: T.charcoal, color: T.teal }}>
-          <Plus size={16} /> Add lead
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setShowAddLead((v) => !v)} className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold" style={{ background: T.charcoal, color: T.teal }}>
+            <Plus size={16} /> Add lead
+          </button>
+          <button onClick={() => setShowArchived((v) => !v)} className="text-xs font-semibold px-3 py-2 rounded-lg" style={{ background: T.paperAlt, color: T.slate }}>
+            {showArchived ? "Show active pipeline" : `Show archived (${leads.filter((l) => l.archived).length})`}
+          </button>
+        </div>
         {showAddLead && (
           <Card style={{ padding: 12 }} className="flex items-center gap-2 flex-1 ml-4">
             <input placeholder="Company" value={newLead.company} onChange={(e) => setNewLead({ ...newLead, company: e.target.value })}
@@ -8046,9 +8092,42 @@ function SalesView({ leads, convertLeadToClient }) {
         )}
       </div>
 
+      <Card style={{ padding: "12px 16px" }}>
+        <button onClick={() => setShowSummary((v) => !v)} className="w-full flex items-center justify-between text-left">
+          <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: T.slate }}>
+            Pipeline summary, active leads ({leads.filter((l) => !l.archived).length})
+          </span>
+          <ChevronDown size={14} color={T.slateLight} style={{ transform: showSummary ? "rotate(180deg)" : "none" }} />
+        </button>
+        {showSummary && (
+          <div className="flex flex-col gap-1 mt-3">
+            {[...leads.filter((l) => !l.archived)]
+              .sort((a, b) => (a.followUpDate || "9999").localeCompare(b.followUpDate || "9999"))
+              .map((l) => {
+                const latestNote = [...(l.notes || [])].reverse().find((n) => n.type === "Note" || n.type === "Touchpoint");
+                return (
+                  <div key={l.id} className="grid items-center text-xs py-1.5" style={{ gridTemplateColumns: "1.6fr 1fr 1.4fr 1fr", borderBottom: `1px solid ${T.border}` }}>
+                    <span className="font-medium truncate" style={{ color: T.ink }}>{l.company}</span>
+                    <Pill color={stageMeta[l.stage]?.color || T.slateLight} bg={T.paperAlt}>{l.stage}</Pill>
+                    <span className="truncate" style={{ color: T.slate }}>{latestNote ? latestNote.text : "Nothing logged yet"}</span>
+                    {l.followUpDate ? (
+                      <span className="flex items-center gap-1 justify-end" style={{ color: urgencyColor(l.followUpDate) }}>
+                        <Calendar size={10} /> {fmtDate(l.followUpDate)}{l.followUpAssignee ? ` (${l.followUpAssignee})` : ""}
+                      </span>
+                    ) : (
+                      <span className="text-right" style={{ color: T.slateLight }}>No follow-up set</span>
+                    )}
+                  </div>
+                );
+              })}
+            {leads.filter((l) => !l.archived).length === 0 && <div className="text-xs text-center py-3" style={{ color: T.slateLight }}>Nothing in the pipeline right now.</div>}
+          </div>
+        )}
+      </Card>
+
       <div className="flex flex-1 gap-4 overflow-x-auto min-h-0">
         {stageOrder.map((stage) => {
-          const items = leads.filter((l) => l.stage === stage);
+          const items = leads.filter((l) => l.stage === stage && Boolean(l.archived) === showArchived);
           const meta = stageMeta[stage];
           return (
             <div key={stage} className="w-72 shrink-0 flex flex-col gap-3">
@@ -8066,6 +8145,11 @@ function SalesView({ leads, convertLeadToClient }) {
                           className="text-[11px] px-1.5 py-1 rounded-md outline-none" style={{ border: `1px solid ${T.border}`, color: T.slate, background: T.paperAlt }}>
                           {stageOrder.map((s) => <option key={s} value={s}>{s}</option>)}
                         </select>
+                        {l.archived ? (
+                          <button onClick={() => unarchiveLead(l.id)} title="Unarchive lead"><Archive size={13} color={T.tealDark} /></button>
+                        ) : (
+                          <button onClick={() => archiveLead(l.id)} title="Archive lead"><Archive size={13} color={T.slateLight} /></button>
+                        )}
                         <ConfirmButton onConfirm={() => deleteLead(l.id)} title="Delete lead" iconSize={13} />
                       </div>
                     </div>
@@ -8185,59 +8269,6 @@ function SalesView({ leads, convertLeadToClient }) {
           );
         })}
       </div>
-    </div>
-  );
-}
-
-/* ---------- Follow Up (every lead with a follow-up date set, across the whole pipeline) ---------- */
-function FollowUpView({ leads, goToSales }) {
-  const withFollowUp = [...leads]
-    .filter((l) => l.followUpDate)
-    .sort((a, b) => a.followUpDate.localeCompare(b.followUpDate));
-  const withoutFollowUp = leads.filter((l) => !l.followUpDate && !["Won", "Lost"].includes(l.stage));
-  const clearFollowUp = (leadId) => updateDoc(doc(db, "leads", leadId), { followUpDate: "", followUpAssignee: "" });
-
-  return (
-    <div className="flex flex-col gap-6">
-      <div className="text-sm" style={{ color: T.slate }}>Every lead with a follow-up date set, across the whole pipeline, sorted by when it's due. Set or change a follow-up date on the Sales tab.</div>
-      <div className="flex flex-col gap-2">
-        {withFollowUp.map((l) => (
-          <Card key={l.id} style={{ padding: 14 }} className="flex items-center justify-between">
-            <button onClick={() => goToSales()} className="flex items-center gap-3 text-left flex-1 min-w-0">
-              <span className="shrink-0" style={{ width: 8, height: 8, borderRadius: 999, background: stageMeta[l.stage]?.color || T.slateLight }} />
-              <div className="min-w-0">
-                <div className="text-sm font-semibold truncate" style={{ color: T.ink }}>{l.company}</div>
-                <div className="text-xs flex items-center gap-2 mt-0.5" style={{ color: T.slate }}>
-                  <Pill color={stageMeta[l.stage]?.color || T.slateLight} bg={T.paperAlt}>{l.stage}</Pill>
-                  <span>{l.followUpAssignee || "Unassigned"}</span>
-                </div>
-              </div>
-            </button>
-            <div className="flex items-center gap-3 shrink-0 ml-3">
-              <span className="text-sm font-semibold flex items-center gap-1" style={{ color: urgencyColor(l.followUpDate) }}>
-                <Calendar size={12} /> {daysUntil(l.followUpDate) < 0 ? `Overdue, ${fmtDate(l.followUpDate)}` : fmtDate(l.followUpDate)}
-              </span>
-              <ConfirmButton onConfirm={() => clearFollowUp(l.id)} title="Clear follow-up (followed up already)" icon={Check} iconColor={T.tealDark} confirmText="Clear it?" />
-            </div>
-          </Card>
-        ))}
-        {withFollowUp.length === 0 && <div className="text-sm text-center py-6" style={{ color: T.slateLight }}>No follow-ups scheduled right now.</div>}
-      </div>
-
-      {withoutFollowUp.length > 0 && (
-        <div>
-          <div className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: T.slate }}>
-            No follow-up date set ({withoutFollowUp.length})
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {withoutFollowUp.map((l) => (
-              <button key={l.id} onClick={() => goToSales()} className="text-xs font-medium px-3 py-1.5 rounded-full" style={{ background: T.paperAlt, color: T.slate }}>
-                {l.company}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -9056,7 +9087,7 @@ function BillingOverview({ clients, resellers }) {
 }
 
 /* ---------- My Tasks (per person) ---------- */
-function TasksView({ tasks, clients, onboardings, currentUser, goToClient, resellers, goToReseller, leads, goToFollowUp }) {
+function TasksView({ tasks, clients, onboardings, currentUser, goToClient, resellers, goToReseller, leads, goToSales }) {
   const [person, setPerson] = useState(currentUser || TEAM[0]);
   const [draft, setDraft] = useState({ title: "", priority: "Medium", clientId: "", dueDate: "", estHours: "" });
 
@@ -9188,7 +9219,7 @@ function TasksView({ tasks, clients, onboardings, currentUser, goToClient, resel
         <div className="flex flex-col gap-2">
           <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: T.slate }}>Sales follow-ups</div>
           {leadFollowUps.map((t) => (
-            <Card key={t.id} onClick={() => goToFollowUp && goToFollowUp()} style={{ padding: 14, borderLeft: `3px solid #8B6BA8`, cursor: "pointer" }} className="flex items-center justify-between hover:opacity-80">
+            <Card key={t.id} onClick={() => goToSales && goToSales()} style={{ padding: 14, borderLeft: `3px solid #8B6BA8`, cursor: "pointer" }} className="flex items-center justify-between hover:opacity-80">
               <div>
                 <div className="text-sm font-medium" style={{ color: T.ink }}>{t.title}</div>
                 <div className="text-xs mt-0.5 flex items-center gap-2" style={{ color: T.slate }}>
@@ -11018,7 +11049,6 @@ export default function App() {
     setSelectedReseller(resellerId);
     setModule("resellers");
   };
-  const goToFollowUp = () => setModule("followup");
   const [selectedClient, setSelectedClient] = useState("");
   const [clientTabRequest, setClientTabRequest] = useState({ tab: null, nonce: 0 });
   const goToClient = (clientId, tab) => {
@@ -11628,7 +11658,6 @@ export default function App() {
         <NavItem icon={Users} label="Clients" active={module === "clients"} onClick={() => setModule("clients")} />
         <NavItem icon={Layers} label="Systems" active={module === "systems"} onClick={() => setModule("systems")} />
         <NavItem icon={TrendingUp} label="Sales" active={module === "sales"} onClick={() => setModule("sales")} />
-        <NavItem icon={ArrowUpRight} label="Follow Up" active={module === "followup"} onClick={() => setModule("followup")} />
         <NavItem icon={Clock} label="Hours" active={module === "hours"} onClick={() => setModule("hours")} />
         {canSeeBilling && <NavItem icon={ClipboardList} label="Billing" active={module === "billing"} onClick={() => setModule("billing")} />}
         <NavItem icon={PieChart} label="Dashboards" active={module === "dashboards"} onClick={() => setModule("dashboards")} />
@@ -11650,7 +11679,7 @@ export default function App() {
         <div className="flex items-center justify-between px-8 py-5" style={{ borderBottom: `1px solid ${T.border}` }}>
           <div>
             <div className="text-xl font-bold" style={{ color: T.ink }}>
-              {{ overview: "Overview", clients: "Clients", systems: "Systems", sales: "Sales", followup: "Follow Up", billing: "Billing", workflows: "Workflows", resellers: "Resellers", tasks: "My Tasks", dashboards: "Dashboards", reports: "Reports", schedule: "Schedule", hours: "Hours" }[module]}
+              {{ overview: "Overview", clients: "Clients", systems: "Systems", sales: "Sales", billing: "Billing", workflows: "Workflows", resellers: "Resellers", tasks: "My Tasks", dashboards: "Dashboards", reports: "Reports", schedule: "Schedule", hours: "Hours" }[module]}
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -11669,7 +11698,6 @@ export default function App() {
           )}
           {module === "systems" && <SystemsView clients={clients} selectedId={selectedClient} setSelectedId={setSelectedClient} documentTemplates={documentTemplates} saveDocumentTemplate={saveDocumentTemplate} systemReviewLog={systemReviewLog} addSystemReviewLogEntry={addSystemReviewLogEntry} customErpItems={customErpItems} addCustomErpItem={addCustomErpItem} />}
           {module === "sales" && <SalesView leads={leads} convertLeadToClient={convertLeadToClient} />}
-          {module === "followup" && <FollowUpView leads={leads} goToSales={() => setModule("sales")} />}
           {module === "overview" && (
             <ErrorBoundary>
               <OverviewView clients={clients} tasks={tasks} onboardings={onboardings} goToClient={goToClient} />
@@ -11680,7 +11708,7 @@ export default function App() {
           {module === "dashboards" && <DashboardsView clients={clients} tasks={tasks} touchpointBaselines={touchpointBaselines} updateTouchpointBaseline={updateTouchpointBaseline} />}
           {module === "workflows" && <WorkflowsView workflows={workflows} />}
           {module === "resellers" && <ResellersView resellers={resellers} selectedId={selectedReseller} setSelectedId={setSelectedReseller} />}
-          {module === "tasks" && <TasksView tasks={tasks} clients={clients} onboardings={onboardings} currentUser={currentUser} goToClient={goToClient} resellers={resellers} goToReseller={goToReseller} leads={leads} goToFollowUp={goToFollowUp} />}
+          {module === "tasks" && <TasksView tasks={tasks} clients={clients} onboardings={onboardings} currentUser={currentUser} goToClient={goToClient} resellers={resellers} goToReseller={goToReseller} leads={leads} goToSales={() => setModule("sales")} />}
           {module === "reports" && <ReportsView clients={clients} reportTemplates={reportTemplates} addReportTemplate={addReportTemplate} renameReportTemplate={renameReportTemplate} deleteReportTemplate={deleteReportTemplate} addTemplateSection={addTemplateSection} removeTemplateSection={removeTemplateSection} />}
           {module === "schedule" && <ScheduleView tasks={tasks} clients={clients} onboardings={onboardings} scheduleBlocks={scheduleBlocks} addScheduleBlock={addScheduleBlock} removeScheduleBlock={removeScheduleBlock} goToClient={goToClient} />}
         </div>

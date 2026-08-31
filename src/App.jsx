@@ -8921,6 +8921,9 @@ function BillingOverview({ clients, resellers }) {
     hourItems: c.hours.log.filter((h) => h.date.slice(0, 7) === viewMonth),
     expenseItems: (c.billableExpenses || []).filter((x) => x.date && x.date.slice(0, 7) === viewMonth),
     billedForViewMonth: (c.billedMonths || []).includes(viewMonth),
+    isNztg: (c.intake?.hearAboutUs || "").toLowerCase().includes("nztg"),
+    logoPath: c.intake?.logoPath || null,
+    isAnnualDiscount: c.intake?.paymentFreq === "Annually (10% discount)",
   }));
   const flatFeeRows = setUpClients.filter((c) => (c.billingType || "FlatFee") === "FlatFee" && !hasHoursThisMonth(c)).map((c) => ({
     id: c.id, name: c.name,
@@ -8928,6 +8931,9 @@ function BillingOverview({ clients, resellers }) {
     users: c.users.log[c.users.log.length - 1]?.count ?? 0,
     openExtras: c.extras.filter((e) => e.status !== "Done").length,
     status: c.billing.status,
+    isNztg: (c.intake?.hearAboutUs || "").toLowerCase().includes("nztg"),
+    logoPath: c.intake?.logoPath || null,
+    isAnnualDiscount: c.intake?.paymentFreq === "Annually (10% discount)",
   }));
   const totalHours = needsAttention.reduce((s, r) => s + r.logged, 0);
   const totalUsers = [...needsAttention, ...flatFeeRows].reduce((s, r) => s + r.users, 0);
@@ -8982,6 +8988,22 @@ function BillingOverview({ clients, resellers }) {
                     {c.intake?.wantsMonthlyReports && (
                       <div className="col-span-2"><Pill color={T.amber} bg={T.paperAlt}>Add-on requested: Monthly Reports ($130+/month)</Pill></div>
                     )}
+                    {c.intake?.logoPath && (
+                      <div className="col-span-2 flex items-center gap-2">
+                        <Pill color={T.amber} bg={T.paperAlt}>Logo uploaded at sign-up ($250 one-off fee)</Pill>
+                        <button type="button" onClick={async () => {
+                          try {
+                            const url = await getDownloadURL(storageRef(storage, c.intake.logoPath));
+                            window.open(url, "_blank");
+                          } catch (err) {
+                            console.error("Couldn't open logo:", err);
+                            alert("Couldn't open the logo, it may not have finished uploading, or the link has expired.");
+                          }
+                        }} className="text-xs underline" style={{ color: T.tealDark }}>
+                          View logo
+                        </button>
+                      </div>
+                    )}
                     <div className="flex items-center gap-1.5">
                       <span style={{ color: T.slateLight }}>Contract value:</span>
                       <input defaultValue={c.contract?.value || ""} placeholder="e.g. $249/month"
@@ -9016,6 +9038,7 @@ function BillingOverview({ clients, resellers }) {
                         `Plan: ${billingTypeMeta[c.billingType || "FlatFee"].label}`,
                         `Tier picked at sign-up: ${c.intake?.appUsers || "—"}`,
                         ...(c.intake?.wantsMonthlyReports ? ["Add-on requested: Monthly Reports ($130+/month)"] : []),
+                        ...(c.intake?.logoPath ? ["Logo uploaded at sign-up: $250 one-off fee"] : []),
                         `Contract value: ${c.contract?.value || "—"}`,
                       ];
                       navigator.clipboard.writeText(lines.join("\n"))
@@ -9051,9 +9074,12 @@ function BillingOverview({ clients, resellers }) {
             <div key={r.id} style={{ borderBottom: `1px solid ${T.border}` }}>
               <div className="grid items-center px-4 py-3 text-sm" style={{ gridTemplateColumns: "2fr 1.3fr 1fr 1fr 1fr 1fr 1fr 0.7fr" }}>
                 <button onClick={() => toggleBillingExpand(r.id)} style={{ display: "contents" }}>
-                  <div style={{ color: T.ink }} className="font-medium flex items-center gap-1.5 text-left">
+                  <div style={{ color: T.ink }} className="font-medium flex items-center gap-1.5 text-left flex-wrap">
                     <ChevronDown size={12} color={T.slateLight} style={{ transform: expanded ? "none" : "rotate(-90deg)" }} />
                     {r.name}
+                    {r.isNztg && <Pill color={T.amber} bg={T.paperAlt}>NZTG</Pill>}
+                    {r.logoPath && <Pill color={T.amber} bg={T.paperAlt}>Logo $250</Pill>}
+                    {r.isAnnualDiscount && <Pill color={T.tealDark} bg={T.paperAlt}>Annual, 10% off</Pill>}
                   </div>
                   <div><Pill color={r.adHoc ? T.amber : billingTypeMeta[r.type].color} bg={T.paperAlt}>{r.adHoc ? "Flat + ad-hoc" : r.type === "Hourly" ? "Hourly" : "Sub + hours"}</Pill></div>
                   <div style={{ color: T.ink }} className="text-left">{r.logged}h{expensesTotal > 0 ? ` + $${expensesTotal}` : ""}</div>
@@ -9108,7 +9134,12 @@ function BillingOverview({ clients, resellers }) {
           </div>
           {flatFeeRows.map((r) => (
             <div key={r.id} className="grid items-center px-4 py-3 text-sm" style={{ gridTemplateColumns: "2fr 1.5fr 1fr 1fr 1fr", borderBottom: `1px solid ${T.border}` }}>
-              <div style={{ color: T.ink }} className="font-medium">{r.name}</div>
+              <div style={{ color: T.ink }} className="font-medium flex items-center gap-1.5 flex-wrap">
+                {r.name}
+                {r.isNztg && <Pill color={T.amber} bg={T.paperAlt}>NZTG</Pill>}
+                {r.logoPath && <Pill color={T.amber} bg={T.paperAlt}>Logo $250</Pill>}
+                {r.isAnnualDiscount && <Pill color={T.tealDark} bg={T.paperAlt}>Annual, 10% off</Pill>}
+              </div>
               <div style={{ color: T.slate }}>{r.plan}</div>
               <div style={{ color: T.ink }}>{r.users}</div>
               <div style={{ color: r.openExtras > 0 ? T.amber : T.slateLight }}>{r.openExtras}</div>
@@ -11032,6 +11063,28 @@ export default function App() {
       if (looksSimulated && c.hours?.included === 6) {
         updateDoc(doc(db, "clients", c.id), { hours: { ...c.hours, included: 0 } });
       }
+    });
+  }, [clientsLoaded, clients]);
+  // Clients who want the Monthly Reports add-on need someone to actually produce and send
+  // their report each month, so this makes sure a recurring reminder exists on their card
+  // the moment wantsMonthlyReports is true, whether that was ticked at sign-up or turned on
+  // manually later through the CRM. Fixed id per client, so this is safe to re-run on every
+  // load and never creates a duplicate, and it leaves the reminder alone entirely once it
+  // exists, so marking it done and it reopening next month via the normal recurring
+  // mechanism (see toggleReminderDone) isn't fought by this effect recreating it.
+  useEffect(() => {
+    if (!clientsLoaded) return;
+    clients.forEach((c) => {
+      if (!c.intake?.wantsMonthlyReports) return;
+      const reminderId = `monthly-report-${c.id}`;
+      const alreadyExists = (c.reminders || []).some((r) => r.id === reminderId);
+      if (alreadyExists) return;
+      const [y, m] = currentMonth().split("-").map(Number);
+      const nextY = m === 12 ? y + 1 : y;
+      const nextM = m === 12 ? 1 : m + 1;
+      const dueDate = `${nextY}-${String(nextM).padStart(2, "0")}-05`;
+      const newReminder = { id: reminderId, text: "Prepare and send Monthly Report", assignee: "", estHours: 0, done: false, recurring: "monthly", date: dueDate };
+      updateDoc(doc(db, "clients", c.id), { reminders: [...(c.reminders || []), newReminder] });
     });
   }, [clientsLoaded, clients]);
   // Leads now live in Firestore, same pattern as clients: live subscription plus a

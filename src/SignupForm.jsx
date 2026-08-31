@@ -59,6 +59,7 @@ const termsSections = [
     "OSHE accepts no responsibility for failure to implement or modify templates or forms appropriately.",
   ]},
   { title: "9. Payment Terms", body: [
+    "The first invoice is issued on sign up and is due on the 20th of the current month.",
     "Invoices are due on the 20th of the month following the invoice date unless otherwise agreed.",
     "A late payment fee or interest may be applied to overdue invoices at a rate of up to 15%, representing a reasonable estimate of administration and recovery costs.",
     "The Company is responsible for all debt recovery costs incurred in the event of non payment.",
@@ -374,8 +375,11 @@ export default function SignupForm() {
               <Field label="Would you like your payments monthly or annually" required>
                 <select value={form.paymentFreq} onChange={(e) => set("paymentFreq", e.target.value)} className="w-full text-sm px-3 py-2.5 rounded-lg outline-none" style={inputStyle}>
                   <option value="">Select option...</option>
-                  <option>Monthly</option><option>Annually</option>
+                  <option>Monthly</option><option>Annually (10% discount)</option>
                 </select>
+                {form.paymentFreq === "Annually (10% discount)" && (
+                  <div className="text-xs mt-1.5" style={{ color: T.tealDark }}>Paying annually gets you 10% off the total for the year.</div>
+                )}
               </Field>
               <div className="col-span-2">
                 <Field label="Do you require a OHSMS" required hint="This is the system (manual, policy, procedures etc)">

@@ -8886,6 +8886,17 @@ function BillingOverview({ clients, resellers }) {
     updateDoc(doc(db, "clients", clientId), { hours: { ...c.hours, log: c.hours.log.filter((h) => h.id !== hourId) } });
   };
   const [viewMonth, setViewMonth] = useState(currentMonth());
+  // Just a manual "I've invoiced this one" checkbox for Vanessa to track as she works
+  // through invoicing, kept separate from client.billing.status (which is the account's
+  // overall Current/Overdue standing, not tied to any specific month). Stored per month so
+  // ticking it for August doesn't carry over and falsely show as billed in September.
+  const toggleBilled = (clientId) => {
+    const c = clients.find((x) => x.id === clientId);
+    if (!c) return;
+    const billedMonths = c.billedMonths || [];
+    const next = billedMonths.includes(viewMonth) ? billedMonths.filter((m) => m !== viewMonth) : [...billedMonths, viewMonth];
+    updateDoc(doc(db, "clients", clientId), { billedMonths: next });
+  };
   // Every month that genuinely has hours or billable expenses logged against any client,
   // newest first, always including the current month even if nothing's logged yet.
   const monthsAvailable = (() => {
@@ -8909,6 +8920,7 @@ function BillingOverview({ clients, resellers }) {
     status: c.billing.status,
     hourItems: c.hours.log.filter((h) => h.date.slice(0, 7) === viewMonth),
     expenseItems: (c.billableExpenses || []).filter((x) => x.date && x.date.slice(0, 7) === viewMonth),
+    billedForViewMonth: (c.billedMonths || []).includes(viewMonth),
   }));
   const flatFeeRows = setUpClients.filter((c) => (c.billingType || "FlatFee") === "FlatFee" && !hasHoursThisMonth(c)).map((c) => ({
     id: c.id, name: c.name,
@@ -9028,8 +9040,8 @@ function BillingOverview({ clients, resellers }) {
 
       <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: T.slate }}>Clients with hours to review — Hourly &amp; Subscription + Hours</div>
       <Card style={{ padding: 0 }}>
-        <div className="grid text-xs font-semibold uppercase tracking-wide px-4 py-3" style={{ gridTemplateColumns: "2fr 1.3fr 1fr 1fr 1fr 1fr 1fr", color: T.slate, borderBottom: `1px solid ${T.border}` }}>
-          <div>Client</div><div>Type</div><div>Hours logged</div><div>Included</div><div>Over / under</div><div>Users</div><div>Status</div>
+        <div className="grid text-xs font-semibold uppercase tracking-wide px-4 py-3" style={{ gridTemplateColumns: "2fr 1.3fr 1fr 1fr 1fr 1fr 1fr 0.7fr", color: T.slate, borderBottom: `1px solid ${T.border}` }}>
+          <div>Client</div><div>Type</div><div>Hours logged</div><div>Included</div><div>Over / under</div><div>Users</div><div>Status</div><div>Billed</div>
         </div>
         {needsAttention.map((r) => {
           const diff = r.included > 0 ? r.logged - r.included : null;
@@ -9037,18 +9049,23 @@ function BillingOverview({ clients, resellers }) {
           const expanded = expandedBilling[r.id];
           return (
             <div key={r.id} style={{ borderBottom: `1px solid ${T.border}` }}>
-              <button onClick={() => toggleBillingExpand(r.id)} className="grid items-center px-4 py-3 text-sm w-full text-left" style={{ gridTemplateColumns: "2fr 1.3fr 1fr 1fr 1fr 1fr 1fr" }}>
-                <div style={{ color: T.ink }} className="font-medium flex items-center gap-1.5">
-                  <ChevronDown size={12} color={T.slateLight} style={{ transform: expanded ? "none" : "rotate(-90deg)" }} />
-                  {r.name}
-                </div>
-                <div><Pill color={r.adHoc ? T.amber : billingTypeMeta[r.type].color} bg={T.paperAlt}>{r.adHoc ? "Flat + ad-hoc" : r.type === "Hourly" ? "Hourly" : "Sub + hours"}</Pill></div>
-                <div style={{ color: T.ink }}>{r.logged}h{expensesTotal > 0 ? ` + $${expensesTotal}` : ""}</div>
-                <div style={{ color: T.slate }}>{r.included > 0 ? `${r.included}h` : "—"}</div>
-                <div style={{ color: diff === null ? T.slateLight : diff > 0 ? T.coral : T.tealDark }}>{diff === null ? "—" : diff > 0 ? `+${diff}h` : `${diff}h`}</div>
-                <div style={{ color: T.ink }}>{r.users}</div>
-                <div><Pill color={r.status === "Overdue" ? T.coral : T.tealDark} bg={T.paperAlt}>{r.status}</Pill></div>
-              </button>
+              <div className="grid items-center px-4 py-3 text-sm" style={{ gridTemplateColumns: "2fr 1.3fr 1fr 1fr 1fr 1fr 1fr 0.7fr" }}>
+                <button onClick={() => toggleBillingExpand(r.id)} style={{ display: "contents" }}>
+                  <div style={{ color: T.ink }} className="font-medium flex items-center gap-1.5 text-left">
+                    <ChevronDown size={12} color={T.slateLight} style={{ transform: expanded ? "none" : "rotate(-90deg)" }} />
+                    {r.name}
+                  </div>
+                  <div><Pill color={r.adHoc ? T.amber : billingTypeMeta[r.type].color} bg={T.paperAlt}>{r.adHoc ? "Flat + ad-hoc" : r.type === "Hourly" ? "Hourly" : "Sub + hours"}</Pill></div>
+                  <div style={{ color: T.ink }} className="text-left">{r.logged}h{expensesTotal > 0 ? ` + $${expensesTotal}` : ""}</div>
+                  <div style={{ color: T.slate }} className="text-left">{r.included > 0 ? `${r.included}h` : "—"}</div>
+                  <div style={{ color: diff === null ? T.slateLight : diff > 0 ? T.coral : T.tealDark }} className="text-left">{diff === null ? "—" : diff > 0 ? `+${diff}h` : `${diff}h`}</div>
+                  <div style={{ color: T.ink }} className="text-left">{r.users}</div>
+                  <div className="text-left"><Pill color={r.status === "Overdue" ? T.coral : T.tealDark} bg={T.paperAlt}>{r.status}</Pill></div>
+                </button>
+                <label className="flex items-center gap-1.5 cursor-pointer" title={`Mark as invoiced for ${viewMonth === currentMonth() ? "this month" : monthLabel(viewMonth)}`}>
+                  <input type="checkbox" checked={r.billedForViewMonth} onChange={() => toggleBilled(r.id)} />
+                </label>
+              </div>
               {expanded && (
                 <div className="px-4 pb-3" style={{ background: T.paperAlt }}>
                   <div className="text-[11px] font-semibold uppercase tracking-wide pt-2 pb-1" style={{ color: T.slateLight }}>Hours logged, {viewMonth === currentMonth() ? "this month" : monthLabel(viewMonth)}</div>

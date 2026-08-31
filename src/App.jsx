@@ -8897,6 +8897,10 @@ function BillingOverview({ clients, resellers }) {
     const next = billedMonths.includes(viewMonth) ? billedMonths.filter((m) => m !== viewMonth) : [...billedMonths, viewMonth];
     updateDoc(doc(db, "clients", clientId), { billedMonths: next });
   };
+  // The $250 logo fee is a one-off, not tied to any month like the checkbox above, so it's
+  // just a plain flag: once ticked, the badge disappears for good rather than resetting each
+  // month, since there's nothing to re-charge once it's been invoiced.
+  const markLogoFeeBilled = (clientId) => updateDoc(doc(db, "clients", clientId), { logoFeeBilled: true });
   // Every month that genuinely has hours or billable expenses logged against any client,
   // newest first, always including the current month even if nothing's logged yet.
   const monthsAvailable = (() => {
@@ -8922,8 +8926,9 @@ function BillingOverview({ clients, resellers }) {
     expenseItems: (c.billableExpenses || []).filter((x) => x.date && x.date.slice(0, 7) === viewMonth),
     billedForViewMonth: (c.billedMonths || []).includes(viewMonth),
     isNztg: (c.intake?.hearAboutUs || "").toLowerCase().includes("nztg"),
-    logoPath: c.intake?.logoPath || null,
+    logoPath: !c.logoFeeBilled ? (c.intake?.logoPath || null) : null,
     isAnnualDiscount: c.intake?.paymentFreq === "Annually (10% discount)",
+    wantsMonthlyReports: Boolean(c.intake?.wantsMonthlyReports),
   }));
   const flatFeeRows = setUpClients.filter((c) => (c.billingType || "FlatFee") === "FlatFee" && !hasHoursThisMonth(c)).map((c) => ({
     id: c.id, name: c.name,
@@ -8932,8 +8937,9 @@ function BillingOverview({ clients, resellers }) {
     openExtras: c.extras.filter((e) => e.status !== "Done").length,
     status: c.billing.status,
     isNztg: (c.intake?.hearAboutUs || "").toLowerCase().includes("nztg"),
-    logoPath: c.intake?.logoPath || null,
+    logoPath: !c.logoFeeBilled ? (c.intake?.logoPath || null) : null,
     isAnnualDiscount: c.intake?.paymentFreq === "Annually (10% discount)",
+    wantsMonthlyReports: Boolean(c.intake?.wantsMonthlyReports),
   }));
   const totalHours = needsAttention.reduce((s, r) => s + r.logged, 0);
   const totalUsers = [...needsAttention, ...flatFeeRows].reduce((s, r) => s + r.users, 0);
@@ -8988,7 +8994,7 @@ function BillingOverview({ clients, resellers }) {
                     {c.intake?.wantsMonthlyReports && (
                       <div className="col-span-2"><Pill color={T.amber} bg={T.paperAlt}>Add-on requested: Monthly Reports ($130+/month)</Pill></div>
                     )}
-                    {c.intake?.logoPath && (
+                    {c.intake?.logoPath && !c.logoFeeBilled && (
                       <div className="col-span-2 flex items-center gap-2">
                         <Pill color={T.amber} bg={T.paperAlt}>Logo uploaded at sign-up ($250 one-off fee)</Pill>
                         <button type="button" onClick={async () => {
@@ -9002,6 +9008,10 @@ function BillingOverview({ clients, resellers }) {
                         }} className="text-xs underline" style={{ color: T.tealDark }}>
                           View logo
                         </button>
+                        <label className="flex items-center gap-1 text-xs" style={{ color: T.slate }}>
+                          <input type="checkbox" onChange={() => markLogoFeeBilled(c.id)} />
+                          Charged
+                        </label>
                       </div>
                     )}
                     <div className="flex items-center gap-1.5">
@@ -9038,7 +9048,7 @@ function BillingOverview({ clients, resellers }) {
                         `Plan: ${billingTypeMeta[c.billingType || "FlatFee"].label}`,
                         `Tier picked at sign-up: ${c.intake?.appUsers || "—"}`,
                         ...(c.intake?.wantsMonthlyReports ? ["Add-on requested: Monthly Reports ($130+/month)"] : []),
-                        ...(c.intake?.logoPath ? ["Logo uploaded at sign-up: $250 one-off fee"] : []),
+                        ...(c.intake?.logoPath && !c.logoFeeBilled ? ["Logo uploaded at sign-up: $250 one-off fee"] : []),
                         `Contract value: ${c.contract?.value || "—"}`,
                       ];
                       navigator.clipboard.writeText(lines.join("\n"))
@@ -9078,8 +9088,14 @@ function BillingOverview({ clients, resellers }) {
                     <ChevronDown size={12} color={T.slateLight} style={{ transform: expanded ? "none" : "rotate(-90deg)" }} />
                     {r.name}
                     {r.isNztg && <Pill color={T.amber} bg={T.paperAlt}>NZTG</Pill>}
-                    {r.logoPath && <Pill color={T.amber} bg={T.paperAlt}>Logo $250</Pill>}
+                    {r.logoPath && (
+                      <span onClick={(e) => e.stopPropagation()} className="inline-flex items-center gap-1">
+                        <Pill color={T.amber} bg={T.paperAlt}>Logo $250</Pill>
+                        <input type="checkbox" onChange={(e) => { e.stopPropagation(); markLogoFeeBilled(r.id); }} title="Tick once the $250 logo fee has been charged" />
+                      </span>
+                    )}
                     {r.isAnnualDiscount && <Pill color={T.tealDark} bg={T.paperAlt}>Annual, 10% off</Pill>}
+                    {r.wantsMonthlyReports && <Pill color={T.amber} bg={T.paperAlt}>Monthly Reports</Pill>}
                   </div>
                   <div><Pill color={r.adHoc ? T.amber : billingTypeMeta[r.type].color} bg={T.paperAlt}>{r.adHoc ? "Flat + ad-hoc" : r.type === "Hourly" ? "Hourly" : "Sub + hours"}</Pill></div>
                   <div style={{ color: T.ink }} className="text-left">{r.logged}h{expensesTotal > 0 ? ` + $${expensesTotal}` : ""}</div>
@@ -9137,8 +9153,14 @@ function BillingOverview({ clients, resellers }) {
               <div style={{ color: T.ink }} className="font-medium flex items-center gap-1.5 flex-wrap">
                 {r.name}
                 {r.isNztg && <Pill color={T.amber} bg={T.paperAlt}>NZTG</Pill>}
-                {r.logoPath && <Pill color={T.amber} bg={T.paperAlt}>Logo $250</Pill>}
+                {r.logoPath && (
+                  <span className="inline-flex items-center gap-1">
+                    <Pill color={T.amber} bg={T.paperAlt}>Logo $250</Pill>
+                    <input type="checkbox" onChange={() => markLogoFeeBilled(r.id)} title="Tick once the $250 logo fee has been charged" />
+                  </span>
+                )}
                 {r.isAnnualDiscount && <Pill color={T.tealDark} bg={T.paperAlt}>Annual, 10% off</Pill>}
+                    {r.wantsMonthlyReports && <Pill color={T.amber} bg={T.paperAlt}>Monthly Reports</Pill>}
               </div>
               <div style={{ color: T.slate }}>{r.plan}</div>
               <div style={{ color: T.ink }}>{r.users}</div>

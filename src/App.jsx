@@ -8885,18 +8885,30 @@ function BillingOverview({ clients, resellers }) {
     if (!c) return;
     updateDoc(doc(db, "clients", clientId), { hours: { ...c.hours, log: c.hours.log.filter((h) => h.id !== hourId) } });
   };
+  const [viewMonth, setViewMonth] = useState(currentMonth());
+  // Every month that genuinely has hours or billable expenses logged against any client,
+  // newest first, always including the current month even if nothing's logged yet.
+  const monthsAvailable = (() => {
+    const set = new Set();
+    clients.forEach((c) => {
+      (c.hours?.log || []).forEach((h) => h.date && set.add(h.date.slice(0, 7)));
+      (c.billableExpenses || []).forEach((x) => x.date && set.add(x.date.slice(0, 7)));
+    });
+    set.add(currentMonth());
+    return [...set].sort().reverse();
+  })();
   const newClients = clients.filter((c) => c.billingSetupDone === false);
   const setUpClients = clients.filter((c) => c.billingSetupDone !== false);
-  const hasHoursThisMonth = (c) => c.hours.log.some((h) => h.date.slice(0, 7) === currentMonth());
+  const hasHoursThisMonth = (c) => c.hours.log.some((h) => h.date.slice(0, 7) === viewMonth);
 
   const needsAttention = setUpClients.filter((c) => (c.billingType || "FlatFee") !== "FlatFee" || hasHoursThisMonth(c)).map((c) => ({
     id: c.id, name: c.name, type: c.billingType || "FlatFee", adHoc: (c.billingType || "FlatFee") === "FlatFee",
-    logged: c.hours.log.filter((h) => h.date.slice(0, 7) === currentMonth()).reduce((s, h) => s + h.hours, 0),
+    logged: c.hours.log.filter((h) => h.date.slice(0, 7) === viewMonth).reduce((s, h) => s + h.hours, 0),
     included: c.hours.included,
     users: c.users.log[c.users.log.length - 1]?.count ?? 0,
     status: c.billing.status,
-    hourItems: c.hours.log.filter((h) => h.date.slice(0, 7) === currentMonth()),
-    expenseItems: (c.billableExpenses || []).filter((x) => x.date && x.date.slice(0, 7) === currentMonth()),
+    hourItems: c.hours.log.filter((h) => h.date.slice(0, 7) === viewMonth),
+    expenseItems: (c.billableExpenses || []).filter((x) => x.date && x.date.slice(0, 7) === viewMonth),
   }));
   const flatFeeRows = setUpClients.filter((c) => (c.billingType || "FlatFee") === "FlatFee" && !hasHoursThisMonth(c)).map((c) => ({
     id: c.id, name: c.name,
@@ -8910,8 +8922,9 @@ function BillingOverview({ clients, resellers }) {
 
   const markBillingSetUp = (id) => updateDoc(doc(db, "clients", id), { billingSetupDone: true });
 
-  // A reseller's client count is "how many of their clients logged a user count this month", not a running total of everyone ever added.
-  const billingActiveClients = (r) => r.clients.filter((c) => c.users.log.some((u) => u.month === currentMonth()));
+  // A reseller's client count is "how many of their clients logged a user count in the
+  // viewed month", not a running total of everyone ever added.
+  const billingActiveClients = (r) => r.clients.filter((c) => c.users.log.some((u) => u.month === viewMonth));
   const resellerRows = resellers.map((r) => {
     const active = billingActiveClients(r);
     return { id: r.id, name: r.name, clientCount: active.length, users: active.reduce((s, c) => s + (c.users.log[c.users.log.length - 1]?.count ?? 0), 0) };
@@ -8920,6 +8933,19 @@ function BillingOverview({ clients, resellers }) {
 
   return (
     <div className="flex flex-col gap-4">
+      <Card style={{ padding: "10px 16px" }}>
+        <div className="flex items-center gap-3">
+          <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: T.slate }}>Viewing</span>
+          <select value={viewMonth} onChange={(e) => setViewMonth(e.target.value)}
+            className="text-sm px-2.5 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
+            {monthsAvailable.map((m) => <option key={m} value={m}>{m === currentMonth() ? "This month" : monthLabel(m)}</option>)}
+          </select>
+          {viewMonth !== currentMonth() && (
+            <span className="text-xs" style={{ color: T.slateLight }}>Looking at a past month, not what's currently outstanding.</span>
+          )}
+        </div>
+      </Card>
+
       {newClients.length > 0 && (
         <Card style={{ padding: 16, borderLeft: `3px solid ${T.amber}` }}>
           <div className="text-sm font-semibold mb-1" style={{ color: T.ink }}>New clients — set up for billing</div>
@@ -8950,6 +8976,21 @@ function BillingOverview({ clients, resellers }) {
                         onBlur={(e) => updateDoc(doc(db, "clients", c.id), { contract: { ...c.contract, value: e.target.value } })}
                         className="text-xs font-semibold px-1.5 py-1 rounded-lg outline-none flex-1" style={{ color: T.ink, border: `1px solid ${T.border}` }} />
                     </div>
+                    {c.intake?.signedTermsPath && (
+                      <div className="col-span-2">
+                        <button type="button" onClick={async () => {
+                          try {
+                            const url = await getDownloadURL(storageRef(storage, c.intake.signedTermsPath));
+                            window.open(url, "_blank");
+                          } catch (err) {
+                            console.error("Couldn't open signed T&Cs:", err);
+                            alert("Couldn't open the signed T&Cs PDF, it may not have finished uploading, or the link has expired.");
+                          }
+                        }} className="text-xs text-left underline" style={{ color: T.tealDark }}>
+                          Open signed T&amp;Cs
+                        </button>
+                      </div>
+                    )}
                   </div>
                   <button
                     onClick={() => {
@@ -8980,7 +9021,7 @@ function BillingOverview({ clients, resellers }) {
       )}
 
       <div className="grid grid-cols-3 gap-4">
-        <Card style={{ padding: 16 }}><div className="text-xs font-semibold uppercase tracking-wide" style={{ color: T.slate }}>Hours logged this month</div><div className="text-xl font-bold mt-1" style={{ color: T.ink }}>{totalHours}</div></Card>
+        <Card style={{ padding: 16 }}><div className="text-xs font-semibold uppercase tracking-wide" style={{ color: T.slate }}>Hours logged, {viewMonth === currentMonth() ? "this month" : monthLabel(viewMonth)}</div><div className="text-xl font-bold mt-1" style={{ color: T.ink }}>{totalHours}</div></Card>
         <Card style={{ padding: 16 }}><div className="text-xs font-semibold uppercase tracking-wide" style={{ color: T.slate }}>Total direct app users</div><div className="text-xl font-bold mt-1" style={{ color: T.ink }}>{totalUsers}</div></Card>
         <Card style={{ padding: 16 }}><div className="text-xs font-semibold uppercase tracking-wide" style={{ color: T.slate }}>Clients with hours to review</div><div className="text-xl font-bold mt-1" style={{ color: T.ink }}>{needsAttention.length}</div></Card>
       </div>
@@ -9010,7 +9051,7 @@ function BillingOverview({ clients, resellers }) {
               </button>
               {expanded && (
                 <div className="px-4 pb-3" style={{ background: T.paperAlt }}>
-                  <div className="text-[11px] font-semibold uppercase tracking-wide pt-2 pb-1" style={{ color: T.slateLight }}>Hours logged this month</div>
+                  <div className="text-[11px] font-semibold uppercase tracking-wide pt-2 pb-1" style={{ color: T.slateLight }}>Hours logged, {viewMonth === currentMonth() ? "this month" : monthLabel(viewMonth)}</div>
                   {r.hourItems.map((h) => (
                     <div key={h.id} className="flex items-center justify-between text-xs py-1" style={{ borderBottom: `1px solid ${T.border}` }}>
                       <div><span style={{ color: T.ink }}>{h.description || "—"}</span><span className="ml-2" style={{ color: T.slateLight }}>{h.member} · {fmtDate(h.date)}</span></div>
@@ -9023,7 +9064,7 @@ function BillingOverview({ clients, resellers }) {
                   {r.hourItems.length === 0 && <div className="text-xs py-1" style={{ color: T.slateLight }}>None logged this month.</div>}
                   {r.expenseItems.length > 0 && (
                     <>
-                      <div className="text-[11px] font-semibold uppercase tracking-wide pt-3 pb-1" style={{ color: T.slateLight }}>Billable expenses this month</div>
+                      <div className="text-[11px] font-semibold uppercase tracking-wide pt-3 pb-1" style={{ color: T.slateLight }}>Billable expenses, {viewMonth === currentMonth() ? "this month" : monthLabel(viewMonth)}</div>
                       {r.expenseItems.map((x) => (
                         <div key={x.id} className="flex items-center justify-between text-xs py-1" style={{ borderBottom: `1px solid ${T.border}` }}>
                           <div><span style={{ color: T.ink }}>{x.description || "—"}</span><span className="ml-2" style={{ color: T.slateLight }}>{x.member} · {fmtDate(x.date)}</span></div>
@@ -9065,12 +9106,12 @@ function BillingOverview({ clients, resellers }) {
       <div className="text-xs font-semibold uppercase tracking-wide mt-2" style={{ color: T.slate }}>Resellers — billed per user</div>
       <div className="grid grid-cols-3 gap-4">
         <Card style={{ padding: 16 }}><div className="text-xs font-semibold uppercase tracking-wide" style={{ color: T.slate }}>Resellers</div><div className="text-xl font-bold mt-1" style={{ color: T.ink }}>{resellerRows.length}</div></Card>
-        <Card style={{ padding: 16 }}><div className="text-xs font-semibold uppercase tracking-wide" style={{ color: T.slate }}>Reseller users this month</div><div className="text-xl font-bold mt-1" style={{ color: T.ink }}>{resellerTotalUsers}</div></Card>
-        <Card style={{ padding: 16 }}><div className="text-xs font-semibold uppercase tracking-wide" style={{ color: T.slate }}>Their billing clients this month</div><div className="text-xl font-bold mt-1" style={{ color: T.ink }}>{resellerRows.reduce((s, r) => s + r.clientCount, 0)}</div></Card>
+        <Card style={{ padding: 16 }}><div className="text-xs font-semibold uppercase tracking-wide" style={{ color: T.slate }}>Reseller users, {viewMonth === currentMonth() ? "this month" : monthLabel(viewMonth)}</div><div className="text-xl font-bold mt-1" style={{ color: T.ink }}>{resellerTotalUsers}</div></Card>
+        <Card style={{ padding: 16 }}><div className="text-xs font-semibold uppercase tracking-wide" style={{ color: T.slate }}>Their billing clients, {viewMonth === currentMonth() ? "this month" : monthLabel(viewMonth)}</div><div className="text-xl font-bold mt-1" style={{ color: T.ink }}>{resellerRows.reduce((s, r) => s + r.clientCount, 0)}</div></Card>
       </div>
       <Card style={{ padding: 0 }}>
         <div className="grid text-xs font-semibold uppercase tracking-wide px-4 py-3" style={{ gridTemplateColumns: "2fr 1fr 1fr", color: T.slate, borderBottom: `1px solid ${T.border}` }}>
-          <div>Reseller</div><div>Clients this month</div><div>Users to bill</div>
+          <div>Reseller</div><div>Active clients</div><div>Users to bill</div>
         </div>
         {resellerRows.map((r) => (
           <div key={r.id} className="grid items-center px-4 py-3 text-sm" style={{ gridTemplateColumns: "2fr 1fr 1fr", borderBottom: `1px solid ${T.border}` }}>

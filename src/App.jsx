@@ -9027,18 +9027,21 @@ function BillingOverview({ clients, resellers }) {
                         onBlur={(e) => updateDoc(doc(db, "clients", c.id), { contract: { ...c.contract, value: e.target.value } })}
                         className="text-xs font-semibold px-1.5 py-1 rounded-lg outline-none flex-1" style={{ color: T.ink, border: `1px solid ${T.border}` }} />
                     </div>
-                    {c.intake?.signedTermsPath && (
+                    {c.intake?.paymentFreq === "Annually (10% discount)" && (
+                      <div className="col-span-2"><Pill color={T.tealDark} bg={T.paperAlt}>Annual, 10% off</Pill></div>
+                    )}
+                    {c.intake?.questionnairePath && (
                       <div className="col-span-2">
                         <button type="button" onClick={async () => {
                           try {
-                            const url = await getDownloadURL(storageRef(storage, c.intake.signedTermsPath));
+                            const url = await getDownloadURL(storageRef(storage, c.intake.questionnairePath));
                             window.open(url, "_blank");
                           } catch (err) {
-                            console.error("Couldn't open signed T&Cs:", err);
-                            alert("Couldn't open the signed T&Cs PDF, it may not have finished uploading, or the link has expired.");
+                            console.error("Couldn't open questionnaire:", err);
+                            alert("Couldn't open the questionnaire PDF, it may not have finished uploading, or the link has expired.");
                           }
                         }} className="text-xs text-left underline" style={{ color: T.tealDark }}>
-                          Open signed T&amp;Cs
+                          Open questionnaire
                         </button>
                       </div>
                     )}
@@ -9054,13 +9057,14 @@ function BillingOverview({ clients, resellers }) {
                         `Payment terms: ${c.billing?.terms || "—"}`,
                         `Plan: ${billingTypeMeta[c.billingType || "FlatFee"].label}`,
                         `Tier picked at sign-up: ${c.intake?.appUsers || "—"}`,
+                        ...(c.intake?.paymentFreq === "Annually (10% discount)" ? ["Annual payment plan: 10% discount applies"] : []),
                         ...(c.intake?.wantsMonthlyReports ? ["Add-on requested: Monthly Reports ($130+/month)"] : []),
                         ...(c.intake?.logoPath && !c.logoFeeBilled ? ["Logo uploaded at sign-up: $250 one-off fee"] : []),
                         `Contract value: ${c.contract?.value || "—"}`,
                       ];
                       navigator.clipboard.writeText(lines.join("\n"))
-                        .then(() => alert("Copied — paste this into Xero when creating the new contact."))
-                        .catch(() => alert("Couldn't copy to clipboard — your browser may have blocked it."));
+                        .then(() => alert("Copied, paste this into Xero when creating the new contact."))
+                        .catch(() => alert("Couldn't copy to clipboard, your browser may have blocked it."));
                     }}
                     className="text-[11px] font-semibold px-2.5 py-1.5 rounded-lg flex items-center gap-1.5" style={{ background: T.paperAlt, color: T.tealDark }}>
                     <ClipboardList size={12} /> Copy details

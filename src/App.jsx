@@ -8129,6 +8129,14 @@ function SalesView({ leads, convertLeadToClient }) {
         {stageOrder.map((stage) => {
           const items = leads.filter((l) => l.stage === stage && Boolean(l.archived) === showArchived);
           const meta = stageMeta[stage];
+          if (items.length === 0) {
+            return (
+              <div key={stage} className="w-11 shrink-0 flex flex-col items-center gap-2 rounded-lg py-3" style={{ background: meta.bg }}>
+                <span className="text-xs font-bold px-1.5 py-0.5 rounded-full" style={{ color: meta.color, background: T.card }}>0</span>
+                <span className="text-xs font-semibold whitespace-nowrap" style={{ color: meta.color, writingMode: "vertical-rl", transform: "rotate(180deg)" }}>{stage}</span>
+              </div>
+            );
+          }
           return (
             <div key={stage} className="w-72 shrink-0 flex flex-col gap-3">
               <div className="flex items-center justify-between px-3 py-2 rounded-lg" style={{ background: meta.bg }}>
@@ -8263,7 +8271,6 @@ function SalesView({ leads, convertLeadToClient }) {
                     )}
                   </Card>
                 ))}
-                {items.length === 0 && <div className="text-xs text-center py-4" style={{ color: T.slateLight }}>Empty</div>}
               </div>
             </div>
           );

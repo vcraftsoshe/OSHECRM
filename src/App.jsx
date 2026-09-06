@@ -5772,6 +5772,7 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
             <div>
               <div className="text-lg font-bold flex items-center gap-2" style={{ color: T.ink }}>
                 <input
+                  key={`name-${client.id}`}
                   defaultValue={client.name}
                   onBlur={(e) => {
                     const next = e.target.value.trim();
@@ -5788,6 +5789,7 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
                 {Boolean(client.intake?.wantsMonthlyReports) && <Pill color={T.amber} bg={T.paperAlt}>Monthly Reports</Pill>}
               </div>
               <input
+                key={`legalname-${client.id}`}
                 defaultValue={client.legalName || ""}
                 placeholder="Legal name"
                 onBlur={(e) => {
@@ -5997,6 +5999,7 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
               <div className="mb-4">
                 <div className="text-xs font-semibold" style={{ color: T.slate }}>PLAN</div>
                 <input
+                  key={`plan-${client.id}`}
                   defaultValue={client.contract.plan || ""}
                   onBlur={(e) => updateClient((c) => ({ ...c, contract: { ...c.contract, plan: e.target.value } }))}
                   placeholder="e.g. Full H&S Retainer, Monthly Compliance Pack..."

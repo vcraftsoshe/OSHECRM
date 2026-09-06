@@ -5771,12 +5771,34 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
           <div className="flex items-center justify-between">
             <div>
               <div className="text-lg font-bold flex items-center gap-2" style={{ color: T.ink }}>
-                {client.name}
+                <input
+                  defaultValue={client.name}
+                  onBlur={(e) => {
+                    const next = e.target.value.trim();
+                    if (next && next !== client.name) updateDoc(doc(db, "clients", client.id), { name: next });
+                    else e.target.value = client.name;
+                  }}
+                  className="text-lg font-bold outline-none rounded px-1 -mx-1"
+                  style={{ color: T.ink, border: "1px solid transparent", background: "transparent", minWidth: 120 }}
+                  onFocus={(e) => { e.target.style.border = `1px solid ${T.border}`; e.target.style.background = T.paperAlt; }}
+                  onBlurCapture={(e) => { e.target.style.border = "1px solid transparent"; e.target.style.background = "transparent"; }}
+                />
                 {(client.intake?.hearAboutUs || "").toLowerCase().includes("nztg") && <Pill color={T.blue} bg={T.paperAlt}>NZTG</Pill>}
                 {(client.intake?.hearAboutUs || "").toLowerCase().includes("bmc") && <Pill color="#8B6BA8" bg={T.paperAlt}>BMC</Pill>}
                 {Boolean(client.intake?.wantsMonthlyReports) && <Pill color={T.amber} bg={T.paperAlt}>Monthly Reports</Pill>}
               </div>
-              <div className="text-sm" style={{ color: T.slate }}>{client.legalName}</div>
+              <input
+                defaultValue={client.legalName || ""}
+                placeholder="Legal name"
+                onBlur={(e) => {
+                  const next = e.target.value.trim();
+                  if (next !== (client.legalName || "")) updateDoc(doc(db, "clients", client.id), { legalName: next });
+                }}
+                className="text-sm outline-none rounded px-1 -mx-1"
+                style={{ color: T.slate, border: "1px solid transparent", background: "transparent", minWidth: 120 }}
+                onFocus={(e) => { e.target.style.border = `1px solid ${T.border}`; e.target.style.background = T.paperAlt; }}
+                onBlurCapture={(e) => { e.target.style.border = "1px solid transparent"; e.target.style.background = "transparent"; }}
+              />
             </div>
             <div className="flex items-center gap-2">
               <Pill color={urgency.color} bg={T.paperAlt}>OHSMS: {urgency.label}</Pill>

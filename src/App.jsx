@@ -5549,7 +5549,7 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
   const toggleNoteTag = (person) => setNoteDraft((d) => ({ ...d, tags: d.tags.includes(person) ? d.tags.filter((p) => p !== person) : [...d.tags, person] }));
   const addNote = () => {
     if (!noteDraft.text.trim()) return;
-    updateClient((c) => ({ ...c, notes: [...c.notes, { id: Date.now(), author: "You", date: today(), text: noteDraft.text, tags: noteDraft.tags }] }));
+    updateClient((c) => ({ ...c, notes: [...c.notes, { id: Date.now(), author: currentUser || "You", date: today(), text: noteDraft.text, tags: noteDraft.tags }] }));
     noteDraft.tags.forEach((person) => pushNotification({
       forPerson: person, clientId: client.id, clientName: client.name,
       message: `Tagged on a note for ${client.name}: "${noteDraft.text.slice(0, 60)}${noteDraft.text.length > 60 ? "…" : ""}"`,
@@ -5606,7 +5606,7 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
         reminders = c.reminders.map((r) => (r.id === id ? { ...r, done: !r.done } : r));
       }
       const notes = completing
-        ? [...c.notes, { id: Date.now(), author: "You", date: today(), text: `Completed reminder: "${reminder.text}"` }]
+        ? [...c.notes, { id: Date.now(), author: currentUser || "You", date: today(), text: `Completed reminder: "${reminder.text}"` }]
         : c.notes;
       let hours = c.hours;
       if (completing && String(id).startsWith("sched-task-") && reminder.estHours) {

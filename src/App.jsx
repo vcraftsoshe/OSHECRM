@@ -6501,7 +6501,13 @@ async function loadClientLogoImage(client, pdfDoc) {
     }
     return await pdfDoc.embedPng(bytes);
   } catch (err) {
+    // This used to fail completely silently (console.error only), which is exactly why
+    // this was hard to diagnose: whoever hit it saw a document with no logo and no
+    // indication why. Surfacing the actual error message means the real cause (a
+    // permissions issue, a missing file, a network problem) is reportable instead of
+    // invisible, rather than everyone just guessing at "the logo isn't working".
     console.error("Couldn't load client logo for PDF:", err);
+    alert(`This document will generate without the logo, it couldn't be loaded. Reason: ${err?.code || err?.message || "unknown error"}. If this keeps happening, send this exact message through.`);
     return null;
   }
 }

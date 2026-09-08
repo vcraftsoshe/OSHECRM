@@ -7043,8 +7043,9 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
       const result = [];
       body.split("\n").forEach((seg) => {
         if (seg.trim() === "") return;
-        const isBullet = seg.trim().startsWith("• ");
-        const cleanText = isBullet ? seg.trim().slice(2) : seg;
+        const trimmedSeg = seg.trim();
+        const isBullet = trimmedSeg.startsWith("•");
+        const cleanText = isBullet ? trimmedSeg.replace(/^•[\s\u00A0]*/, "") : seg;
         const effectiveWidth = isBullet ? forWidth - BULLET_INDENT : forWidth;
         wrapTextLines(cleanText, font, bodySize, effectiveWidth).forEach((line, i) => result.push({ text: line, isBullet, isFirst: i === 0 }));
       });
@@ -7227,8 +7228,15 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
       // largest one that actually leaves room for the sign-off block underneath. Falls back
       // to the smallest size (and lets it paginate normally) only if a policy is genuinely
       // too long to fit at any readable size, rather than ever silently truncating content.
-      const SIGNOFF_HEIGHT = 24 + 40; // one row gap plus clearance above the footer
-      const availableHeight = contentTop - margin - SIGNOFF_HEIGHT;
+      // Single source of truth for how much space the sign-off block needs at the bottom
+      // of the page. This must be the exact same number used by the page-break check below
+      // (`if (y < margin + SIGNOFF_CLEARANCE)`) — if the two ever disagree, the sizing logic
+      // above can pick a font size that leaves just enough room by its own reckoning, but
+      // not enough by the page-break check's reckoning, which is exactly what was causing
+      // these policies to spill onto an almost-empty second page even when there was
+      // visibly enough room on page 1.
+      const SIGNOFF_CLEARANCE = 100;
+      const availableHeight = contentTop - margin - SIGNOFF_CLEARANCE;
       const candidates = [
         { bodySize: 10.5, lineH: 13.5, headingH: 15, bulletIndent: 14 },
         { bodySize: 10, lineH: 13, headingH: 15, bulletIndent: 14 },
@@ -7242,8 +7250,9 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
           const result = [];
           body.split("\n").forEach((seg) => {
             if (seg.trim() === "") return;
-            const isBullet = seg.trim().startsWith("• ");
-            const cleanText = isBullet ? seg.trim().slice(2) : seg;
+            const trimmedSeg = seg.trim();
+            const isBullet = trimmedSeg.startsWith("•");
+            const cleanText = isBullet ? trimmedSeg.replace(/^•[\s\u00A0]*/, "") : seg;
             const effectiveWidth = isBullet ? maxWidth - c.bulletIndent : maxWidth;
             wrapTextLines(cleanText, font, c.bodySize, effectiveWidth).forEach((line, i) => result.push({ text: line, isBullet, isFirst: i === 0 }));
           });
@@ -7286,7 +7295,7 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
       // Sign-off block always sits at a fixed spot near the bottom of whichever page the
       // text ends on, rather than floating directly under wherever the text happens to end.
       // If the body text ran too close to that fixed spot, push the sign-off to a fresh page.
-      if (y < margin + 100) newPage();
+      if (y < margin + SIGNOFF_CLEARANCE) newPage();
       let sy = margin + 30;
       const rightColX = pageWidth - margin - 200;
       page.drawText("Director Name: _______________________________", { x: margin, y: sy, size: 9, font, color: rgb(0.2, 0.25, 0.25) });
@@ -7391,8 +7400,9 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
       const result = [];
       body.split("\n").forEach((seg) => {
         if (seg.trim() === "") return;
-        const isBullet = seg.trim().startsWith("• ");
-        const cleanText = isBullet ? seg.trim().slice(2) : seg;
+        const trimmedSeg = seg.trim();
+        const isBullet = trimmedSeg.startsWith("•");
+        const cleanText = isBullet ? trimmedSeg.replace(/^•[\s\u00A0]*/, "") : seg;
         const effectiveWidth = isBullet ? forWidth - BULLET_INDENT : forWidth;
         wrapTextLines(cleanText, font, size, effectiveWidth).forEach((line, i) => {
           result.push({ text: line, isBullet, isFirst: i === 0 });
@@ -10290,8 +10300,9 @@ async function downloadMonthlyReportPdf({ client, monthYear, sections, highlight
     let yy = startY;
     text.split("\n").forEach((seg) => {
       if (seg.trim() === "") return;
-      const isBullet = seg.trim().startsWith("• ");
-      const clean = isBullet ? seg.trim().slice(2) : seg;
+      const trimmedSeg = seg.trim();
+      const isBullet = trimmedSeg.startsWith("•");
+      const clean = isBullet ? trimmedSeg.replace(/^•[\s\u00A0]*/, "") : seg;
       const effWidth = isBullet ? width - 12 : width;
       wrapTextLines(clean, font, size, effWidth).forEach((line, i) => {
         if (isBullet && i === 0) { pg.drawText("•", { x, y: yy, size, font, color: ink }); pg.drawText(line, { x: x + 12, y: yy, size, font, color: ink }); }
@@ -10312,8 +10323,9 @@ async function downloadMonthlyReportPdf({ client, monthYear, sections, highlight
       let lines = 0;
       (text || "").split("\n").forEach((seg) => {
         if (seg.trim() === "") return;
-        const isBullet = seg.trim().startsWith("• ");
-        const clean = isBullet ? seg.trim().slice(2) : seg;
+        const trimmedSeg = seg.trim();
+        const isBullet = trimmedSeg.startsWith("•");
+        const clean = isBullet ? trimmedSeg.replace(/^•[\s\u00A0]*/, "") : seg;
         lines += wrapTextLines(clean, font, 9.5, boxW - 24 - (isBullet ? 12 : 0)).length;
       });
       return 34 + lines * 13.5;

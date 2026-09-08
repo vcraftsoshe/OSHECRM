@@ -6417,7 +6417,14 @@ function sanitizeForPdf(text) {
   if (text === null || text === undefined) return text;
   const str = String(text);
   const deMacroned = str.replace(/[āēīōūĀĒĪŌŪ]/g, (c) => PDF_MACRON_MAP[c] || c);
-  return deMacroned.replace(/[^\x09\x0A\x0D\x20-\x7E\xA0-\xFF]/g, "");
+  // The bullet character (•, U+2022) sits outside the ASCII/Latin-1 range this filter
+  // otherwise keeps, so the blanket strip below was silently deleting every bullet in
+  // every policy and procedure before the text ever reached the bullet-detection code
+  // that looks for a leading "•" — no amount of fixing that detection code could ever
+  // have worked while this was removing the character first. It's explicitly kept here
+  // since WinAnsiEncoding (what pdf-lib's standard fonts use) renders it correctly, as
+  // proven by the several places in this file that already draw "•" directly as text.
+  return deMacroned.replace(/[^\x09\x0A\x0D\x20-\x7E\xA0-\xFF•]/g, "");
 }
 function sanitizeArrayForPdf(arr) { return (arr || []).map((v) => sanitizeForPdf(v)); }
 

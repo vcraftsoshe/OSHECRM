@@ -5387,6 +5387,20 @@ function upsertOhsmsReminder(reminders, dueDate) {
   return idx >= 0 ? reminders.map((r, i) => (i === idx ? reminder : r)) : [...(reminders || []), reminder];
 }
 
+// A contract renewal check-in — fires 30 days before the client's contract renewal date
+// (the "11 months in" mark on a standard 12-month cycle), whether they pay monthly or
+// annually, since the contract itself still renews once a year either way. Recurring
+// yearly so it comes back around every renewal cycle, not just the first one. Assigned to
+// Vanessa since renewals are a relationship/sales conversation, not an H&S one.
+function renewalCheckinReminder(renewalDate) {
+  return { id: "contract-renewal-checkin", text: "Contract renewal due in 1 month — confirm renewal, capture any updated info, and get T&Cs re-signed", date: addDays(renewalDate, -30), recurring: "yearly", done: false, assignee: "Vanessa", estHours: 0.5 };
+}
+function upsertRenewalCheckinReminder(reminders, renewalDate) {
+  const reminder = renewalCheckinReminder(renewalDate);
+  const idx = (reminders || []).findIndex((r) => r.id === "contract-renewal-checkin");
+  return idx >= 0 ? reminders.map((r, i) => (i === idx ? reminder : r)) : [...(reminders || []), reminder];
+}
+
 function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOnboardingsForClient, workflows, pushNotification, goToWorkflows, tabRequest, currentUser }) {
   const client = clients.find((c) => c.id === selectedId) || clients[0];
   const [tab, setTab] = useState("overview");
@@ -5424,7 +5438,8 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
       const q = clientSearch.trim().toLowerCase();
       if (!q) return true;
       return c.name.toLowerCase().includes(q) || (c.legalName || "").toLowerCase().includes(q);
-    });
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
 
   const archiveClient = (id) => updateDoc(doc(db, "clients", id), { archived: true });
   const unarchiveClient = (id) => updateDoc(doc(db, "clients", id), { archived: false });
@@ -5484,11 +5499,12 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
     if (!newClientForm.name.trim()) return;
     const id = "c" + Date.now();
     const lastIssued = newClientForm.ohsmsLastIssued || null;
+    const contractRenewal = newClientForm.contractRenewal || addDays(today(), 365);
     await setDoc(doc(db, "clients", id), {
       name: newClientForm.name, legalName: newClientForm.legalName || newClientForm.name, logo: null,
       contract: {
         start: newClientForm.contractStart || today(),
-        renewal: newClientForm.contractRenewal || addDays(today(), 365),
+        renewal: contractRenewal,
         plan: newClientForm.plan || "Plan to confirm",
       },
       billing: {
@@ -5496,7 +5512,7 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
         terms: newClientForm.billingTerms || "TBC", status: newClientForm.billingStatus,
       },
       billingType: newClientForm.billingType, billingSetupDone: true, profile: newClientForm.profile,
-      contacts: [], notes: [], reminders: [], extras: [],
+      contacts: [], notes: [], reminders: upsertRenewalCheckinReminder([], contractRenewal), extras: [],
       hours: { included: Number(newClientForm.includedHours) || 0, log: [] }, users: { log: [] },
       ohsmsLastIssued: lastIssued, ohsmsDue: lastIssued ? addDays(lastIssued, 365) : null,
       intake: null,
@@ -5562,6 +5578,35 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
   // "Redo reminder" card's stated behavior. Uses a fixed id so re-issuing updates the same
   // reminder rather than piling up duplicates.
   const withOhsmsReminder = (c, dueDate) => ({ ...c, reminders: upsertOhsmsReminder(c.reminders, dueDate) });
+  // Queues the renewal check-in email the same way every other client-facing email in this
+  // app is sent — writing to the "mail" collection, which the sendQueuedEmail Cloud Function
+  // watches and actually sends through Resend. This is deliberately a button someone clicks
+  // (from the "Contract renewal due in 1 month" reminder), not something that fires on its
+  // own the moment the reminder's date arrives — sending a real email to a real client with
+  // no human in the loop at all is a different level of risk than just creating a reminder,
+  // especially the first time this ships against every existing client's renewal date.
+  // Points at the same signup.oshe.co.nz link scheme already used for new sign-ups; whether
+  // that page actually handles an EXISTING client re-signing (pre-filling their details,
+  // presenting updated T&Cs) rather than a brand new lead depends on SignupForm.jsx, which
+  // lives outside this file.
+  const sendRenewalEmail = async () => {
+    const to = client.billing?.email || client.contacts?.[0]?.email;
+    if (!to) { alert(`No email address on file for ${client.name}. Add one on the Overview tab first.`); return; }
+    const link = `https://signup.oshe.co.nz/${client.id}`;
+    try {
+      await setDoc(doc(collection(db, "mail")), {
+        to: [to],
+        message: {
+          subject: `${client.name} — your annual renewal with OSHE`,
+          html: `<p>Hi ${client.billing?.contact || "there"},</p><p>Your annual plan with OSHE is coming up for renewal on ${fmtDate(client.contract.renewal)}. We'd love to check in ahead of that — let us know if anything's changed (contact details, site information, number of users, etc.) and we'll get your updated Terms &amp; Conditions ready for you to sign.</p><p>You can update your details and sign your renewed T&amp;Cs here:</p><p><a href="${link}">${link}</a></p><p>If you have any questions, just reply to this email.</p><p>Thanks,<br>The OSHE Team</p>`,
+        },
+      });
+      updateClient((c) => ({ ...c, renewalEmailSentFor: c.contract.renewal, renewalEmailSentDate: today() }));
+    } catch (err) {
+      console.error("Couldn't queue renewal email:", err);
+      alert(`Couldn't send the renewal email: ${err.message || err}`);
+    }
+  };
   const addReminder = () => {
     if (!newReminder.text.trim() || !newReminder.date) return;
     updateClient((c) => ({ ...c, reminders: [...c.reminders, { id: Date.now(), ...newReminder, estHours: newReminder.estHours ? Number(newReminder.estHours) : 0, done: false }] }));
@@ -6014,6 +6059,20 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
                 <div><div className="text-xs font-semibold" style={{ color: T.slate }}>BILLING EMAIL</div><div style={{ color: T.ink }}>{client.billing.email}</div></div>
                 <div><div className="text-xs font-semibold" style={{ color: T.slate }}>TERMS</div><div style={{ color: T.ink }}>{client.billing.terms}</div></div>
                 <div><div className="text-xs font-semibold" style={{ color: T.slate }}>STATUS</div><Pill color={client.billing.status === "Overdue" ? T.coral : T.tealDark} bg={T.paperAlt}>{client.billing.status}</Pill></div>
+                <div className="col-span-2">
+                  <div className="text-xs font-semibold" style={{ color: T.slate }}>ANNUAL RENEWAL CHECK-IN</div>
+                  <div className="flex items-center gap-2 mt-1">
+                    {client.renewalEmailSentFor === client.contract.renewal ? (
+                      <Pill color={T.tealDark} bg={T.paperAlt}>Sent {fmtDate(client.renewalEmailSentDate)} for this renewal</Pill>
+                    ) : (
+                      <Pill color={daysUntil(client.contract.renewal) <= 30 ? T.amber : T.slateLight} bg={T.paperAlt}>Not sent yet for this renewal</Pill>
+                    )}
+                    <button onClick={sendRenewalEmail} className="text-xs font-semibold px-2.5 py-1.5 rounded-lg" style={{ background: T.paperAlt, color: T.tealDark }}>
+                      {client.renewalEmailSentFor === client.contract.renewal ? "Re-send renewal email" : "Send renewal email"}
+                    </button>
+                  </div>
+                  <div className="text-[11px] mt-1" style={{ color: T.slateLight }}>A "Contract renewal due in 1 month" task auto-fires for Vanessa 30 days before the renewal date above (see Tasks). This button sends the actual email once you're ready.</div>
+                </div>
                 <div>
                   <div className="text-xs font-semibold" style={{ color: T.slate }}>BILLING TYPE</div>
                   <select value={client.billingType || "FlatFee"} onChange={(e) => updateClient((c) => ({ ...c, billingType: e.target.value }))}
@@ -8998,7 +9057,7 @@ function OverviewView({ clients, tasks, onboardings, goToClient }) {
   );
 }
 
-function BillingOverview({ clients, resellers }) {
+function BillingOverview({ clients, resellers, tasks }) {
   const [showFlatFee, setShowFlatFee] = useState(false);
   const [expandedBilling, setExpandedBilling] = useState({});
   const toggleBillingExpand = (id) => setExpandedBilling((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -9007,6 +9066,42 @@ function BillingOverview({ clients, resellers }) {
     if (!c) return;
     updateDoc(doc(db, "clients", clientId), { hours: { ...c.hours, log: c.hours.log.filter((h) => h.id !== hourId) } });
   };
+  // Team Activity Log — everything a chosen person has logged into the CRM (notes they
+  // wrote, hours they logged, tasks/reminders they've marked done), pulled together across
+  // every client into one sorted list. Only surfaced here, on the Billing tab, since that's
+  // the one part of the app already restricted to Sophie/Vanessa (see canSeeBilling in the
+  // main App component) — Jo and Judith never see this tab at all, so this log is
+  // automatically private to the same two people without needing any separate access check.
+  const [logPerson, setLogPerson] = useState(TEAM[0]);
+  const [logRange, setLogRange] = useState("30");
+  const activityEntries = useMemo(() => {
+    const cutoff = logRange === "all" ? null : addDays(today(), -Number(logRange));
+    const inRange = (d) => Boolean(d) && (!cutoff || d >= cutoff);
+    const entries = [];
+    clients.forEach((c) => {
+      (c.notes || []).forEach((n) => {
+        if (n.author === logPerson && inRange(n.date)) {
+          entries.push({ type: "Note", date: n.date, clientName: c.name, text: n.text });
+        }
+      });
+      (c.hours?.log || []).forEach((h) => {
+        if (h.member === logPerson && inRange(h.date)) {
+          entries.push({ type: "Hours", date: h.date, clientName: c.name, text: `${h.description || "—"} (${h.hours}h)` });
+        }
+      });
+      (c.reminders || []).forEach((r) => {
+        if (r.assignee === logPerson && r.done && inRange(r.date)) {
+          entries.push({ type: "Task done", date: r.date, clientName: c.name, text: r.text });
+        }
+      });
+    });
+    (tasks || []).forEach((t) => {
+      if (t.assignee === logPerson && t.done && inRange(t.completedDate)) {
+        entries.push({ type: "Task done", date: t.completedDate, clientName: t.clientName || null, text: t.title });
+      }
+    });
+    return entries.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  }, [clients, tasks, logPerson, logRange]);
   const [viewMonth, setViewMonth] = useState(currentMonth());
   // Just a manual "I've invoiced this one" checkbox for Vanessa to track as she works
   // through invoicing, kept separate from client.billing.status (which is the account's
@@ -9318,6 +9413,40 @@ function BillingOverview({ clients, resellers }) {
         ))}
         {resellerRows.length === 0 && <div className="text-xs px-4 py-3" style={{ color: T.slateLight }}>No resellers yet.</div>}
       </Card>
+
+      <div style={{ borderTop: `1px solid ${T.border}`, paddingTop: 20, marginTop: 8 }}>
+        <div className="text-sm font-bold mb-1" style={{ color: T.ink }}>Team Activity Log</div>
+        <div className="text-xs mb-3" style={{ color: T.slateLight }}>
+          Everything a chosen team member has put into the CRM — notes they wrote, hours they logged, and tasks or reminders they've marked done — across every client, newest first. Visible only here, since this whole tab is already Sophie/Vanessa only.
+        </div>
+        <div className="flex items-center gap-2 mb-3">
+          <select value={logPerson} onChange={(e) => setLogPerson(e.target.value)}
+            className="text-sm px-3 py-2 rounded-lg outline-none" style={{ background: T.card, border: `1px solid ${T.border}`, color: T.ink }}>
+            {TEAM.map((m) => <option key={m} value={m}>{m}</option>)}
+          </select>
+          <select value={logRange} onChange={(e) => setLogRange(e.target.value)}
+            className="text-sm px-3 py-2 rounded-lg outline-none" style={{ background: T.card, border: `1px solid ${T.border}`, color: T.ink }}>
+            <option value="7">Last 7 days</option>
+            <option value="30">Last 30 days</option>
+            <option value="90">Last 90 days</option>
+            <option value="all">All time</option>
+          </select>
+        </div>
+        <Card style={{ padding: 0 }}>
+          <div className="grid text-xs font-semibold uppercase tracking-wide px-4 py-3" style={{ gridTemplateColumns: "100px 1fr 2fr 100px", color: T.slate, borderBottom: `1px solid ${T.border}` }}>
+            <div>Date</div><div>Client</div><div>What</div><div>Type</div>
+          </div>
+          {activityEntries.map((e, i) => (
+            <div key={i} className="grid items-center px-4 py-2.5 text-sm" style={{ gridTemplateColumns: "100px 1fr 2fr 100px", borderBottom: `1px solid ${T.border}` }}>
+              <div style={{ color: T.slate }}>{fmtDate(e.date)}</div>
+              <div style={{ color: T.ink }} className="truncate">{e.clientName || "—"}</div>
+              <div style={{ color: T.ink }} className="truncate">{e.text}</div>
+              <div><Pill color={e.type === "Note" ? T.blue : e.type === "Hours" ? T.tealDark : "#8B6BA8"} bg={T.paperAlt}>{e.type}</Pill></div>
+            </div>
+          ))}
+          {activityEntries.length === 0 && <div className="text-xs px-4 py-3" style={{ color: T.slateLight }}>Nothing logged by {logPerson} in this window.</div>}
+        </Card>
+      </div>
 
     </div>
   );
@@ -11836,6 +11965,54 @@ export default function App() {
   };
   const dismissNotification = (id) => updateDoc(doc(db, "notifications", id), { dismissed: true });
 
+  // Notify Jo whenever a client's sign-up form has been completed (real or
+  // via "Simulate form completed") and nobody's been told yet — there was previously no
+  // notification of any kind when this happened, so a completed sign-up could sit unnoticed
+  // in the client list. Held off by formNotifyBackfillDone below until the one-time backfill
+  // has actually finished, otherwise this would fire retroactively for every one of the many
+  // existing clients who already completed their form months or years ago, all at once, the
+  // very first time this code reaches a browser.
+  const [formNotifyBackfillDone, setFormNotifyBackfillDone] = useState(false);
+  useEffect(() => {
+    if (!formNotifyBackfillDone) return;
+    clients.forEach((c) => {
+      if (c.intake?.submittedDate && !c.formCompletionNotified) {
+        ["Jo"].forEach((person) => pushNotification({
+          forPerson: person, clientId: c.id, clientName: c.name,
+          message: `${c.name} completed their sign-up form`,
+        }));
+        updateDoc(doc(db, "clients", c.id), { formCompletionNotified: true });
+      }
+    });
+  }, [clients, formNotifyBackfillDone]);
+  // One-time backfill: marks every client that ALREADY has a submitted intake, at the moment
+  // this code first ships, as already notified — otherwise the effect above would fire
+  // retroactively for every real client who's signed up historically. Gated behind a flag
+  // doc so the actual write only ever happens once; formNotifyBackfillDone is set true either
+  // way (flag already existed, or the writes just finished) so the notify effect above never
+  // runs ahead of this on the very first load.
+  useEffect(() => {
+    if (!clientsLoaded) return;
+    (async () => {
+      try {
+        const flagRef = doc(db, "meta", "formCompletionNotifyBackfill_v1");
+        const flagSnap = await getDoc(flagRef);
+        if (!flagSnap.exists()) {
+          await Promise.all(
+            clients
+              .filter((c) => c.intake?.submittedDate && !c.formCompletionNotified)
+              .map((c) => updateDoc(doc(db, "clients", c.id), { formCompletionNotified: true }))
+          );
+          await setDoc(flagRef, { appliedAt: today() });
+        }
+      } catch (err) {
+        console.error("Form completion notify backfill failed:", err);
+      } finally {
+        setFormNotifyBackfillDone(true);
+      }
+    })();
+  }, [clientsLoaded]);
+
   const convertLeadToClient = async (lead) => {
     const id = "c" + Date.now();
     // This button never actually asks the client anything — it's a manual shortcut to
@@ -11857,12 +12034,13 @@ export default function App() {
     const carriedReminders = (lead.notes || [])
       .filter((n) => n.type === "Reminder")
       .map((n) => ({ id: n.id, text: n.text, date: n.dueDate || today(), recurring: "none", done: false, assignee: n.assignee || TEAM[0] }));
+    const contractRenewal = addDays(today(), 365);
     const newClient = {
       name: lead.company, legalName: lead.company, logo: null,
-      contract: { start: today(), renewal: addDays(today(), 365), value: lead.value + " / yr", plan: "New client — plan to confirm" },
+      contract: { start: today(), renewal: contractRenewal, value: lead.value + " / yr", plan: "New client — plan to confirm" },
       billing: { contact: lead.contact, email: lead.formEmail, terms: "TBC", status: "Current" },
       billingType: "FlatFee", billingSetupDone: false, profile: "Standard Client",
-      notes: carriedNotes, reminders: carriedReminders, contacts: [], ohsmsLastIssued: null, ohsmsDue: addDays(today(), 90),
+      notes: carriedNotes, reminders: upsertRenewalCheckinReminder(carriedReminders, contractRenewal), contacts: [], ohsmsLastIssued: null, ohsmsDue: addDays(today(), 90),
       extras: [], hours: { included: 0, log: [] }, users: { log: [] }, intake,
     };
     await setDoc(doc(db, "clients", id), newClient);
@@ -11976,7 +12154,7 @@ export default function App() {
             </ErrorBoundary>
           )}
           {module === "hours" && <HoursView clients={clients} />}
-          {module === "billing" && canSeeBilling && <BillingOverview clients={clients} resellers={resellers} />}
+          {module === "billing" && canSeeBilling && <BillingOverview clients={clients} resellers={resellers} tasks={tasks} />}
           {module === "dashboards" && <DashboardsView clients={clients} tasks={tasks} touchpointBaselines={touchpointBaselines} updateTouchpointBaseline={updateTouchpointBaseline} />}
           {module === "workflows" && <WorkflowsView workflows={workflows} />}
           {module === "resellers" && <ResellersView resellers={resellers} selectedId={selectedReseller} setSelectedId={setSelectedReseller} />}

@@ -11312,18 +11312,19 @@ function MasterScheduleCalendar({ clients, tasks, onboardings, entries, addEntry
       {enterpriseClients.some((c) => (c.scheduleTargets || []).length > 0) && (
         <Card style={{ padding: 16 }}>
           <div className="text-sm font-semibold mb-1" style={{ color: T.ink }}>Must-dos this month</div>
-          <div className="text-[11px] mb-3" style={{ color: T.slateLight }}>Monthly targets set on each Enterprise client's own Scheduling tab, checked against work actually completed.</div>
+          <div className="text-[11px] mb-3" style={{ color: T.slateLight }}>Monthly targets set on each Enterprise client's own Scheduling tab. Counts what's booked on the calendar below, whether confirmed/billed yet or not, so this doesn't sit on 0/8 when 7 are already booked in.</div>
           <div className="grid grid-cols-3 gap-2">
             {enterpriseClients.flatMap((c) => {
               const visible = (c.scheduleTargets || []).filter((t) => t.repeat === "monthly" || t.monthYear === monthYear);
               return visible.map((t) => {
-                const done = (c.reminders || []).filter((r) => r.targetId === t.id && r.done && r.date.slice(0, 7) === monthYear).length;
-                const complete = done >= t.targetCount;
+                const booked = entries.filter((e) => e.targetId === t.id && e.clientId === c.id && e.date.slice(0, 7) === monthYear).length;
+                const complete = booked >= t.targetCount;
+                const color = complete ? T.tealDark : booked > 0 ? T.amber : T.coral;
                 return (
                   <button key={c.id + t.id} onClick={() => goToClient(c.id, "scheduling")} className="text-left">
-                    <div className="flex items-center justify-between text-xs px-3 py-2 rounded-lg" style={{ background: T.paperAlt }}>
+                    <div className="flex items-center justify-between text-xs px-3 py-2 rounded-lg" style={{ background: T.paperAlt, border: complete ? `1px solid ${T.tealDark}` : "1px solid transparent" }}>
                       <span style={{ color: T.ink }}>{c.name}: {t.title}</span>
-                      <span className="font-bold shrink-0 ml-2" style={{ color: complete ? T.tealDark : T.amber }}>{done}/{t.targetCount}</span>
+                      <span className="font-bold shrink-0 ml-2" style={{ color }}>{booked}/{t.targetCount}</span>
                     </div>
                   </button>
                 );
@@ -11429,7 +11430,7 @@ function MasterScheduleCalendar({ clients, tasks, onboardings, entries, addEntry
       <Card style={{ padding: 16 }}>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 6 }}>
           {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d) => (
-            <div key={d} className="text-[10px] font-semibold text-center" style={{ color: T.slateLight }}>{d}</div>
+            <div key={d} className="text-xs font-semibold text-center" style={{ color: T.slateLight }}>{d}</div>
           ))}
           {cells.map((date, i) => {
             const dayEntries = date ? entriesForDate(date) : [];
@@ -11438,13 +11439,13 @@ function MasterScheduleCalendar({ clients, tasks, onboardings, entries, addEntry
               <div key={i}
                 onDragOver={(e) => date && e.preventDefault()}
                 onDrop={(e) => { e.preventDefault(); if (date) handleDrop(date); }}
-                style={{ minHeight: 92, background: date ? T.paperAlt : "transparent", borderRadius: 8, padding: 4, cursor: date ? "pointer" : "default" }}
+                style={{ minHeight: 110, background: date ? T.paperAlt : "transparent", borderRadius: 8, padding: 5, cursor: date ? "pointer" : "default" }}
                 onClick={() => date && dayEntries.length === 0 && dayReadOnly.length === 0 && openAddForm(date)}>
                 {date && (
                   <div className="flex items-center justify-between">
-                    <span className="text-[10px]" style={{ color: T.slateLight }}>{Number(date.slice(8))}</span>
+                    <span className="text-xs font-semibold" style={{ color: T.slateLight }}>{Number(date.slice(8))}</span>
                     <button onClick={(e) => { e.stopPropagation(); openAddForm(date); }} title="Add scheduled work on this day">
-                      <Plus size={11} color={T.slateLight} />
+                      <Plus size={13} color={T.slateLight} />
                     </button>
                   </div>
                 )}
@@ -11454,7 +11455,7 @@ function MasterScheduleCalendar({ clients, tasks, onboardings, entries, addEntry
                     return (
                       <div key={e.id} draggable onDragStart={() => setDraggingId(e.id)} onDragEnd={() => setDraggingId(null)}
                         onClick={(ev) => { ev.stopPropagation(); openEditForm(e); }}
-                        className="text-[9px] rounded px-1 py-0.5 truncate cursor-move" title={`${e.title || e.workType}${e.clientName ? " — " + e.clientName : ""} · ${e.assignee} · ${e.hours}h`}
+                        className="text-[12px] leading-snug rounded px-1.5 py-1 truncate cursor-move font-medium" title={`${e.title || e.workType}${e.clientName ? " — " + e.clientName : ""} · ${e.assignee} · ${e.hours}h`}
                         style={{ background: chipColor, color: "#fff", opacity: e.confirmed ? 1 : 0.75, border: e.confirmed ? "1px solid rgba(255,255,255,0.6)" : "none" }}>
                         {e.confirmed ? "✓ " : ""}{e.title || e.workType}{e.clientName ? ` · ${e.clientName}` : ""}
                       </div>
@@ -11462,7 +11463,7 @@ function MasterScheduleCalendar({ clients, tasks, onboardings, entries, addEntry
                   })}
                   {dayReadOnly.map((i) => (
                     <button key={i.id} onClick={(ev) => { ev.stopPropagation(); i.clientId && goToClient(i.clientId, i.type === "workflow" ? "onboarding" : "reminders"); }}
-                      className="text-[9px] rounded px-1 py-0.5 truncate text-left" title={`${i.title}${i.clientName ? " — " + i.clientName : ""} · ${i.assignee}`}
+                      className="text-[12px] leading-snug rounded px-1.5 py-1 truncate text-left" title={`${i.title}${i.clientName ? " — " + i.clientName : ""} · ${i.assignee}`}
                       style={{ background: "transparent", border: `1px dashed ${T.slateLight}`, color: T.slate }}>
                       {i.type === "task" ? "Task: " : "WF: "}{i.title}
                     </button>

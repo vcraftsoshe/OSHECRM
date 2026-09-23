@@ -8455,8 +8455,10 @@ function SalesView({ leads, convertLeadToClient }) {
 }
 
 /* ---------- Resellers (consultants who resell the app, billed per user) ---------- */
-function ResellersView({ resellers, selectedId, setSelectedId }) {
+function ResellersView({ resellers, selectedId, setSelectedId, externalConsultants, addExternalConsultant, removeExternalConsultant }) {
   const reseller = resellers.find((r) => r.id === selectedId) || resellers[0];
+  const [showConsultants, setShowConsultants] = useState(false);
+  const [newConsultant, setNewConsultant] = useState({ name: "", email: "", phone: "" });
   const [showAddReseller, setShowAddReseller] = useState(false);
   const [newResellerName, setNewResellerName] = useState("");
   const [newClient, setNewClient] = useState({ name: "", users: "" });
@@ -8591,6 +8593,39 @@ function ResellersView({ resellers, selectedId, setSelectedId }) {
       </div>
 
       <div className="flex-1 flex flex-col gap-4 min-w-0 overflow-y-auto">
+        <Card style={{ padding: "10px 16px" }}>
+          <button onClick={() => setShowConsultants((v) => !v)} className="w-full flex items-center justify-between text-left">
+            <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: T.slate }}>External consultants ({externalConsultants.length})</span>
+            <ChevronDown size={14} color={T.slateLight} style={{ transform: showConsultants ? "rotate(180deg)" : "none" }} />
+          </button>
+          {showConsultants && (
+            <div className="flex flex-col gap-2 mt-3">
+              <div className="text-[11px] mb-1" style={{ color: T.slateLight }}>
+                People outside the core team who do reviews or other work for clients — once added here, they show up in the assignee dropdown on the Schedule tab's master calendar alongside Vanessa, Sophie, Jo and Judith.
+              </div>
+              {externalConsultants.map((ec) => (
+                <div key={ec.id} className="flex items-center justify-between text-sm py-1.5" style={{ borderBottom: `1px solid ${T.border}` }}>
+                  <div>
+                    <span className="font-medium" style={{ color: T.ink }}>{ec.name}</span>
+                    <div className="text-xs" style={{ color: T.slateLight }}>{[ec.email, ec.phone].filter(Boolean).join(" · ")}</div>
+                  </div>
+                  <ConfirmButton onConfirm={() => removeExternalConsultant(ec.id)} title="Remove consultant" iconSize={13} />
+                </div>
+              ))}
+              {externalConsultants.length === 0 && <div className="text-xs" style={{ color: T.slateLight }}>No external consultants added yet.</div>}
+              <div className="flex items-center gap-2 flex-wrap mt-1">
+                <input placeholder="Name" value={newConsultant.name} onChange={(e) => setNewConsultant({ ...newConsultant, name: e.target.value })}
+                  className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink, width: 140 }} />
+                <input placeholder="Email" value={newConsultant.email} onChange={(e) => setNewConsultant({ ...newConsultant, email: e.target.value })}
+                  className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink, width: 180 }} />
+                <input placeholder="Phone" value={newConsultant.phone} onChange={(e) => setNewConsultant({ ...newConsultant, phone: e.target.value })}
+                  className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink, width: 130 }} />
+                <button onClick={() => { addExternalConsultant(newConsultant.name, newConsultant.email, newConsultant.phone); setNewConsultant({ name: "", email: "", phone: "" }); }}
+                  className="text-xs font-semibold px-3 py-1.5 rounded-lg shrink-0" style={{ background: T.tealDark, color: "#fff" }}>Add consultant</button>
+              </div>
+            </div>
+          )}
+        </Card>
         <Card style={{ padding: "20px 24px" }}>
           <div className="flex items-center justify-between">
             <div className="text-lg font-bold" style={{ color: T.ink }}>{reseller.name}</div>
@@ -11072,7 +11107,415 @@ function gatherWorkloadItems(person, tasks, onboardings, clients, scheduleBlocks
   return items.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
 }
 
-function ScheduleView({ tasks, clients, onboardings, scheduleBlocks, addScheduleBlock, removeScheduleBlock, goToClient }) {
+// ---------- Master Schedule Calendar (team-wide, overlays every client at once) ----------
+const WORK_TYPE_PRESETS = [
+  { label: "Pre-qual", color: "#5C8AA6" },
+  { label: "Ad-hoc review", color: "#D99A3D" },
+  { label: "Site review", color: "#13DCCC" },
+  { label: "Other", color: "#8B6BA8" },
+];
+const ASSIGNEE_COLOR_PALETTE = ["#13DCCC", "#5C8AA6", "#D99A3D", "#8B6BA8", "#C25B4E", "#0AADA0", "#5C7274", "#2E4548"];
+
+// Builds a real .ics file from this month's entries — genuine Outlook/Google Calendar
+// compatible output today, without needing the OAuth/Graph API integration a live two-way
+// sync would require. Each entry becomes an all-day VEVENT on its scheduled date.
+function buildIcsFile(entries) {
+  const escapeIcs = (s) => String(s || "").replace(/[,;\\]/g, (c) => "\\" + c).replace(/\n/g, "\\n");
+  const dtStamp = new Date().toISOString().replace(/[-:]/g, "").split(".")[0] + "Z";
+  const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//OSHE//Master Schedule//EN"];
+  entries.forEach((e) => {
+    const dateStr = e.date.replaceAll("-", "");
+    lines.push(
+      "BEGIN:VEVENT",
+      `UID:${e.id}@oshe.tech`,
+      `DTSTAMP:${dtStamp}`,
+      `DTSTART;VALUE=DATE:${dateStr}`,
+      `DTEND;VALUE=DATE:${dateStr}`,
+      `SUMMARY:${escapeIcs((e.title || e.workType || "Scheduled work") + (e.clientName ? ` — ${e.clientName}` : ""))}`,
+      `DESCRIPTION:${escapeIcs(`Assigned to ${e.assignee || "Unassigned"}. ${e.hours || 0}h${e.clientName ? ` for ${e.clientName}` : ""}.`)}`,
+      "END:VEVENT"
+    );
+  });
+  lines.push("END:VCALENDAR");
+  return lines.join("\r\n");
+}
+
+function MasterScheduleCalendar({ clients, tasks, onboardings, entries, addEntry, updateEntry, removeEntry, confirmEntry, externalConsultants, goToClient }) {
+  const [monthYear, setMonthYear] = useState(currentMonth());
+  const [search, setSearch] = useState("");
+  const [clientFilterId, setClientFilterId] = useState("");
+  const [colorBy, setColorBy] = useState("assignee");
+  const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [draggingId, setDraggingId] = useState(null);
+  const emptyDraft = { title: "", clientId: "", assignee: TEAM[0], date: today(), hours: "1", billable: true, billedHours: "", workType: WORK_TYPE_PRESETS[0].label, workTypeColor: WORK_TYPE_PRESETS[0].color, workTypeCustom: false, targetId: "" };
+  const [draft, setDraft] = useState(emptyDraft);
+
+  const assignableNames = [...TEAM, ...externalConsultants.map((c) => c.name)];
+  const colorForAssignee = (name) => {
+    const idx = assignableNames.indexOf(name);
+    return idx >= 0 ? ASSIGNEE_COLOR_PALETTE[idx % ASSIGNEE_COLOR_PALETTE.length] : T.slateLight;
+  };
+
+  const activeClients = clients.filter((c) => !c.archived).sort((a, b) => a.name.localeCompare(b.name));
+  const enterpriseClients = activeClients.filter((c) => c.profile === "Enterprise Client");
+
+  const [gy, gm] = monthYear.split("-").map(Number);
+  const daysInMonth = new Date(gy, gm, 0).getDate();
+  const startWeekday = (new Date(gy, gm - 1, 1).getDay() + 6) % 7;
+  const monthStart = `${monthYear}-01`;
+  const monthEnd = `${addMonthsToMonthYear(monthYear, 1)}-01`;
+
+  const q = search.trim().toLowerCase();
+  const matchesSearch = (title, clientName, assignee) => {
+    if (!q) return true;
+    return (title || "").toLowerCase().includes(q) || (clientName || "").toLowerCase().includes(q) || (assignee || "").toLowerCase().includes(q);
+  };
+
+  const monthEntries = entries.filter((e) => e.date >= monthStart && e.date < monthEnd)
+    .filter((e) => !clientFilterId || e.clientId === clientFilterId)
+    .filter((e) => matchesSearch(e.title, e.clientName, e.assignee));
+
+  // Read-only markers: Tasks and Workflow steps due this month, for anyone on the team, not
+  // just Jo/Judith — this calendar is meant to show everyone's committed work at a glance.
+  const readOnlyItems = useMemo(() => {
+    const out = [];
+    tasks.filter((t) => !t.done && t.dueDate && t.dueDate >= monthStart && t.dueDate < monthEnd).forEach((t) => {
+      out.push({ id: "task-" + t.id, type: "task", title: t.title, date: t.dueDate, assignee: t.assignee, clientId: t.clientId, clientName: t.clientName });
+    });
+    clients.forEach((c) => {
+      (onboardings[c.id] || []).filter((i) => !i.completedDate).forEach((inst) => {
+        const currentIdx = inst.steps.findIndex((s) => !s.done);
+        if (currentIdx === -1) return;
+        const step = inst.steps[currentIdx];
+        if (step.dueDate && step.dueDate >= monthStart && step.dueDate < monthEnd) {
+          out.push({ id: "wf-" + inst.id + "-" + step.id, type: "workflow", title: step.title, date: step.dueDate, assignee: step.owner, clientId: c.id, clientName: c.name });
+        }
+      });
+    });
+    return out
+      .filter((i) => !clientFilterId || i.clientId === clientFilterId)
+      .filter((i) => matchesSearch(i.title, i.clientName, i.assignee));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tasks, onboardings, clients, monthYear, clientFilterId, q]);
+
+  const cells = [];
+  for (let i = 0; i < startWeekday; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(`${monthYear}-${String(d).padStart(2, "0")}`);
+
+  const entriesForDate = (date) => monthEntries.filter((e) => e.date === date);
+  const readOnlyForDate = (date) => readOnlyItems.filter((i) => i.date === date);
+
+  const openAddForm = (date) => {
+    setEditingId(null);
+    setDraft({ ...emptyDraft, date: date || today(), billedHours: "" });
+    setShowForm(true);
+  };
+  const openEditForm = (entry) => {
+    setEditingId(entry.id);
+    setDraft({
+      title: entry.title || "", clientId: entry.clientId || "", assignee: entry.assignee || TEAM[0], date: entry.date,
+      hours: String(entry.hours ?? "1"), billable: entry.billable !== false, billedHours: entry.billedHours != null ? String(entry.billedHours) : "",
+      workType: entry.workType || WORK_TYPE_PRESETS[0].label, workTypeColor: entry.workTypeColor || WORK_TYPE_PRESETS[0].color,
+      workTypeCustom: !WORK_TYPE_PRESETS.some((p) => p.label === entry.workType), targetId: entry.targetId || "",
+    });
+    setShowForm(true);
+  };
+
+  const saveDraft = () => {
+    if (!draft.date || !draft.hours) return;
+    const client = clients.find((c) => c.id === draft.clientId);
+    const payload = {
+      title: draft.title.trim(), clientId: draft.clientId || null, clientName: client ? client.name : null,
+      assignee: draft.assignee, date: draft.date, hours: Number(draft.hours) || 0,
+      billable: draft.billable, billedHours: draft.billedHours !== "" ? Number(draft.billedHours) : Number(draft.hours) || 0,
+      workType: draft.workType, workTypeColor: draft.workTypeColor, targetId: draft.targetId || null,
+    };
+    if (editingId) updateEntry(editingId, payload);
+    else addEntry({ ...payload, confirmed: false, confirmedHoursLogId: null });
+    setShowForm(false);
+  };
+
+  const handleDrop = (date) => {
+    if (draggingId) {
+      updateEntry(draggingId, { date });
+      setDraggingId(null);
+    }
+  };
+
+  const exportIcs = () => {
+    const blob = new Blob([buildIcsFile(monthEntries)], { type: "text/calendar" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `OSHE-schedule-${monthYear}.ics`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const targetClient = clients.find((c) => c.id === draft.clientId);
+  const targetOptionsForClient = targetClient ? (targetClient.scheduleTargets || []).filter((t) => t.repeat === "monthly" || t.monthYear === draft.date.slice(0, 7)) : [];
+
+  return (
+    <div className="flex flex-col gap-4">
+      <Card style={{ padding: "12px 16px" }}>
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex items-center gap-2">
+            <button onClick={() => setMonthYear(addMonthsToMonthYear(monthYear, -1))}><ChevronLeft size={16} color={T.slate} /></button>
+            <span className="text-sm font-bold" style={{ color: T.ink }}>{monthLabel(monthYear)} {monthYear.slice(0, 4)}</span>
+            <button onClick={() => setMonthYear(addMonthsToMonthYear(monthYear, 1))}><ChevronRight size={16} color={T.slate} /></button>
+            {monthYear !== currentMonth() && <button onClick={() => setMonthYear(currentMonth())} className="text-xs font-semibold" style={{ color: T.tealDark }}>Today</button>}
+          </div>
+          <div className="flex items-center gap-1.5">
+            {[0, 1, 2].map((n) => {
+              const m = addMonthsToMonthYear(currentMonth(), n);
+              return (
+                <button key={m} onClick={() => setMonthYear(m)} className="text-xs font-semibold px-2.5 py-1 rounded-lg"
+                  style={{ background: monthYear === m ? T.tealDark : T.paperAlt, color: monthYear === m ? "#fff" : T.slate }}>
+                  {monthLabel(m)}
+                </button>
+              );
+            })}
+          </div>
+          <div className="flex items-center gap-2 flex-1" style={{ minWidth: 160 }}>
+            <Search size={14} color={T.slateLight} />
+            <input placeholder="Search scheduled work…" value={search} onChange={(e) => setSearch(e.target.value)}
+              className="flex-1 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+          </div>
+          <select value={clientFilterId} onChange={(e) => setClientFilterId(e.target.value)}
+            className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
+            <option value="">All clients</option>
+            {activeClients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+          <div className="flex rounded-lg p-1" style={{ background: T.paperAlt }}>
+            <button onClick={() => setColorBy("assignee")} className="text-xs font-semibold px-2.5 py-1 rounded-md" style={{ background: colorBy === "assignee" ? T.card : "transparent", color: colorBy === "assignee" ? T.tealDark : T.slate }}>By person</button>
+            <button onClick={() => setColorBy("workType")} className="text-xs font-semibold px-2.5 py-1 rounded-md" style={{ background: colorBy === "workType" ? T.card : "transparent", color: colorBy === "workType" ? T.tealDark : T.slate }}>By work type</button>
+          </div>
+          <button onClick={exportIcs} className="text-xs font-semibold px-2.5 py-1.5 rounded-lg" style={{ background: T.paperAlt, color: T.tealDark }} title="Download this month's schedule as a .ics file you can import into Outlook">
+            Export to Outlook
+          </button>
+          <button onClick={() => openAddForm(today())} className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg" style={{ background: T.charcoal, color: T.teal }}>
+            <Plus size={13} /> Add
+          </button>
+        </div>
+        <div className="flex items-center gap-3 mt-2 flex-wrap">
+          <span className="text-[11px] font-semibold" style={{ color: T.slateLight }}>{colorBy === "assignee" ? "People:" : "Work types:"}</span>
+          {(colorBy === "assignee" ? assignableNames : WORK_TYPE_PRESETS.map((p) => p.label)).map((name) => (
+            <div key={name} className="flex items-center gap-1">
+              <span style={{ width: 9, height: 9, borderRadius: 3, background: colorBy === "assignee" ? colorForAssignee(name) : (WORK_TYPE_PRESETS.find((p) => p.label === name)?.color || T.slateLight) }} />
+              <span className="text-[11px]" style={{ color: T.slate }}>{name}</span>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      {enterpriseClients.some((c) => (c.scheduleTargets || []).length > 0) && (
+        <Card style={{ padding: 16 }}>
+          <div className="text-sm font-semibold mb-1" style={{ color: T.ink }}>Must-dos this month</div>
+          <div className="text-[11px] mb-3" style={{ color: T.slateLight }}>Monthly targets set on each Enterprise client's own Scheduling tab, checked against work actually completed.</div>
+          <div className="grid grid-cols-3 gap-2">
+            {enterpriseClients.flatMap((c) => {
+              const visible = (c.scheduleTargets || []).filter((t) => t.repeat === "monthly" || t.monthYear === monthYear);
+              return visible.map((t) => {
+                const done = (c.reminders || []).filter((r) => r.targetId === t.id && r.done && r.date.slice(0, 7) === monthYear).length;
+                const complete = done >= t.targetCount;
+                return (
+                  <button key={c.id + t.id} onClick={() => goToClient(c.id, "scheduling")} className="text-left">
+                    <div className="flex items-center justify-between text-xs px-3 py-2 rounded-lg" style={{ background: T.paperAlt }}>
+                      <span style={{ color: T.ink }}>{c.name}: {t.title}</span>
+                      <span className="font-bold shrink-0 ml-2" style={{ color: complete ? T.tealDark : T.amber }}>{done}/{t.targetCount}</span>
+                    </div>
+                  </button>
+                );
+              });
+            })}
+          </div>
+        </Card>
+      )}
+
+      {showForm && (
+        <Card style={{ padding: 16 }}>
+          <div className="text-sm font-semibold mb-3" style={{ color: T.ink }}>{editingId ? "Edit scheduled work" : "Add scheduled work"}</div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: T.slate }}>Client</div>
+              <select value={draft.clientId} onChange={(e) => setDraft({ ...draft, clientId: e.target.value, targetId: "" })}
+                className="w-full text-sm px-2.5 py-2 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
+                <option value="">— Internal / Other —</option>
+                {activeClients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: T.slate }}>Who</div>
+              <select value={draft.assignee} onChange={(e) => setDraft({ ...draft, assignee: e.target.value })}
+                className="w-full text-sm px-2.5 py-2 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
+                <optgroup label="Team">
+                  {TEAM.map((m) => <option key={m} value={m}>{m}</option>)}
+                </optgroup>
+                {externalConsultants.length > 0 && (
+                  <optgroup label="External consultants">
+                    {externalConsultants.map((ec) => <option key={ec.id} value={ec.name}>{ec.name}</option>)}
+                  </optgroup>
+                )}
+              </select>
+            </div>
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: T.slate }}>What (optional, defaults to work type)</div>
+              <input value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} placeholder="e.g. Q3 site review"
+                className="w-full text-sm px-2.5 py-2 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+            </div>
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: T.slate }}>Date</div>
+              <input type="date" value={draft.date} onChange={(e) => setDraft({ ...draft, date: e.target.value })}
+                className="w-full text-sm px-2.5 py-2 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+            </div>
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: T.slate }}>Hours blocked out</div>
+              <input type="number" min="0" step="0.5" value={draft.hours} onChange={(e) => setDraft({ ...draft, hours: e.target.value })}
+                className="w-full text-sm px-2.5 py-2 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+            </div>
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: T.slate }}>Work type</div>
+              <div className="flex items-center gap-1.5">
+                <select value={draft.workTypeCustom ? "__custom__" : draft.workType}
+                  onChange={(e) => {
+                    if (e.target.value === "__custom__") setDraft({ ...draft, workTypeCustom: true, workType: "" });
+                    else { const p = WORK_TYPE_PRESETS.find((x) => x.label === e.target.value); setDraft({ ...draft, workTypeCustom: false, workType: e.target.value, workTypeColor: p ? p.color : draft.workTypeColor }); }
+                  }}
+                  className="flex-1 text-sm px-2.5 py-2 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
+                  {WORK_TYPE_PRESETS.map((p) => <option key={p.label} value={p.label}>{p.label}</option>)}
+                  <option value="__custom__">Custom…</option>
+                </select>
+                {draft.workTypeCustom && (
+                  <input value={draft.workType} onChange={(e) => setDraft({ ...draft, workType: e.target.value })} placeholder="Type"
+                    className="w-24 text-sm px-2 py-2 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+                )}
+                <input type="color" value={draft.workTypeColor} onChange={(e) => setDraft({ ...draft, workTypeColor: e.target.value })}
+                  className="w-9 h-9 rounded-lg outline-none cursor-pointer" style={{ border: `1px solid ${T.border}`, padding: 2 }} />
+              </div>
+            </div>
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: T.slate }}>Billable</div>
+              <div className="flex items-center gap-3">
+                <label className="flex items-center gap-1.5 text-sm" style={{ color: T.ink }}>
+                  <input type="checkbox" checked={draft.billable} onChange={(e) => setDraft({ ...draft, billable: e.target.checked })} /> Billable
+                </label>
+                {draft.billable && (
+                  <input type="number" min="0" step="0.5" placeholder={`hrs (default ${draft.hours || 0})`} value={draft.billedHours}
+                    onChange={(e) => setDraft({ ...draft, billedHours: e.target.value })}
+                    className="w-32 text-sm px-2.5 py-2 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}
+                    title="Leave blank to bill the full hours above, or enter a lower number if you're blocking out more time than you'll actually bill" />
+                )}
+              </div>
+            </div>
+            {targetOptionsForClient.length > 0 && (
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: T.slate }}>Counts toward target</div>
+                <select value={draft.targetId} onChange={(e) => setDraft({ ...draft, targetId: e.target.value })}
+                  className="w-full text-sm px-2.5 py-2 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
+                  <option value="">Not linked to a target</option>
+                  {targetOptionsForClient.map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}
+                </select>
+              </div>
+            )}
+          </div>
+          <div className="flex justify-end gap-2 mt-4">
+            <button onClick={() => setShowForm(false)} className="text-xs font-semibold px-3 py-1.5 rounded-lg" style={{ background: T.paperAlt, color: T.slate }}>Cancel</button>
+            <button onClick={saveDraft} className="text-xs font-semibold px-3 py-1.5 rounded-lg" style={{ background: T.tealDark, color: "#fff" }}>{editingId ? "Save changes" : "Add to calendar"}</button>
+          </div>
+        </Card>
+      )}
+
+      <Card style={{ padding: 16 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 6 }}>
+          {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d) => (
+            <div key={d} className="text-[10px] font-semibold text-center" style={{ color: T.slateLight }}>{d}</div>
+          ))}
+          {cells.map((date, i) => {
+            const dayEntries = date ? entriesForDate(date) : [];
+            const dayReadOnly = date ? readOnlyForDate(date) : [];
+            return (
+              <div key={i}
+                onDragOver={(e) => date && e.preventDefault()}
+                onDrop={(e) => { e.preventDefault(); if (date) handleDrop(date); }}
+                style={{ minHeight: 92, background: date ? T.paperAlt : "transparent", borderRadius: 8, padding: 4, cursor: date ? "pointer" : "default" }}
+                onClick={() => date && dayEntries.length === 0 && dayReadOnly.length === 0 && openAddForm(date)}>
+                {date && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px]" style={{ color: T.slateLight }}>{Number(date.slice(8))}</span>
+                    <button onClick={(e) => { e.stopPropagation(); openAddForm(date); }} title="Add scheduled work on this day">
+                      <Plus size={11} color={T.slateLight} />
+                    </button>
+                  </div>
+                )}
+                <div className="flex flex-col gap-1 mt-1">
+                  {dayEntries.map((e) => {
+                    const chipColor = colorBy === "assignee" ? colorForAssignee(e.assignee) : (e.workTypeColor || T.slateLight);
+                    return (
+                      <div key={e.id} draggable onDragStart={() => setDraggingId(e.id)} onDragEnd={() => setDraggingId(null)}
+                        onClick={(ev) => { ev.stopPropagation(); openEditForm(e); }}
+                        className="text-[9px] rounded px-1 py-0.5 truncate cursor-move" title={`${e.title || e.workType}${e.clientName ? " — " + e.clientName : ""} · ${e.assignee} · ${e.hours}h`}
+                        style={{ background: chipColor, color: "#fff", opacity: e.confirmed ? 1 : 0.75, border: e.confirmed ? "1px solid rgba(255,255,255,0.6)" : "none" }}>
+                        {e.confirmed ? "✓ " : ""}{e.title || e.workType}{e.clientName ? ` · ${e.clientName}` : ""}
+                      </div>
+                    );
+                  })}
+                  {dayReadOnly.map((i) => (
+                    <button key={i.id} onClick={(ev) => { ev.stopPropagation(); i.clientId && goToClient(i.clientId, i.type === "workflow" ? "onboarding" : "reminders"); }}
+                      className="text-[9px] rounded px-1 py-0.5 truncate text-left" title={`${i.title}${i.clientName ? " — " + i.clientName : ""} · ${i.assignee}`}
+                      style={{ background: "transparent", border: `1px dashed ${T.slateLight}`, color: T.slate }}>
+                      {i.type === "task" ? "Task: " : "WF: "}{i.title}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </Card>
+
+      {clientFilterId && (
+        <div className="text-xs" style={{ color: T.slateLight }}>
+          Showing only {activeClients.find((c) => c.id === clientFilterId)?.name || "this client"}.{" "}
+          <button onClick={() => setClientFilterId("")} className="font-semibold" style={{ color: T.tealDark }}>Clear filter</button>
+        </div>
+      )}
+
+      <div className="flex flex-col gap-2">
+        <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: T.slate }}>This month's scheduled work — confirm to bill</div>
+        {monthEntries.length === 0 && <div className="text-xs" style={{ color: T.slateLight }}>Nothing scheduled for {monthLabel(monthYear)} yet — click a day above, or "Add."</div>}
+        {monthEntries.map((e) => (
+          <Card key={e.id} style={{ padding: 12 }} className="flex items-center justify-between">
+            <div className="flex items-center gap-3 min-w-0">
+              <span style={{ width: 10, height: 10, borderRadius: 3, background: colorBy === "assignee" ? colorForAssignee(e.assignee) : (e.workTypeColor || T.slateLight), flexShrink: 0 }} />
+              <div className="min-w-0">
+                <div className="text-sm font-medium truncate" style={{ color: T.ink }}>
+                  {e.title || e.workType}
+                  {e.clientName && (
+                    <button onClick={() => goToClient(e.clientId, "scheduling")} className="ml-2 text-xs underline" style={{ color: T.tealDark }}>{e.clientName}</button>
+                  )}
+                </div>
+                <div className="text-xs" style={{ color: T.slate }}>
+                  {fmtDate(e.date)} · {e.assignee} · {e.hours}h{e.billable ? ` · billing ${e.billedHours ?? e.hours}h` : " · not billable"}{e.targetId ? " · counts toward target" : ""}
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button onClick={() => confirmEntry(e, !e.confirmed)}
+                className="text-xs font-semibold px-2.5 py-1.5 rounded-lg" style={{ background: e.confirmed ? T.paperAlt : T.tealDark, color: e.confirmed ? T.tealDark : "#fff" }}>
+                {e.confirmed ? "Confirmed" : "Confirm"}
+              </button>
+              <button onClick={() => openEditForm(e)} className="text-xs font-semibold px-2 py-1.5" style={{ color: T.slate }}>Edit</button>
+              <ConfirmButton onConfirm={() => removeEntry(e)} title="Remove" iconSize={13} />
+            </div>
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ScheduleView({ tasks, clients, onboardings, scheduleBlocks, addScheduleBlock, removeScheduleBlock, goToClient, masterScheduleEntries, addMasterScheduleEntry, updateMasterScheduleEntry, removeMasterScheduleEntry, confirmMasterScheduleEntry, externalConsultants }) {
   const [windowKey, setWindowKey] = useState("2weeks");
   const [drafts, setDrafts] = useState(Object.fromEntries(SCHEDULE_PEOPLE.map((p) => [p, { date: today(), hours: "", note: "", repeat: "none" }])));
 
@@ -11092,6 +11535,16 @@ function ScheduleView({ tasks, clients, onboardings, scheduleBlocks, addSchedule
 
   return (
     <div className="flex flex-col gap-4 h-full min-h-0 overflow-y-auto">
+      <ErrorBoundary>
+        <MasterScheduleCalendar
+          clients={clients} tasks={tasks} onboardings={onboardings}
+          entries={masterScheduleEntries} addEntry={addMasterScheduleEntry} updateEntry={updateMasterScheduleEntry}
+          removeEntry={removeMasterScheduleEntry} confirmEntry={confirmMasterScheduleEntry}
+          externalConsultants={externalConsultants} goToClient={goToClient}
+        />
+      </ErrorBoundary>
+
+      <div style={{ borderTop: `1px solid ${T.border}`, paddingTop: 16, color: T.ink }} className="text-sm font-bold">Jo &amp; Judith capacity</div>
       <Card style={{ padding: "12px 16px" }}>
         <div className="flex items-center gap-4">
           <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: T.slate }}>Window</div>
@@ -11585,6 +12038,93 @@ export default function App() {
   }, []);
   const addScheduleBlock = (block) => setDoc(doc(db, "scheduleBlocks", "block" + Date.now()), block);
   const removeScheduleBlock = (id) => deleteDoc(doc(db, "scheduleBlocks", id));
+
+  // External consultants — people outside the core team (Jo/Judith/Vanessa/Sophie) who do
+  // reviews or other work for clients, e.g. contracted specialists. Kept as their own
+  // collection (not nested under a reseller) since they're assignable on the master
+  // schedule the same way a team member is, independent of any particular reseller.
+  const [externalConsultants, setExternalConsultants] = useState([]);
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "externalConsultants"), (snap) => setExternalConsultants(snap.docs.map((d) => ({ id: d.id, ...d.data() }))), (err) => console.error("External consultants subscription failed:", err));
+    return unsub;
+  }, []);
+  const addExternalConsultant = (name, email, phone) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    setDoc(doc(db, "externalConsultants", "consult" + Date.now()), { name: trimmed, email: email.trim(), phone: phone.trim() });
+  };
+  const removeExternalConsultant = (id) => deleteDoc(doc(db, "externalConsultants", id));
+
+  // Master Schedule — the team-wide calendar of scheduled client work (site reviews,
+  // pre-quals, ad-hoc work, etc.), separate from scheduleBlocks above (which is just Jo/
+  // Judith's own personal capacity booking) and separate from each Enterprise client's own
+  // scheduleEntries (which is that client's internal monthly-targets view). This is the
+  // shared overlay across every client at once.
+  const [masterScheduleEntries, setMasterScheduleEntries] = useState([]);
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "masterScheduleEntries"), (snap) => setMasterScheduleEntries(snap.docs.map((d) => ({ id: d.id, ...d.data() }))), (err) => console.error("Master schedule subscription failed:", err));
+    return unsub;
+  }, []);
+  const addMasterScheduleEntry = (entry) => setDoc(doc(db, "masterScheduleEntries", "mcal" + Date.now()), entry);
+  const updateMasterScheduleEntry = (id, patch) => updateDoc(doc(db, "masterScheduleEntries", id), patch);
+  const removeMasterScheduleEntry = async (entry) => {
+    // If this entry was confirmed (and so has a matching hours-log entry sitting in that
+    // client's billing, and possibly a matching done-reminder counting toward a monthly
+    // target), clean both up first — otherwise deleting the calendar entry would leave
+    // orphaned billing and a phantom completed target behind with nothing left pointing
+    // back to them to ever notice or remove.
+    if (entry.confirmed && entry.clientId) {
+      const c = clients.find((x) => x.id === entry.clientId);
+      if (c) {
+        const patch = {};
+        if (entry.confirmedHoursLogId) patch.hours = { ...c.hours, log: (c.hours?.log || []).filter((h) => h.id !== entry.confirmedHoursLogId) };
+        if (entry.targetId) patch.reminders = (c.reminders || []).filter((r) => r.id !== `mastercal-target-${entry.id}`);
+        if (Object.keys(patch).length > 0) await updateDoc(doc(db, "clients", entry.clientId), patch);
+      }
+    }
+    await deleteDoc(doc(db, "masterScheduleEntries", entry.id));
+  };
+  // Confirming an entry is what actually makes it count: it logs the billed hours into
+  // that client's real hours log (the same one Activity/Billing already reads from), and,
+  // if the entry was linked to one of that client's monthly targets, also drops a matching
+  // done reminder in so it counts toward that target's progress — reusing the exact same
+  // progressFor logic the client's own Scheduling tab already uses, rather than building a
+  // second, separate progress calculation. Un-confirming reverses both cleanly.
+  const confirmMasterScheduleEntry = async (entry, confirmed) => {
+    if (!confirmed) {
+      await updateMasterScheduleEntry(entry.id, { confirmed: false, confirmedHoursLogId: null });
+      if (entry.clientId) {
+        const c = clients.find((x) => x.id === entry.clientId);
+        if (c) {
+          const patch = {};
+          if (entry.confirmedHoursLogId) patch.hours = { ...c.hours, log: (c.hours?.log || []).filter((h) => h.id !== entry.confirmedHoursLogId) };
+          if (entry.targetId) patch.reminders = (c.reminders || []).filter((r) => r.id !== `mastercal-target-${entry.id}`);
+          if (Object.keys(patch).length > 0) await updateDoc(doc(db, "clients", entry.clientId), patch);
+        }
+      }
+      return;
+    }
+    let confirmedHoursLogId = null;
+    if (entry.clientId) {
+      const c = clients.find((x) => x.id === entry.clientId);
+      if (c) {
+        const patch = {};
+        const billedHours = entry.billable ? Number(entry.billedHours ?? entry.hours) || 0 : 0;
+        if (billedHours > 0) {
+          confirmedHoursLogId = "mastercal-" + entry.id;
+          patch.hours = { ...c.hours, log: [...(c.hours?.log || []), { id: confirmedHoursLogId, date: entry.date, member: entry.assignee, hours: billedHours, description: entry.title || entry.workType }] };
+        }
+        if (entry.targetId) {
+          const targetReminderId = `mastercal-target-${entry.id}`;
+          if (!(c.reminders || []).some((r) => r.id === targetReminderId)) {
+            patch.reminders = [...(c.reminders || []), { id: targetReminderId, text: entry.title || entry.workType, date: entry.date, recurring: "none", done: true, assignee: entry.assignee, targetId: entry.targetId, estHours: 0 }];
+          }
+        }
+        if (Object.keys(patch).length > 0) await updateDoc(doc(db, "clients", entry.clientId), patch);
+      }
+    }
+    await updateMasterScheduleEntry(entry.id, { confirmed: true, confirmedHoursLogId });
+  };
 
   // One-time seed of real procedure content, condensed from OSHE's actual reference documents.
   // Never overwrites anything already written — only fills in a key if it's genuinely empty,
@@ -12157,10 +12697,10 @@ export default function App() {
           {module === "billing" && canSeeBilling && <BillingOverview clients={clients} resellers={resellers} tasks={tasks} />}
           {module === "dashboards" && <DashboardsView clients={clients} tasks={tasks} touchpointBaselines={touchpointBaselines} updateTouchpointBaseline={updateTouchpointBaseline} />}
           {module === "workflows" && <WorkflowsView workflows={workflows} />}
-          {module === "resellers" && <ResellersView resellers={resellers} selectedId={selectedReseller} setSelectedId={setSelectedReseller} />}
+          {module === "resellers" && <ResellersView resellers={resellers} selectedId={selectedReseller} setSelectedId={setSelectedReseller} externalConsultants={externalConsultants} addExternalConsultant={addExternalConsultant} removeExternalConsultant={removeExternalConsultant} />}
           {module === "tasks" && <TasksView tasks={tasks} clients={clients} onboardings={onboardings} currentUser={currentUser} goToClient={goToClient} resellers={resellers} goToReseller={goToReseller} leads={leads} goToSales={() => setModule("sales")} />}
           {module === "reports" && <ReportsView clients={clients} reportTemplates={reportTemplates} addReportTemplate={addReportTemplate} renameReportTemplate={renameReportTemplate} deleteReportTemplate={deleteReportTemplate} addTemplateSection={addTemplateSection} removeTemplateSection={removeTemplateSection} />}
-          {module === "schedule" && <ScheduleView tasks={tasks} clients={clients} onboardings={onboardings} scheduleBlocks={scheduleBlocks} addScheduleBlock={addScheduleBlock} removeScheduleBlock={removeScheduleBlock} goToClient={goToClient} />}
+          {module === "schedule" && <ScheduleView tasks={tasks} clients={clients} onboardings={onboardings} scheduleBlocks={scheduleBlocks} addScheduleBlock={addScheduleBlock} removeScheduleBlock={removeScheduleBlock} goToClient={goToClient} masterScheduleEntries={masterScheduleEntries} addMasterScheduleEntry={addMasterScheduleEntry} updateMasterScheduleEntry={updateMasterScheduleEntry} removeMasterScheduleEntry={removeMasterScheduleEntry} confirmMasterScheduleEntry={confirmMasterScheduleEntry} externalConsultants={externalConsultants} />}
         </div>
       </div>
     </div>

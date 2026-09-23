@@ -11147,7 +11147,6 @@ function MasterScheduleCalendar({ clients, tasks, onboardings, entries, addEntry
   const [colorBy, setColorBy] = useState("assignee");
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
-  const [draggingId, setDraggingId] = useState(null);
   const emptyDraft = { title: "", clientId: "", assignee: TEAM[0], date: today(), hours: "1", billable: true, billedHours: "", workType: WORK_TYPE_PRESETS[0].label, workTypeColor: WORK_TYPE_PRESETS[0].color, workTypeCustom: false, targetId: "" };
   const [draft, setDraft] = useState(emptyDraft);
 
@@ -11222,6 +11221,15 @@ function MasterScheduleCalendar({ clients, tasks, onboardings, entries, addEntry
     setShowForm(true);
   };
 
+  // Opens the add form pre-filled from a must-do target, whether triggered by clicking it
+  // or by dropping it onto a calendar day (date is left at today() for the click case,
+  // overridden to whatever day it was dropped on for the drag case).
+  const openAddFormForTarget = (clientId, targetId, title, date) => {
+    setEditingId(null);
+    setDraft({ ...emptyDraft, clientId, date: date || today(), title: title || "", targetId: targetId || "", billedHours: "" });
+    setShowForm(true);
+  };
+
   const saveDraft = () => {
     if (!draft.date || !draft.hours) return;
     const client = clients.find((c) => c.id === draft.clientId);
@@ -11236,11 +11244,27 @@ function MasterScheduleCalendar({ clients, tasks, onboardings, entries, addEntry
     setShowForm(false);
   };
 
-  const handleDrop = (date) => {
-    if (draggingId) {
-      updateEntry(draggingId, { date });
-      setDraggingId(null);
-    }
+  // Drag payload always carries its own data via dataTransfer rather than relying on
+  // component state (draggingId used to be the only source of truth, but some browsers
+  // won't complete a drag/drop cycle at all unless dataTransfer.setData was actually called
+  // on dragstart — that missing call was why dropping silently did nothing before). Two
+  // payload shapes: an existing calendar entry being moved to a new day, or a must-do
+  // target being dragged in from the panel above to schedule it for the first time.
+  const startDragEntry = (ev, entry) => {
+    ev.dataTransfer.effectAllowed = "move";
+    ev.dataTransfer.setData("text/plain", JSON.stringify({ type: "entry", id: entry.id }));
+  };
+  const startDragTarget = (ev, clientId, targetId, title) => {
+    ev.dataTransfer.effectAllowed = "copy";
+    ev.dataTransfer.setData("text/plain", JSON.stringify({ type: "target", clientId, targetId, title }));
+  };
+  const handleDayDrop = (ev, date) => {
+    ev.preventDefault();
+    let payload;
+    try { payload = JSON.parse(ev.dataTransfer.getData("text/plain")); } catch { return; }
+    if (!payload) return;
+    if (payload.type === "entry") updateEntry(payload.id, { date });
+    else if (payload.type === "target") openAddFormForTarget(payload.clientId, payload.targetId, payload.title, date);
   };
 
   const exportIcs = () => {
@@ -11312,7 +11336,7 @@ function MasterScheduleCalendar({ clients, tasks, onboardings, entries, addEntry
       {enterpriseClients.some((c) => (c.scheduleTargets || []).length > 0) && (
         <Card style={{ padding: 16 }}>
           <div className="text-sm font-semibold mb-1" style={{ color: T.ink }}>Must-dos this month</div>
-          <div className="text-[11px] mb-3" style={{ color: T.slateLight }}>Monthly targets set on each Enterprise client's own Scheduling tab. Counts what's booked on the calendar below, whether confirmed/billed yet or not, so this doesn't sit on 0/8 when 7 are already booked in.</div>
+          <div className="text-[11px] mb-3" style={{ color: T.slateLight }}>Monthly targets set on each Enterprise client's own Scheduling tab. Counts what's booked on the calendar below, whether confirmed/billed yet or not, so this doesn't sit on 0/8 when 7 are already booked in. Drag one onto a day below to schedule it, or click to open it for editing first.</div>
           <div className="grid grid-cols-3 gap-2">
             {enterpriseClients.flatMap((c) => {
               const visible = (c.scheduleTargets || []).filter((t) => t.repeat === "monthly" || t.monthYear === monthYear);
@@ -11321,12 +11345,17 @@ function MasterScheduleCalendar({ clients, tasks, onboardings, entries, addEntry
                 const complete = booked >= t.targetCount;
                 const color = complete ? T.tealDark : booked > 0 ? T.amber : T.coral;
                 return (
-                  <button key={c.id + t.id} onClick={() => goToClient(c.id, "scheduling")} className="text-left">
+                  <div key={c.id + t.id}
+                    draggable
+                    onDragStart={(ev) => startDragTarget(ev, c.id, t.id, t.title)}
+                    onClick={() => openAddFormForTarget(c.id, t.id, t.title, today())}
+                    title="Drag onto a day in the calendar to schedule it, or click to open the edit form first"
+                    className="text-left cursor-move">
                     <div className="flex items-center justify-between text-xs px-3 py-2 rounded-lg" style={{ background: T.paperAlt, border: complete ? `1px solid ${T.tealDark}` : "1px solid transparent" }}>
                       <span style={{ color: T.ink }}>{c.name}: {t.title}</span>
                       <span className="font-bold shrink-0 ml-2" style={{ color }}>{booked}/{t.targetCount}</span>
                     </div>
-                  </button>
+                  </div>
                 );
               });
             })}
@@ -11437,8 +11466,8 @@ function MasterScheduleCalendar({ clients, tasks, onboardings, entries, addEntry
             const dayReadOnly = date ? readOnlyForDate(date) : [];
             return (
               <div key={i}
-                onDragOver={(e) => date && e.preventDefault()}
-                onDrop={(e) => { e.preventDefault(); if (date) handleDrop(date); }}
+                onDragOver={(e) => { if (date) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; } }}
+                onDrop={(e) => { if (date) handleDayDrop(e, date); }}
                 style={{ minHeight: 110, background: date ? T.paperAlt : "transparent", borderRadius: 8, padding: 5, cursor: date ? "pointer" : "default" }}
                 onClick={() => date && dayEntries.length === 0 && dayReadOnly.length === 0 && openAddForm(date)}>
                 {date && (
@@ -11453,10 +11482,12 @@ function MasterScheduleCalendar({ clients, tasks, onboardings, entries, addEntry
                   {dayEntries.map((e) => {
                     const chipColor = colorBy === "assignee" ? colorForAssignee(e.assignee) : (e.workTypeColor || T.slateLight);
                     return (
-                      <div key={e.id} draggable onDragStart={() => setDraggingId(e.id)} onDragEnd={() => setDraggingId(null)}
+                      <div key={e.id} draggable onDragStart={(ev) => startDragEntry(ev, e)}
                         onClick={(ev) => { ev.stopPropagation(); openEditForm(e); }}
-                        className="text-[12px] leading-snug rounded px-1.5 py-1 truncate cursor-move font-medium" title={`${e.title || e.workType}${e.clientName ? " — " + e.clientName : ""} · ${e.assignee} · ${e.hours}h`}
-                        style={{ background: chipColor, color: "#fff", opacity: e.confirmed ? 1 : 0.75, border: e.confirmed ? "1px solid rgba(255,255,255,0.6)" : "none" }}>
+                        className="text-[12px] leading-snug rounded px-1.5 py-1 truncate cursor-move font-semibold" title={`${e.title || e.workType}${e.clientName ? " — " + e.clientName : ""} · ${e.assignee} · ${e.hours}h`}
+                        style={e.confirmed
+                          ? { background: chipColor, color: "#fff", border: "1px solid transparent" }
+                          : { background: T.card, color: chipColor, border: `2px solid ${chipColor}` }}>
                         {e.confirmed ? "✓ " : ""}{e.title || e.workType}{e.clientName ? ` · ${e.clientName}` : ""}
                       </div>
                     );

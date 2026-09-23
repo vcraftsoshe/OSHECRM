@@ -11266,6 +11266,21 @@ function MasterScheduleCalendar({ clients, tasks, onboardings, entries, addEntry
     if (payload.type === "entry") updateEntry(payload.id, { date });
     else if (payload.type === "target") openAddFormForTarget(payload.clientId, payload.targetId, payload.title, date);
   };
+  // Dragging a scheduled entry onto this zone removes it (same cleanup as the Remove
+  // button — un-billing and un-linking a target if it had already been confirmed), so
+  // there's a drag-based way to get rid of something as well as to move it. Doesn't accept
+  // must-do drags (only real calendar entries), since a must-do dragged straight to the
+  // trash was never actually scheduled in the first place.
+  const [trashHover, setTrashHover] = useState(false);
+  const handleTrashDrop = (ev) => {
+    ev.preventDefault();
+    setTrashHover(false);
+    let payload;
+    try { payload = JSON.parse(ev.dataTransfer.getData("text/plain")); } catch { return; }
+    if (!payload || payload.type !== "entry") return;
+    const entry = entries.find((e) => e.id === payload.id);
+    if (entry) removeEntry(entry);
+  };
 
   const exportIcs = () => {
     const blob = new Blob([buildIcsFile(monthEntries)], { type: "text/calendar" });
@@ -11318,6 +11333,15 @@ function MasterScheduleCalendar({ clients, tasks, onboardings, entries, addEntry
           <button onClick={exportIcs} className="text-xs font-semibold px-2.5 py-1.5 rounded-lg" style={{ background: T.paperAlt, color: T.tealDark }} title="Download this month's schedule as a .ics file you can import into Outlook">
             Export to Outlook
           </button>
+          <div
+            onDragOver={(e) => { e.preventDefault(); setTrashHover(true); }}
+            onDragLeave={() => setTrashHover(false)}
+            onDrop={handleTrashDrop}
+            title="Drag a scheduled item here to remove it"
+            className="flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1.5 rounded-lg"
+            style={{ background: trashHover ? T.coral : T.paperAlt, color: trashHover ? "#fff" : T.coral, border: `1px dashed ${T.coral}` }}>
+            <Trash2 size={13} /> Drag here to remove
+          </div>
           <button onClick={() => openAddForm(today())} className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg" style={{ background: T.charcoal, color: T.teal }}>
             <Plus size={13} /> Add
           </button>
@@ -11492,13 +11516,16 @@ function MasterScheduleCalendar({ clients, tasks, onboardings, entries, addEntry
                       </div>
                     );
                   })}
-                  {dayReadOnly.map((i) => (
-                    <button key={i.id} onClick={(ev) => { ev.stopPropagation(); i.clientId && goToClient(i.clientId, i.type === "workflow" ? "onboarding" : "reminders"); }}
-                      className="text-[12px] leading-snug rounded px-1.5 py-1 truncate text-left" title={`${i.title}${i.clientName ? " — " + i.clientName : ""} · ${i.assignee}`}
-                      style={{ background: "transparent", border: `1px dashed ${T.slateLight}`, color: T.slate }}>
-                      {i.type === "task" ? "Task: " : "WF: "}{i.title}
-                    </button>
-                  ))}
+                  {dayReadOnly.map((i) => {
+                    const roColor = colorForAssignee(i.assignee);
+                    return (
+                      <button key={i.id} onClick={(ev) => { ev.stopPropagation(); i.clientId && goToClient(i.clientId, i.type === "workflow" ? "onboarding" : "reminders"); }}
+                        className="text-[12px] leading-snug rounded px-1.5 py-1 truncate text-left font-semibold" title={`${i.title}${i.clientName ? " — " + i.clientName : ""} · ${i.assignee}`}
+                        style={{ background: T.card, border: `1.5px dashed ${roColor}`, color: roColor }}>
+                        {i.type === "task" ? "Task: " : "WF: "}{i.title}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
             );

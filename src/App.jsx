@@ -1,5 +1,4 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
-import SiteReviewForm from "./SiteReviewForm";
 import {
   Users, TrendingUp, Bell, Building2, CreditCard, StickyNote,
   ChevronRight, ChevronLeft, Plus, Check, Upload, Calendar, X, Search, Clock, PieChart,
@@ -12373,18 +12372,7 @@ function ScheduleView({ tasks, clients, onboardings, scheduleBlocks, addSchedule
   );
 }
 
-// The public pages (site reviews, and later pre-qual and training) live on their own
-// subdomains but run from this same app. The hostname decides which page shows, with
-// ?page=sitereviews available for trying one out on any address.
-function App() {
-  const host = typeof window !== "undefined" ? window.location.hostname : "";
-  const forced = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("page") : null;
-  if (forced === "sitereviews" || host.startsWith("sitereviews.")) return <SiteReviewForm />;
-  return <CrmApp />;
-}
-export default App;
-
-function CrmApp() {
+export default function App() {
   const [module, setModule] = useState("overview");
   // Detect a mobile-width viewport and default straight into the Quick Add screen the first
   // time — field staff on their phone want notes/tasks fast, not the full desktop layout.

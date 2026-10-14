@@ -5130,10 +5130,14 @@ function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, wor
   // Changing a stage's hours after it's logged updates the same log entry.
   const setStepHours = (inst, s, value) => {
     updateStepField(inst.id, s.id, "estHours", value);
+    if (!s.done) return;
     const logId = `wf-stage-${inst.id}-${s.id}`;
-    if ((client.hours?.log || []).some((h) => h.id === logId)) {
-      updateDoc(doc(db, "clients", client.id), { hours: { ...client.hours, log: client.hours.log.map((h) => (h.id === logId ? { ...h, hours: Number(value) || 0 } : h)) } });
-    }
+    const log = client.hours?.log || [];
+    const hrs = Number(value) || 0;
+    const nextLog = log.some((h) => h.id === logId)
+      ? log.map((h) => (h.id === logId ? { ...h, hours: hrs } : h))
+      : hrs > 0 ? [...log, { id: logId, date: today(), member: s.owner, hours: hrs, description: `${inst.workflowName}: ${s.title}`, src: { t: "s", inst: inst.id, step: s.id } }] : log;
+    updateDoc(doc(db, "clients", client.id), { hours: { ...client.hours, log: nextLog } });
   };
   const markDone = (instId, stepId) => {
     logStageHours(instId, stepId);
@@ -5296,22 +5300,6 @@ function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, wor
                 </button>
                 <ConfirmButton onConfirm={() => removeOnboardingInstance(inst.id)} title="Remove this workflow from this client" iconSize={14} />
               </div>
-            </div>
-            <div className="flex items-center gap-2 text-xs" style={{ color: T.slate }}>
-              <label className="flex items-center gap-1.5">
-                <input type="checkbox" checked={inst.billable || false}
-                  onChange={(e) => setInstanceBillable(inst, e.target.checked, inst.billableHours)} />
-                Billable
-              </label>
-              {inst.billable && (
-                <>
-                  <span>&middot;</span>
-                  <input type="number" min="0" step="0.5" value={inst.billableHours ?? ""}
-                    onChange={(e) => setInstanceBillable(inst, true, e.target.value ? Number(e.target.value) : 0)}
-                    placeholder="0" className="w-16 px-2 py-1 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
-                  <span>extra hrs</span>
-                </>
-              )}
             </div>
             <Card style={{ padding: 18 }}>
               <div className="flex flex-col gap-2">
@@ -5603,6 +5591,10 @@ function ClientTaskCard({ client, r, updateClient, toggleReminderDone, removeRem
     const log = (c.hours?.log || []).map((h) => (h.id === lid ? { ...h, hours: Number(next.estHours) || 0, member: next.assignee || h.member } : h));
     return { ...c, reminders: c.reminders.map((x) => (x.id === r.id ? next : x)), hours: { ...c.hours, log } };
   });
+  const syncMaster = ({ title, date, hours, assignee }) => {
+    if (!r.masterEntryId) return;
+    updateDoc(doc(db, "masterScheduleEntries", r.masterEntryId), { title, date, hours, billedHours: hours, assignee }).catch((err) => console.error("Master calendar sync failed:", err));
+  };
   const startMode = (m) => {
     setDraft({ text: r.text, date: r.date || today(), assignee: r.assignee || TEAM[0], estHours: r.estHours || "", recurring: r.recurring || "none", linkedStep: r.linkedStep || "" });
     setMode(m);
@@ -5611,7 +5603,21 @@ function ClientTaskCard({ client, r, updateClient, toggleReminderDone, removeRem
     if (mode === "edit" && !draft.text.trim()) return;
     if (mode === "schedule" && (!draft.date || !draft.estHours)) { alert("Pick a date and the hours to book."); return; }
     const base = { date: draft.date, assignee: draft.assignee, estHours: draft.estHours ? Number(draft.estHours) : 0 };
-    patch(mode === "edit" ? { ...base, text: draft.text.trim(), recurring: draft.recurring, linkedStep: draft.linkedStep } : { ...base, onSchedule: true });
+    if (mode === "edit") {
+      patch({ ...base, text: draft.text.trim(), recurring: draft.recurring, linkedStep: draft.linkedStep });
+      syncMaster({ title: draft.text.trim(), date: base.date, hours: base.estHours, assignee: base.assignee });
+    } else {
+      // The task keeps the date, owner and hours (that is what the capacity bars count) and a
+      // linked entry goes on the master calendar. Linked, so confirming it there or ticking
+      // the task off here logs the hours once.
+      const masterEntryId = r.masterEntryId || `mcal${Date.now()}`;
+      patch({ ...base, onSchedule: true, masterEntryId });
+      setDoc(doc(db, "masterScheduleEntries", masterEntryId), {
+        title: r.text, clientId: client.id, clientName: client.name, assignee: base.assignee, date: base.date, hours: base.estHours,
+        billable: true, billedHours: base.estHours, workType: WORK_TYPE_PRESETS[0].label, workTypeColor: WORK_TYPE_PRESETS[0].color,
+        targetId: null, linked: `task:${r.id}`, confirmed: Boolean(r.done), confirmedHoursLogId: null,
+      }, { merge: true }).catch((err) => console.error("Master calendar entry failed:", err));
+    }
     setMode(null);
   };
   const attach = async (fileList) => {
@@ -5662,7 +5668,7 @@ function ClientTaskCard({ client, r, updateClient, toggleReminderDone, removeRem
           )}
           <button onClick={() => (mode === "edit" ? setMode(null) : startMode("edit"))} className="text-[11px] font-semibold px-2 py-1 rounded-lg" style={{ background: T.paperAlt, color: T.tealDark }}>Edit</button>
           <input type="number" min="0" step="0.25" value={r.estHours || ""}
-            onChange={(e) => patch({ estHours: e.target.value ? Number(e.target.value) : 0 })}
+            onChange={(e) => { const v = e.target.value ? Number(e.target.value) : 0; patch({ estHours: v }); syncMaster({ title: r.text, date: r.date, hours: v, assignee: r.assignee }); }}
             placeholder="hrs" title="Estimated hours, counts toward Schedule workload"
             className="w-14 text-xs px-1.5 py-1 rounded-lg outline-none text-center" style={inputStyle} />
           <button onClick={() => removeReminder(r.id)}><Trash2 size={14} color={T.slateLight} /></button>
@@ -5677,7 +5683,7 @@ function ClientTaskCard({ client, r, updateClient, toggleReminderDone, removeRem
           <input type="date" value={draft.date} onChange={(e) => setDraft({ ...draft, date: e.target.value })} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle} />
           <input type="number" min="0" step="0.25" placeholder="hrs" value={draft.estHours} onChange={(e) => setDraft({ ...draft, estHours: e.target.value })} className="w-16 text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle} />
           <select value={draft.assignee} onChange={(e) => setDraft({ ...draft, assignee: e.target.value })} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle}>
-            {(mode === "schedule" ? SCHEDULE_PEOPLE : TEAM).map((m) => <option key={m} value={m}>{m}</option>)}
+            {TEAM.map((m) => <option key={m} value={m}>{m}</option>)}
           </select>
           {mode === "edit" && (
             <select value={draft.recurring} onChange={(e) => setDraft({ ...draft, recurring: e.target.value })} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle}>
@@ -5748,6 +5754,7 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
   const [newHour, setNewHour] = useState({ member: TEAM[0], hours: "", description: "", date: today() });
   const [newExtra, setNewExtra] = useState({ description: "", hours: "" });
   const [editingHour, setEditingHour] = useState(null);
+  const [showCompletedTasks, setShowCompletedTasks] = useState(false);
   const [newUserCount, setNewUserCount] = useState("");
   const [newContact, setNewContact] = useState({ name: "", role: "", email: "", phone: "" });
   const [noteDraft, setNoteDraft] = useState({ text: "", tags: [] });
@@ -5993,6 +6000,9 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
   const toggleReminderDone = (id) => {
     const reminder = client.reminders.find((r) => r.id === id);
     if (reminder && !reminder.done) playCompletionChime();
+    if (reminder && reminder.masterEntryId) {
+      updateDoc(doc(db, "masterScheduleEntries", reminder.masterEntryId), { confirmed: !reminder.done }).catch((err) => console.error("Master calendar sync failed:", err));
+    }
     updateClient((c) => {
       const reminder = c.reminders.find((r) => r.id === id);
       if (!reminder) return c;
@@ -6036,7 +6046,12 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
       return { ...c, reminders, notes, hours };
     });
   };
-  const removeReminder = (id) => updateClient((c) => {
+  const removeReminder = (id) => {
+    const gone = client.reminders.find((r) => r.id === id);
+    if (gone && gone.masterEntryId) deleteDoc(doc(db, "masterScheduleEntries", gone.masterEntryId)).catch((err) => console.error("Master calendar removal failed:", err));
+    removeReminderFromClient(id);
+  };
+  const removeReminderFromClient = (id) => updateClient((c) => {
     const patch = { reminders: c.reminders.filter((r) => r.id !== id) };
     // Deleting the auto-generated touchpoint check-in specifically means "not now" — without
     // this, the Dashboards reconciliation effect would just recreate it on the very next
@@ -6056,6 +6071,13 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
   });
 
   const openSteps = (onboardings[client.id] || []).filter((i) => !i.completedDate).flatMap((i) => i.steps.filter((s) => !s.done).map((s) => ({ key: `${i.id}|${s.id}`, label: `${i.workflowName}: ${s.title}` })));
+  // Per-workflow total comes straight from the hours log (every completed stage writes its own
+  // entry there), so it can never disagree with the Monthly hours list or Billing.
+  const workflowBillingRows = (onboardings[client.id] || []).map((i) => {
+    const fromStages = (client.hours?.log || []).filter((h) => String(h.id).startsWith(`wf-stage-${i.id}-`)).reduce((t, h) => t + (Number(h.hours) || 0), 0);
+    const legacy = i.billable ? Number(i.billableHours) || 0 : 0;
+    return { id: i.id, name: i.workflowName, complete: Boolean(i.completedDate), hours: fromStages + legacy };
+  }).filter((r) => r.hours > 0);
   const dueIn = daysUntil(client.ohsmsDue);
   const urgency = dueIn < 0 ? { label: "Overdue", color: T.coral } : dueIn <= 30 ? { label: `Due in ${dueIn}d`, color: T.amber } : { label: "On track", color: T.tealDark };
 
@@ -6495,19 +6517,19 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
                 </Card>
               </div>
 
-              {(onboardings[client.id] || []).some((i) => i.billable) && (
+              {workflowBillingRows.length > 0 && (
                 <Card style={{ padding: 16 }}>
                   <div className="text-sm font-semibold mb-1" style={{ color: T.ink }}>Billable workflows</div>
                   <div className="flex flex-col gap-2">
-                    {(onboardings[client.id] || []).filter((i) => i.billable).map((i) => (
-                      <div key={i.id} className="flex items-center justify-between text-sm py-1.5" style={{ borderBottom: `1px solid ${T.border}` }}>
-                        <div style={{ color: T.ink }}>{i.workflowName}{i.completedDate ? " (complete)" : ""}</div>
-                        <div className="font-bold" style={{ color: T.tealDark }}>{i.billableHours || 0}h</div>
+                    {workflowBillingRows.map((row) => (
+                      <div key={row.id} className="flex items-center justify-between text-sm py-1.5" style={{ borderBottom: `1px solid ${T.border}` }}>
+                        <div style={{ color: T.ink }}>{row.name}{row.complete ? " (complete)" : ""}</div>
+                        <div className="font-bold" style={{ color: T.tealDark }}>{row.hours}h</div>
                       </div>
                     ))}
                     <div className="flex items-center justify-between text-sm pt-1.5 font-bold">
                       <div style={{ color: T.ink }}>Total</div>
-                      <div style={{ color: T.tealDark }}>{(onboardings[client.id] || []).filter((i) => i.billable).reduce((s, i) => s + (i.billableHours || 0), 0)}h</div>
+                      <div style={{ color: T.tealDark }}>{workflowBillingRows.reduce((t, r) => t + r.hours, 0)}h</div>
                     </div>
                   </div>
                 </Card>
@@ -6656,10 +6678,10 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
 
           {tab === "reminders" && (
             <div className="flex flex-col gap-3">
-              {client.reminders.map((r) => (
+              {client.reminders.filter((r) => !r.done).map((r) => (
                 <ClientTaskCard key={r.id} client={client} r={r} updateClient={updateClient} toggleReminderDone={toggleReminderDone} removeReminder={removeReminder} openSteps={openSteps} />
               ))}
-              {client.reminders.length === 0 && <div className="text-xs" style={{ color: T.slateLight }}>No tasks yet.</div>}
+              {client.reminders.filter((r) => !r.done).length === 0 && <div className="text-xs" style={{ color: T.slateLight }}>No tasks yet.</div>}
               <Card style={{ padding: 14 }} className="flex items-center gap-2 flex-wrap">
                 <input placeholder="Task" value={newReminder.text} onChange={(e) => setNewReminder({ ...newReminder, text: e.target.value })}
                   className="flex-1 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink, minWidth: 160 }} />
@@ -6681,6 +6703,17 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
                 </select>
                 <button onClick={addReminder} className="text-xs font-semibold px-3 py-1.5 rounded-lg shrink-0" style={{ background: T.tealDark, color: "#fff" }}>Add</button>
               </Card>
+              {client.reminders.some((r) => r.done) && (
+                <div className="flex flex-col gap-3 mt-2">
+                  <button onClick={() => setShowCompletedTasks((v) => !v)} className="flex items-center gap-1.5 text-xs font-semibold" style={{ color: T.slate }}>
+                    <ChevronDown size={13} style={{ transform: showCompletedTasks ? "none" : "rotate(-90deg)" }} />
+                    Completed tasks ({client.reminders.filter((r) => r.done).length})
+                  </button>
+                  {showCompletedTasks && client.reminders.filter((r) => r.done).map((r) => (
+                    <ClientTaskCard key={r.id} client={client} r={r} updateClient={updateClient} toggleReminderDone={toggleReminderDone} removeReminder={removeReminder} openSteps={openSteps} />
+                  ))}
+                </div>
+              )}
             </div>
           )}
           {tab === "scheduling" && client.profile === "Enterprise Client" && (
@@ -11475,10 +11508,18 @@ function MasterScheduleCalendar({ clients, tasks, onboardings, entries, addEntry
   const [colorBy, setColorBy] = useState("assignee");
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
-  const emptyDraft = { title: "", clientId: "", assignee: TEAM[0], date: today(), hours: "1", billable: true, billedHours: "", workType: WORK_TYPE_PRESETS[0].label, workTypeColor: WORK_TYPE_PRESETS[0].color, workTypeCustom: false, targetId: "" };
+  const emptyDraft = { title: "", clientId: "", assignee: TEAM[0], date: today(), hours: "1", billable: true, billedHours: "", workType: WORK_TYPE_PRESETS[0].label, workTypeColor: WORK_TYPE_PRESETS[0].color, workTypeCustom: false, targetId: "", linked: "" };
   const [draft, setDraft] = useState(emptyDraft);
 
   const assignableNames = [...TEAM, ...externalConsultants.map((c) => c.name)];
+  // Anything on the calendar can be tied to the workflow stage or client task it is the same
+  // job as. Linked jobs share one hours entry, so confirming here and completing it there
+  // can only ever bill once.
+  const linkClient = clients.find((c) => c.id === draft.clientId);
+  const linkOptions = linkClient ? [
+    ...(onboardings[linkClient.id] || []).filter((i) => !i.completedDate).flatMap((i) => i.steps.filter((st) => !st.done).map((st) => ({ value: `step:${i.id}|${st.id}`, label: `Workflow: ${i.workflowName}, ${st.title}` }))),
+    ...(linkClient.reminders || []).filter((r) => !r.done && !String(r.id).startsWith("mastercal-")).map((r) => ({ value: `task:${r.id}`, label: `Task: ${r.text} (${fmtDate(r.date)})` })),
+  ] : [];
   const colorForAssignee = (name) => {
     const idx = assignableNames.indexOf(name);
     return idx >= 0 ? ASSIGNEE_COLOR_PALETTE[idx % ASSIGNEE_COLOR_PALETTE.length] : T.slateLight;
@@ -11544,7 +11585,7 @@ function MasterScheduleCalendar({ clients, tasks, onboardings, entries, addEntry
       title: entry.title || "", clientId: entry.clientId || "", assignee: entry.assignee || TEAM[0], date: entry.date,
       hours: String(entry.hours ?? "1"), billable: entry.billable !== false, billedHours: entry.billedHours != null ? String(entry.billedHours) : "",
       workType: entry.workType || WORK_TYPE_PRESETS[0].label, workTypeColor: entry.workTypeColor || WORK_TYPE_PRESETS[0].color,
-      workTypeCustom: !WORK_TYPE_PRESETS.some((p) => p.label === entry.workType), targetId: entry.targetId || "",
+      workTypeCustom: !WORK_TYPE_PRESETS.some((p) => p.label === entry.workType), targetId: entry.targetId || "", linked: entry.linked || "",
     });
     setShowForm(true);
   };
@@ -11565,7 +11606,7 @@ function MasterScheduleCalendar({ clients, tasks, onboardings, entries, addEntry
       title: draft.title.trim(), clientId: draft.clientId || null, clientName: client ? client.name : null,
       assignee: draft.assignee, date: draft.date, hours: Number(draft.hours) || 0,
       billable: draft.billable, billedHours: draft.billedHours !== "" ? Number(draft.billedHours) : Number(draft.hours) || 0,
-      workType: draft.workType, workTypeColor: draft.workTypeColor, targetId: draft.targetId || null,
+      workType: draft.workType, workTypeColor: draft.workTypeColor, targetId: draft.targetId || null, linked: draft.linked || null,
     };
     if (editingId) updateEntry(editingId, payload);
     else addEntry({ ...payload, confirmed: false, confirmedHoursLogId: null });
@@ -11790,6 +11831,16 @@ function MasterScheduleCalendar({ clients, tasks, onboardings, entries, addEntry
                 )}
               </div>
             </div>
+            {linkOptions.length > 0 && (
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: T.slate }}>Same job as</div>
+                <select value={draft.linked} onChange={(e) => setDraft({ ...draft, linked: e.target.value })}
+                  className="w-full text-sm px-2.5 py-2 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
+                  <option value="">Not linked</option>
+                  {linkOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              </div>
+            )}
             {targetOptionsForClient.length > 0 && (
               <div>
                 <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: T.slate }}>Counts toward target</div>
@@ -11883,7 +11934,7 @@ function MasterScheduleCalendar({ clients, tasks, onboardings, entries, addEntry
                   )}
                 </div>
                 <div className="text-xs" style={{ color: T.slate }}>
-                  {fmtDate(e.date)} · {e.assignee} · {e.hours}h{e.billable ? ` · billing ${e.billedHours ?? e.hours}h` : " · not billable"}{e.targetId ? " · counts toward target" : ""}
+                  {fmtDate(e.date)} · {e.assignee} · {e.hours}h{e.billable ? ` · billing ${e.billedHours ?? e.hours}h` : " · not billable"}{e.targetId ? " · counts toward target" : ""}{e.linked ? " · linked" : ""}
                 </div>
               </div>
             </div>
@@ -11904,7 +11955,7 @@ function MasterScheduleCalendar({ clients, tasks, onboardings, entries, addEntry
 
 function ScheduleView({ tasks, clients, onboardings, scheduleBlocks, addScheduleBlock, removeScheduleBlock, goToClient, masterScheduleEntries, addMasterScheduleEntry, updateMasterScheduleEntry, removeMasterScheduleEntry, confirmMasterScheduleEntry, externalConsultants }) {
   const [windowKey, setWindowKey] = useState("2weeks");
-  const [drafts, setDrafts] = useState(Object.fromEntries(SCHEDULE_PEOPLE.map((p) => [p, { date: today(), hours: "", note: "", repeat: "none" }])));
+  const [drafts, setDrafts] = useState(Object.fromEntries(SCHEDULE_PEOPLE.map((p) => [p, { date: today(), hours: "", note: "", repeat: "none", clientId: "" }])));
 
   const { days } = SCHEDULE_WINDOWS[windowKey];
   const start = today();
@@ -11914,7 +11965,16 @@ function ScheduleView({ tasks, clients, onboardings, scheduleBlocks, addSchedule
   const bookTime = (person) => {
     const d = drafts[person];
     if (!d.date || !d.hours) return;
-    addScheduleBlock({ assignee: person, date: d.date, hours: Number(d.hours), note: d.note.trim(), repeat: d.repeat });
+    const target = d.clientId ? clients.find((c) => c.id === d.clientId) : null;
+    if (target) {
+      // Booked against a client: it becomes that client's task (so it shows on their Tasks tab,
+      // and logs its hours to Activity and Billing when ticked off) and counts in the workload
+      // as that task, so the hours are never counted twice.
+      const task = { id: `sched-book-${Date.now()}`, text: d.note.trim() || "Scheduled work", date: d.date, recurring: "none", assignee: person, estHours: Number(d.hours), done: false, onSchedule: true };
+      updateDoc(doc(db, "clients", target.id), { reminders: [...(target.reminders || []), task] });
+    } else {
+      addScheduleBlock({ assignee: person, date: d.date, hours: Number(d.hours), note: d.note.trim(), repeat: d.repeat });
+    }
     setDraftField(person, "hours", "");
     setDraftField(person, "note", "");
     setDraftField(person, "repeat", "none");
@@ -12003,12 +12063,19 @@ function ScheduleView({ tasks, clients, onboardings, scheduleBlocks, addSchedule
                   className="w-16 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
                 <input placeholder="What for?" value={draft.note} onChange={(e) => setDraftField(person, "note", e.target.value)}
                   className="flex-1 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink, minWidth: 100 }} />
-                <select value={draft.repeat} onChange={(e) => setDraftField(person, "repeat", e.target.value)}
-                  className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} title="Repeats forward from the date above">
-                  <option value="none">Doesn't repeat</option>
-                  <option value="daily">Repeats daily</option>
-                  <option value="weekly">Repeats weekly</option>
+                <select value={draft.clientId} onChange={(e) => { setDraftField(person, "clientId", e.target.value); if (e.target.value) setDraftField(person, "repeat", "none"); }}
+                  className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink, maxWidth: 150 }}>
+                  <option value="">No client</option>
+                  {clients.filter((c) => !c.archived).sort((a, b) => a.name.localeCompare(b.name)).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
+                {!draft.clientId && (
+                  <select value={draft.repeat} onChange={(e) => setDraftField(person, "repeat", e.target.value)}
+                    className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
+                    <option value="none">Doesn't repeat</option>
+                    <option value="daily">Repeats daily</option>
+                    <option value="weekly">Repeats weekly</option>
+                  </select>
+                )}
                 <button onClick={() => bookTime(person)} className="text-xs font-semibold px-3 py-1.5 rounded-lg shrink-0" style={{ background: T.tealDark, color: "#fff" }}>
                   Book
                 </button>
@@ -12462,12 +12529,7 @@ export default function App() {
     // back to them to ever notice or remove.
     if (entry.confirmed && entry.clientId) {
       const c = clients.find((x) => x.id === entry.clientId);
-      if (c) {
-        const patch = {};
-        if (entry.confirmedHoursLogId) patch.hours = { ...c.hours, log: (c.hours?.log || []).filter((h) => h.id !== entry.confirmedHoursLogId) };
-        if (entry.targetId) patch.reminders = (c.reminders || []).filter((r) => r.id !== `mastercal-target-${entry.id}`);
-        if (Object.keys(patch).length > 0) await updateDoc(doc(db, "clients", entry.clientId), patch);
-      }
+      if (c) await updateDoc(doc(db, "clients", entry.clientId), undoMasterConfirm(c, entry));
     }
     await deleteDoc(doc(db, "masterScheduleEntries", entry.id));
   };
@@ -12477,40 +12539,63 @@ export default function App() {
   // done reminder in so it counts toward that target's progress — reusing the exact same
   // progressFor logic the client's own Scheduling tab already uses, rather than building a
   // second, separate progress calculation. Un-confirming reverses both cleanly.
+  const undoMasterConfirm = (c, entry) => {
+    const patch = {};
+    if (entry.confirmedHoursLogId) patch.hours = { ...c.hours, log: (c.hours?.log || []).filter((h) => h.id !== entry.confirmedHoursLogId) };
+    let reminders = c.reminders || [];
+    if (entry.targetId) reminders = reminders.filter((r) => r.id !== `mastercal-target-${entry.id}`);
+    if (entry.closedReminderId) reminders = reminders.map((r) => (r.id === entry.closedReminderId ? { ...r, done: false } : r));
+    patch.reminders = reminders;
+    return patch;
+  };
   const confirmMasterScheduleEntry = async (entry, confirmed) => {
     if (!confirmed) {
-      await updateMasterScheduleEntry(entry.id, { confirmed: false, confirmedHoursLogId: null });
-      if (entry.clientId) {
-        const c = clients.find((x) => x.id === entry.clientId);
-        if (c) {
-          const patch = {};
-          if (entry.confirmedHoursLogId) patch.hours = { ...c.hours, log: (c.hours?.log || []).filter((h) => h.id !== entry.confirmedHoursLogId) };
-          if (entry.targetId) patch.reminders = (c.reminders || []).filter((r) => r.id !== `mastercal-target-${entry.id}`);
-          if (Object.keys(patch).length > 0) await updateDoc(doc(db, "clients", entry.clientId), patch);
-        }
-      }
+      await updateMasterScheduleEntry(entry.id, { confirmed: false, confirmedHoursLogId: null, closedReminderId: null });
+      const c = entry.clientId ? clients.find((x) => x.id === entry.clientId) : null;
+      if (c) await updateDoc(doc(db, "clients", entry.clientId), undoMasterConfirm(c, entry));
       return;
     }
     let confirmedHoursLogId = null;
-    if (entry.clientId) {
-      const c = clients.find((x) => x.id === entry.clientId);
-      if (c) {
-        const patch = {};
-        const billedHours = entry.billable ? Number(entry.billedHours ?? entry.hours) || 0 : 0;
-        if (billedHours > 0) {
-          confirmedHoursLogId = "mastercal-" + entry.id;
-          patch.hours = { ...c.hours, log: [...(c.hours?.log || []), { id: confirmedHoursLogId, date: entry.date, member: entry.assignee, hours: billedHours, description: entry.title || entry.workType }] };
-        }
-        if (entry.targetId) {
-          const targetReminderId = `mastercal-target-${entry.id}`;
-          if (!(c.reminders || []).some((r) => r.id === targetReminderId)) {
-            patch.reminders = [...(c.reminders || []), { id: targetReminderId, text: entry.title || entry.workType, date: entry.date, recurring: "none", done: true, assignee: entry.assignee, targetId: entry.targetId, estHours: 0 }];
+    let closedReminderId = null;
+    const c = entry.clientId ? clients.find((x) => x.id === entry.clientId) : null;
+    if (c) {
+      const patch = {};
+      let reminders = c.reminders || [];
+      const log = c.hours?.log || [];
+      const billedHours = entry.billable ? Number(entry.billedHours ?? entry.hours) || 0 : 0;
+      // A linked entry writes to the same hours-log id as the workflow stage or task it is
+      // the same job as. If that entry is already there, nothing more is logged.
+      let logId = "mastercal-" + entry.id;
+      let src = null;
+      if (entry.linked && entry.linked.startsWith("step:")) {
+        const [instId, stepId] = entry.linked.slice(5).split("|");
+        logId = `wf-stage-${instId}-${stepId}`;
+        src = { t: "s", inst: instId, step: stepId };
+      } else if (entry.linked && entry.linked.startsWith("task:")) {
+        const linkedTask = reminders.find((r) => String(r.id) === entry.linked.slice(5));
+        if (linkedTask) {
+          logId = reminderLogId(linkedTask);
+          src = { t: "r", id: linkedTask.id };
+          if (!linkedTask.done && (!linkedTask.recurring || linkedTask.recurring === "none")) {
+            reminders = reminders.map((r) => (r.id === linkedTask.id ? { ...r, done: true } : r));
+            closedReminderId = linkedTask.id;
           }
         }
-        if (Object.keys(patch).length > 0) await updateDoc(doc(db, "clients", entry.clientId), patch);
       }
+      if (billedHours > 0 && !log.some((h) => h.id === logId)) {
+        confirmedHoursLogId = logId;
+        patch.hours = { ...c.hours, log: [...log, { id: logId, date: entry.date, member: entry.assignee, hours: billedHours, description: entry.title || entry.workType, ...(src ? { src } : {}) }] };
+      }
+      if (entry.targetId) {
+        const targetReminderId = `mastercal-target-${entry.id}`;
+        if (!reminders.some((r) => r.id === targetReminderId)) {
+          reminders = [...reminders, { id: targetReminderId, text: entry.title || entry.workType, date: entry.date, recurring: "none", done: true, assignee: entry.assignee, targetId: entry.targetId, estHours: 0 }];
+        }
+      }
+      if (reminders !== (c.reminders || [])) patch.reminders = reminders;
+      if (Object.keys(patch).length > 0) await updateDoc(doc(db, "clients", entry.clientId), patch);
     }
-    await updateMasterScheduleEntry(entry.id, { confirmed: true, confirmedHoursLogId });
+    await updateMasterScheduleEntry(entry.id, { confirmed: true, confirmedHoursLogId, closedReminderId });
   };
 
   // One-time seed of real procedure content, condensed from OSHE's actual reference documents.

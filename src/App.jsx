@@ -5118,7 +5118,7 @@ function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, wor
     const log = client.hours?.log || [];
     const linkKey = `${instId}|${stepId}`;
     const linkedOpen = (client.reminders || []).filter((r) => r.linkedStep === linkKey && !r.done);
-    const needsEntry = Number(step.estHours) > 0 && !log.some((h) => h.id === logId);
+    const needsEntry = step.billable !== false && Number(step.estHours) > 0 && !log.some((h) => h.id === logId);
     if (!needsEntry && linkedOpen.length === 0) return;
     const update = {};
     if (needsEntry) {
@@ -5131,7 +5131,7 @@ function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, wor
   // Changing a stage's hours after it's logged updates the same log entry.
   const setStepHours = (inst, s, value) => {
     updateStepField(inst.id, s.id, "estHours", value);
-    if (!s.done) return;
+    if (!s.done || s.billable === false) return;
     const logId = `wf-stage-${inst.id}-${s.id}`;
     const log = client.hours?.log || [];
     const hrs = Number(value) || 0;
@@ -5139,6 +5139,20 @@ function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, wor
       ? log.map((h) => (h.id === logId ? { ...h, hours: hrs } : h))
       : hrs > 0 ? [...log, { id: logId, date: today(), member: s.owner, hours: hrs, description: `${inst.workflowName}: ${s.title}`, src: { t: "s", inst: inst.id, step: s.id } }] : log;
     updateDoc(doc(db, "clients", client.id), { hours: { ...client.hours, log: nextLog } });
+  };
+  // A non-billable stage (a free check-in, say) keeps its hours for the schedule but never
+  // writes to the hours log, so it can't reach Activity or Billing. Switching it back on
+  // logs a finished stage straight away; switching it off removes any entry already made.
+  const setStepBillable = (inst, s, billable) => {
+    updateStepField(inst.id, s.id, "billable", billable);
+    const logId = `wf-stage-${inst.id}-${s.id}`;
+    const log = client.hours?.log || [];
+    const has = log.some((h) => h.id === logId);
+    if (!billable && has) {
+      updateDoc(doc(db, "clients", client.id), { hours: { ...client.hours, log: log.filter((h) => h.id !== logId) } });
+    } else if (billable && !has && s.done && Number(s.estHours) > 0) {
+      updateDoc(doc(db, "clients", client.id), { hours: { ...client.hours, log: [...log, { id: logId, date: today(), member: s.owner, hours: Number(s.estHours), description: `${inst.workflowName}: ${s.title}`, src: { t: "s", inst: inst.id, step: s.id } }] } });
+    }
   };
   const markDone = (instId, stepId) => {
     logStageHours(instId, stepId);
@@ -5169,7 +5183,7 @@ function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, wor
             const baseId = `workflow-recurring-${inst.id}-${s.id}`;
             if (s.recurring === "yearly") {
               const dueDate = addDays(s.dueDate || today(), intervalDays.yearly);
-              const mainReminder = { id: baseId, text: s.title, assignee: s.owner, estHours: s.estHours || 0, done: false, recurring: "yearly", date: dueDate };
+              const mainReminder = { id: baseId, text: s.title, assignee: s.owner, estHours: s.estHours || 0, billable: s.billable !== false, done: false, recurring: "yearly", date: dueDate };
               const staged = [90, 60, 30].map((days) => ({
                 id: `${baseId}-${days}d`, text: `${s.title}, due in ${days} days`, assignee: s.owner, estHours: 0, done: false, recurring: "none",
                 date: addDays(dueDate, -days),
@@ -5177,7 +5191,7 @@ function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, wor
               return [mainReminder, ...staged];
             }
             return [{
-              id: baseId, text: s.title, assignee: s.owner, estHours: s.estHours || 0, done: false, recurring: s.recurring,
+              id: baseId, text: s.title, assignee: s.owner, estHours: s.estHours || 0, billable: s.billable !== false, done: false, recurring: s.recurring,
               date: addDays(addDays(s.dueDate || today(), intervalDays[s.recurring] || 30), -30),
             }];
           });
@@ -5333,6 +5347,10 @@ function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, wor
                                 className="w-14 text-xs px-1.5 py-0.5 rounded-md outline-none text-center" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
                               hrs
                             </span>
+                            <label className="flex items-center gap-1">
+                              <input type="checkbox" checked={s.billable !== false} onChange={(e) => setStepBillable(inst, s, e.target.checked)} />
+                              Billable
+                            </label>
                             {!s.done && SCHEDULE_PEOPLE.includes(s.owner) && s.dueDate && Number(s.estHours) > 0 && <Pill color={T.blue} bg={T.paperAlt}>On schedule</Pill>}
                             {s.recurring && s.recurring !== "none" && (
                               <span className="flex items-center gap-1" style={{ color: T.slateLight }}><Repeat size={10} /> {s.recurring}</span>
@@ -5592,6 +5610,18 @@ function ClientTaskCard({ client, r, updateClient, toggleReminderDone, removeRem
     const log = (c.hours?.log || []).map((h) => (h.id === lid ? { ...h, hours: Number(next.estHours) || 0, member: next.assignee || h.member } : h));
     return { ...c, reminders: c.reminders.map((x) => (x.id === r.id ? next : x)), hours: { ...c.hours, log } };
   });
+  // Same rule as a workflow stage: not billable means no hours-log entry, so it never
+  // reaches Activity or Billing. Its hours still count on the schedule.
+  const setTaskBillable = (billable) => {
+    const lid = reminderLogId(r);
+    updateClient((c) => {
+      let log = c.hours?.log || [];
+      if (!billable) log = log.filter((h) => h.id !== lid);
+      else if (r.done && Number(r.estHours) > 0 && !log.some((h) => h.id === lid)) log = [...log, { id: lid, date: today(), member: r.assignee || "Team", hours: Number(r.estHours), description: r.text, src: { t: "r", id: r.id } }];
+      return { ...c, reminders: c.reminders.map((x) => (x.id === r.id ? { ...x, billable } : x)), hours: { ...c.hours, log } };
+    });
+    if (r.masterEntryId) updateDoc(doc(db, "masterScheduleEntries", r.masterEntryId), { billable }).catch((err) => console.error("Master calendar sync failed:", err));
+  };
   const syncMaster = ({ title, date, hours, assignee }) => {
     if (!r.masterEntryId) return;
     updateDoc(doc(db, "masterScheduleEntries", r.masterEntryId), { title, date, hours, billedHours: hours, assignee }).catch((err) => console.error("Master calendar sync failed:", err));
@@ -5615,7 +5645,7 @@ function ClientTaskCard({ client, r, updateClient, toggleReminderDone, removeRem
       patch({ ...base, onSchedule: true, masterEntryId });
       setDoc(doc(db, "masterScheduleEntries", masterEntryId), {
         title: r.text, clientId: client.id, clientName: client.name, assignee: base.assignee, date: base.date, hours: base.estHours,
-        billable: true, billedHours: base.estHours, workType: WORK_TYPE_PRESETS[0].label, workTypeColor: WORK_TYPE_PRESETS[0].color,
+        billable: r.billable !== false, billedHours: base.estHours, workType: WORK_TYPE_PRESETS[0].label, workTypeColor: WORK_TYPE_PRESETS[0].color,
         targetId: null, linked: `task:${r.id}`, confirmed: Boolean(r.done), confirmedHoursLogId: null,
       }, { merge: true }).catch((err) => console.error("Master calendar entry failed:", err));
     }
@@ -5668,6 +5698,10 @@ function ClientTaskCard({ client, r, updateClient, toggleReminderDone, removeRem
             </button>
           )}
           <button onClick={() => (mode === "edit" ? setMode(null) : startMode("edit"))} className="text-[11px] font-semibold px-2 py-1 rounded-lg" style={{ background: T.paperAlt, color: T.tealDark }}>Edit</button>
+          <label className="flex items-center gap-1 text-[11px]" style={{ color: T.slate }}>
+            <input type="checkbox" checked={r.billable !== false} onChange={(e) => setTaskBillable(e.target.checked)} />
+            Billable
+          </label>
           <input type="number" min="0" step="0.25" value={r.estHours || ""}
             onChange={(e) => { const v = e.target.value ? Number(e.target.value) : 0; patch({ estHours: v }); syncMaster({ title: r.text, date: r.date, hours: v, assignee: r.assignee }); }}
             placeholder="hrs" title="Estimated hours, counts toward Schedule workload"
@@ -6038,7 +6072,7 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
       let hours = c.hours;
       const logId = reminderLogId(reminder);
       const existing = (c.hours?.log || []).some((h) => h.id === logId);
-      if (completing && reminder.estHours && !existing) {
+      if (completing && reminder.estHours && reminder.billable !== false && !existing) {
         const logEntry = { id: logId, date: today(), member: reminder.assignee || "Team", hours: reminder.estHours, description: String(id).startsWith("sched-task-") ? `Schedule: ${reminder.text}` : reminder.text, src: { t: "r", id } };
         hours = { ...c.hours, log: [...(c.hours?.log || []), logEntry] };
       } else if (!completing && existing) {
@@ -10199,6 +10233,10 @@ function WorkflowsView({ workflows }) {
                       <input type="number" min="0" step="0.5" value={step.estHours ?? ""} onChange={(e) => updateWorkflow(wf.id, (w) => ({ ...w, steps: w.steps.map((s) => (s.id === step.id ? { ...s, estHours: e.target.value ? Number(e.target.value) : 0 } : s)) }))}
                         className="w-14 px-2 py-1.5 rounded-lg outline-none text-xs" style={{ border: `1px solid ${T.border}`, color: T.ink }} title="Estimated hours, counts toward Schedule workload" placeholder="hrs" />
                       <span className="text-[11px] shrink-0" style={{ color: T.slateLight }}>hrs</span>
+                      <label className="flex items-center gap-1 text-[11px] shrink-0" style={{ color: T.slate }}>
+                        <input type="checkbox" checked={step.billable !== false} onChange={(e) => updateWorkflow(wf.id, (w) => ({ ...w, steps: w.steps.map((s) => (s.id === step.id ? { ...s, billable: e.target.checked } : s)) }))} />
+                        Billable
+                      </label>
                     </>
                   )}
                   <select value={step.recurring || "none"} onChange={(e) => updateWorkflow(wf.id, (w) => ({ ...w, steps: w.steps.map((s) => (s.id === step.id ? { ...s, recurring: e.target.value } : s)) }))}

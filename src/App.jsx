@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
+import SiteReviewForm from "./SiteReviewForm";
 import {
   Users, TrendingUp, Bell, Building2, CreditCard, StickyNote,
   ChevronRight, ChevronLeft, Plus, Check, Upload, Calendar, X, Search, Clock, PieChart,
@@ -6678,6 +6679,7 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
 
           {tab === "reminders" && (
             <div className="flex flex-col gap-3">
+              <ClientSiteReviews client={client} />
               {client.reminders.filter((r) => !r.done).map((r) => (
                 <ClientTaskCard key={r.id} client={client} r={r} updateClient={updateClient} toggleReminderDone={toggleReminderDone} removeReminder={removeReminder} openSteps={openSteps} />
               ))}
@@ -11435,6 +11437,244 @@ function expandRecurringDates(anchorDate, start, end, repeat) {
   return dates;
 }
 
+/* ---------- Site review requests inbox (public form -> client -> schedule) ---------- */
+const SITE_REVIEW_FREQ_LABELS = { weekly: "Weekly", fortnightly: "Fortnightly", monthly: "Monthly", bimonthly: "Bimonthly", quarterly: "Quarterly" };
+
+function addMonthsISO(iso, n) {
+  const d = new Date(iso + "T00:00:00");
+  const day = d.getDate();
+  d.setDate(1);
+  d.setMonth(d.getMonth() + n);
+  const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+  d.setDate(Math.min(day, lastDay));
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function nextWeekdayISO(iso) {
+  let out = iso;
+  for (let i = 0; i < 3; i++) {
+    const dow = new Date(out + "T00:00:00").getDay();
+    if (dow !== 0 && dow !== 6) break;
+    out = addDays(out, 1);
+  }
+  return out;
+}
+function siteReviewDates(first, last, frequency) {
+  const dates = [];
+  for (let i = 0; i < 60; i++) {
+    let raw;
+    if (frequency === "weekly") raw = addDays(first, 7 * i);
+    else if (frequency === "fortnightly") raw = addDays(first, 14 * i);
+    else if (frequency === "monthly") raw = addMonthsISO(first, i);
+    else if (frequency === "bimonthly") raw = addMonthsISO(first, 2 * i);
+    else raw = addMonthsISO(first, 3 * i);
+    const date = nextWeekdayISO(raw);
+    if (last && date > last) break;
+    dates.push(date);
+  }
+  return dates;
+}
+function defaultFirstReviewDate(startMonth) {
+  const monthStart = /^\d{4}-\d{2}$/.test(startMonth || "") ? `${startMonth}-01` : today();
+  return nextWeekdayISO(monthStart < today() ? today() : monthStart);
+}
+
+function SiteReviewInbox({ clients, externalConsultants }) {
+  const [requests, setRequests] = useState([]);
+  const [open, setOpen] = useState(true);
+  const [edits, setEdits] = useState({});
+  const [busy, setBusy] = useState(null);
+
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "siteReviewRequests"), (snap) => setRequests(snap.docs.map((d) => ({ id: d.id, ...d.data() }))), (err) => console.error("Site review requests subscription failed:", err));
+    return unsub;
+  }, []);
+
+  const pending = requests.filter((r) => r.status !== "done").sort((a, b) => (a.submittedDate || "").localeCompare(b.submittedDate || ""));
+  if (pending.length === 0) return null;
+
+  const people = [...TEAM, ...externalConsultants.map((c) => c.name)];
+  const get = (r) => {
+    const e = edits[r.id] || {};
+    const first = e.first || defaultFirstReviewDate(r.startMonth);
+    const cap = addMonthsISO(first, 6);
+    return {
+      clientId: e.clientId !== undefined ? e.clientId : (r.suggestedClientId || ""),
+      assignee: e.assignee || "Jo",
+      hours: e.hours !== undefined ? e.hours : "1",
+      frequency: e.frequency || r.frequency,
+      first,
+      last: e.last !== undefined ? e.last : (r.siteEnd && r.siteEnd < cap ? r.siteEnd : cap),
+    };
+  };
+  const setEdit = (id, field, value) => setEdits((prev) => ({ ...prev, [id]: { ...(prev[id] || {}), [field]: value } }));
+
+  const accept = async (r) => {
+    const v = get(r);
+    if (!v.clientId) { alert("Choose a client first."); return; }
+    const hrs = Number(v.hours) || 0;
+    const dates = siteReviewDates(v.first, v.last, v.frequency);
+    if (dates.length === 0) { alert("No review dates fall between those dates."); return; }
+    setBusy(r.id);
+    try {
+      let clientId = v.clientId;
+      let base;
+      if (clientId === "__new") {
+        clientId = "c" + Date.now();
+        base = {
+          name: r.company, legalName: r.company, logo: null,
+          contract: { start: today(), renewal: addDays(today(), 365), plan: "Plan to confirm" },
+          billing: { contact: r.contactName, email: r.email, terms: "20th of following month", status: "Current" },
+          billingType: "FlatFee", billingSetupDone: false, profile: "Standard Client", archived: false,
+          contacts: [], notes: [], reminders: [], extras: [], hours: { included: 0, log: [] }, users: { log: [] },
+          ohsmsLastIssued: null, ohsmsDue: null, intake: null,
+        };
+      } else {
+        const snap = await getDoc(doc(db, "clients", clientId));
+        base = snap.data();
+      }
+      const clientName = base.name;
+      const site = {
+        id: r.id, address: r.address, frequency: v.frequency, onApp: r.onApp, inductionDetails: r.inductionDetails || "",
+        siteStart: r.siteStart || null, siteEnd: r.siteEnd || null, requestedStartMonth: r.startMonth,
+        contactName: r.contactName, email: r.email, phone: r.phone, assignee: v.assignee, hours: hrs, addedDate: today(),
+      };
+      // One task per review on the client, each with its own linked master calendar entry, so
+      // the same review is on the client's Tasks tab, the master calendar and Jo/Judith's
+      // capacity, and its hours are logged to Activity and Billing once.
+      const tasks = [];
+      const masterEntries = [];
+      dates.forEach((date, i) => {
+        const taskId = `sitereview-${r.id}-${i}`;
+        const masterId = `mcal${Date.now()}${i}`;
+        tasks.push({ id: taskId, text: `Site review: ${r.address}`, date, recurring: "none", assignee: v.assignee, estHours: hrs, done: false, onSchedule: true, masterEntryId: masterId, siteReviewId: r.id });
+        masterEntries.push({
+          id: masterId,
+          data: {
+            title: `Site review: ${r.address}`, clientId, clientName, assignee: v.assignee, date, hours: hrs,
+            billable: true, billedHours: hrs, workType: "Site review", workTypeColor: "#13DCCC",
+            targetId: null, linked: `task:${taskId}`, confirmed: false, confirmedHoursLogId: null, siteReviewId: r.id,
+          },
+        });
+      });
+      const contacts = base.contacts || [];
+      const hasContact = contacts.some((c) => (c.email || "").toLowerCase() === (r.email || "").toLowerCase());
+      const noteLines = [
+        `Site review request accepted: ${r.address}`,
+        `${SITE_REVIEW_FREQ_LABELS[v.frequency]}, ${dates.length} reviews from ${fmtDate(dates[0])}`,
+        `On the app: ${r.onApp}`,
+        r.inductionDetails ? `Induction: ${r.inductionDetails}` : null,
+        r.siteStart ? `Site start: ${fmtDate(r.siteStart)}` : null,
+        r.siteEnd ? `Approximate closing: ${fmtDate(r.siteEnd)}` : null,
+      ].filter(Boolean);
+      const nextClient = {
+        ...base,
+        contacts: hasContact ? contacts : [...contacts, { id: Date.now(), name: r.contactName, role: "Site contact", email: r.email, phone: r.phone }],
+        siteReviews: [...(base.siteReviews || []), site],
+        reminders: [...(base.reminders || []), ...tasks],
+        notes: [...(base.notes || []), { id: Date.now(), author: "Site review form", date: today(), text: noteLines.join("\n"), tags: [] }],
+      };
+      if (v.clientId === "__new") await setDoc(doc(db, "clients", clientId), nextClient);
+      else await updateDoc(doc(db, "clients", clientId), { contacts: nextClient.contacts, siteReviews: nextClient.siteReviews, reminders: nextClient.reminders, notes: nextClient.notes });
+      await Promise.all(masterEntries.map((m) => setDoc(doc(db, "masterScheduleEntries", m.id), m.data)));
+      await updateDoc(doc(db, "siteReviewRequests", r.id), { status: "done", clientId, processedDate: today() });
+    } catch (err) {
+      console.error("Site review accept failed:", err);
+      alert(`Couldn't schedule this request: ${err.message || err}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+  const dismiss = (r) => deleteDoc(doc(db, "siteReviewRequests", r.id));
+  const inputStyle = { border: `1px solid ${T.border}`, color: T.ink };
+
+  return (
+    <Card style={{ padding: 16 }}>
+      <button onClick={() => setOpen((v) => !v)} className="w-full flex items-center justify-between text-left">
+        <div className="flex items-center gap-1.5">
+          <ChevronDown size={13} color={T.slateLight} style={{ transform: open ? "none" : "rotate(-90deg)" }} />
+          <span className="text-sm font-bold" style={{ color: T.ink }}>Site review requests</span>
+        </div>
+        <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{ background: T.amber, color: "#fff" }}>{pending.length} new</span>
+      </button>
+      {open && (
+        <div className="flex flex-col gap-3 mt-3">
+          {pending.map((r) => {
+            const v = get(r);
+            const dates = siteReviewDates(v.first, v.last, v.frequency);
+            return (
+              <div key={r.id} className="rounded-lg p-3 flex flex-col gap-2" style={{ background: T.paperAlt }}>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold" style={{ color: T.ink }}>{r.company}</div>
+                    <div className="text-xs" style={{ color: T.slate }}>{r.address}</div>
+                    <div className="text-xs mt-1" style={{ color: T.slate }}>{r.contactName} · {r.email} · {r.phone}</div>
+                  </div>
+                  <div className="text-xs shrink-0" style={{ color: T.slateLight }}>{fmtDate(r.submittedDate)}</div>
+                </div>
+                <div className="text-xs flex flex-wrap gap-x-4 gap-y-1" style={{ color: T.slate }}>
+                  <span>Wants {SITE_REVIEW_FREQ_LABELS[r.frequency]}</span>
+                  <span>From {r.startMonth}</span>
+                  <span>On the app: {r.onApp}</span>
+                  {r.siteStart && <span>Site start {fmtDate(r.siteStart)}</span>}
+                  {r.siteEnd && <span>Closing about {fmtDate(r.siteEnd)}</span>}
+                </div>
+                {r.inductionDetails && <div className="text-xs" style={{ color: T.ink }}>Induction: {r.inductionDetails}</div>}
+                <div className="flex items-center gap-2 flex-wrap pt-1">
+                  <select value={v.clientId} onChange={(e) => setEdit(r.id, "clientId", e.target.value)} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ ...inputStyle, maxWidth: 200 }}>
+                    <option value="">Choose client</option>
+                    <option value="__new">Create new client: {r.company}</option>
+                    {clients.filter((c) => !c.archived).sort((a, b) => a.name.localeCompare(b.name)).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                  <select value={v.assignee} onChange={(e) => setEdit(r.id, "assignee", e.target.value)} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle}>
+                    {people.map((m) => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                  <select value={v.frequency} onChange={(e) => setEdit(r.id, "frequency", e.target.value)} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle}>
+                    {Object.entries(SITE_REVIEW_FREQ_LABELS).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+                  </select>
+                  <input type="number" min="0" step="0.25" value={v.hours} onChange={(e) => setEdit(r.id, "hours", e.target.value)} placeholder="hrs each" className="w-20 text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle} />
+                  <input type="date" value={v.first} onChange={(e) => setEdit(r.id, "first", e.target.value)} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle} />
+                  <input type="date" value={v.last} onChange={(e) => setEdit(r.id, "last", e.target.value)} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle} />
+                </div>
+                <div className="flex items-center justify-between">
+                  <div className="text-xs" style={{ color: T.slate }}>{dates.length} review{dates.length === 1 ? "" : "s"}{dates.length > 0 ? `, ${fmtDate(dates[0])} to ${fmtDate(dates[dates.length - 1])}` : ""}</div>
+                  <div className="flex items-center gap-2">
+                    <ConfirmButton onConfirm={() => dismiss(r)} title="Dismiss request" iconSize={13} />
+                    <button onClick={() => accept(r)} disabled={busy === r.id} className="text-xs font-semibold px-3 py-1.5 rounded-lg" style={{ background: T.tealDark, color: "#fff", opacity: busy === r.id ? 0.6 : 1 }}>
+                      {busy === r.id ? "Scheduling…" : "Assign and schedule"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// The sites a client has asked OSHE to review, shown at the top of their Tasks tab.
+function ClientSiteReviews({ client }) {
+  const sites = client.siteReviews || [];
+  if (sites.length === 0) return null;
+  return (
+    <Card style={{ padding: 14 }}>
+      <div className="text-sm font-semibold mb-2" style={{ color: T.ink }}>Site reviews</div>
+      <div className="flex flex-col gap-1.5">
+        {sites.map((s) => {
+          const next = (client.reminders || []).filter((r) => r.siteReviewId === s.id && !r.done).sort((a, b) => (a.date || "").localeCompare(b.date || ""))[0];
+          return (
+            <div key={s.id} className="flex items-center justify-between text-xs rounded-lg px-2.5 py-1.5" style={{ background: T.paperAlt }}>
+              <div style={{ color: T.ink }}>{s.address}<span className="ml-2" style={{ color: T.slate }}>{SITE_REVIEW_FREQ_LABELS[s.frequency]} · {s.assignee} · app {s.onApp}</span></div>
+              <div style={{ color: T.slate }}>{next ? `Next ${fmtDate(next.date)}` : "None open"}</div>
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
+
 function gatherWorkloadItems(person, tasks, onboardings, clients, scheduleBlocks, start, end) {
   const items = [];
   tasks.filter((t) => t.assignee === person && !t.done && t.dueDate && t.dueDate >= start && t.dueDate < end).forEach((t) => {
@@ -11983,6 +12223,9 @@ function ScheduleView({ tasks, clients, onboardings, scheduleBlocks, addSchedule
   return (
     <div className="flex flex-col gap-4 h-full min-h-0 overflow-y-auto">
       <ErrorBoundary>
+        <SiteReviewInbox clients={clients} externalConsultants={externalConsultants} />
+      </ErrorBoundary>
+      <ErrorBoundary>
         <MasterScheduleCalendar
           clients={clients} tasks={tasks} onboardings={onboardings}
           entries={masterScheduleEntries} addEntry={addMasterScheduleEntry} updateEntry={updateMasterScheduleEntry}
@@ -12092,7 +12335,18 @@ function ScheduleView({ tasks, clients, onboardings, scheduleBlocks, addSchedule
   );
 }
 
-export default function App() {
+// The public pages (site reviews, and later pre-qual and training) live on their own
+// subdomains but run from this same app. The hostname decides which page shows, with
+// ?page=sitereviews available for trying one out on any address.
+function App() {
+  const host = typeof window !== "undefined" ? window.location.hostname : "";
+  const forced = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("page") : null;
+  if (forced === "sitereviews" || host.startsWith("sitereviews.")) return <SiteReviewForm />;
+  return <CrmApp />;
+}
+export default App;
+
+function CrmApp() {
   const [module, setModule] = useState("overview");
   // Detect a mobile-width viewport and default straight into the Quick Add screen the first
   // time — field staff on their phone want notes/tasks fast, not the full desktop layout.

@@ -165,6 +165,7 @@ const termsSections = [
     "OSHE accepts no responsibility for failure to implement or modify templates or forms appropriately.",
   ]},
   { title: "9. Payment Terms", body: [
+    "The first invoice is issued on sign up and is due on the 20th of the current month.",
     "Invoices are due on the 20th of the month following the invoice date unless otherwise agreed.",
     "A late payment fee or interest may be applied to overdue invoices at a rate of up to 15%, representing a reasonable estimate of administration and recovery costs.",
     "The Company is responsible for all debt recovery costs incurred in the event of non payment.",
@@ -493,6 +494,63 @@ exports.submitSignup = onCall({ cors: true, memory: "512MiB" }, async (request) 
   }
 
   return { clientId };
+});
+
+/* ---------- Site review requests (public form at sitereviews.*) ----------
+   The public page can't write to Firestore directly, so it calls this. It stores the request
+   for the team to assign to a client and schedule from the CRM's Schedule tab. */
+const SITE_REVIEW_FREQUENCIES = ["weekly", "fortnightly", "monthly", "bimonthly", "quarterly"];
+function clip(v, max) {
+  return String(v == null ? "" : v).trim().slice(0, max);
+}
+exports.submitSiteReview = onCall({ cors: true }, async (request) => {
+  const d = request.data || {};
+  // Filled in only by bots.
+  if (d.website) return { ok: true };
+
+  const company = clip(d.company, 200);
+  const address = clip(d.address, 300);
+  const contactName = clip(d.contactName, 120);
+  const email = clip(d.email, 200);
+  const phone = clip(d.phone, 60);
+  const frequency = clip(d.frequency, 20);
+  const startMonth = clip(d.startMonth, 7);
+  const onApp = clip(d.onApp, 20);
+  if (!company || !address || !contactName || !email || !phone) {
+    throw new HttpsError("invalid-argument", "Missing required details.");
+  }
+  if (!SITE_REVIEW_FREQUENCIES.includes(frequency)) {
+    throw new HttpsError("invalid-argument", "Please choose how often you would like site reviews.");
+  }
+  if (!/^\d{4}-\d{2}$/.test(startMonth)) {
+    throw new HttpsError("invalid-argument", "Please choose a start month.");
+  }
+  if (!["Yes", "No", "Not sure"].includes(onApp)) {
+    throw new HttpsError("invalid-argument", "Please say whether the site is on the app.");
+  }
+  const isoDate = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || "")) ? String(v) : null);
+
+  // Suggest an existing client when the name matches, so the team just confirms it.
+  let suggestedClientId = null;
+  const clientsSnap = await db.collection("clients").get();
+  const wanted = company.toLowerCase();
+  clientsSnap.forEach((c) => {
+    const data = c.data();
+    if (suggestedClientId || data.archived) return;
+    if (String(data.name || "").toLowerCase() === wanted || String(data.legalName || "").toLowerCase() === wanted) suggestedClientId = c.id;
+  });
+
+  const id = "sr" + Date.now();
+  await db.collection("siteReviewRequests").doc(id).set({
+    status: "new",
+    submittedDate: today(),
+    company, address, contactName, email, phone, frequency, startMonth, onApp,
+    inductionDetails: clip(d.inductionDetails, 2000),
+    siteStart: isoDate(d.siteStart),
+    siteEnd: isoDate(d.siteEnd),
+    suggestedClientId,
+  });
+  return { ok: true };
 });
 
 /* ---------- Email sending (Resend) ----------

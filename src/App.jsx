@@ -5112,11 +5112,28 @@ function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, wor
   const logStageHours = (instId, stepId) => {
     const inst = (onboardings[client.id] || []).find((i) => i.id === instId);
     const step = inst && inst.steps.find((s) => s.id === stepId);
-    if (!step || !(Number(step.estHours) > 0)) return;
+    if (!step) return;
     const logId = `wf-stage-${instId}-${stepId}`;
-    if ((client.hours?.log || []).some((h) => h.id === logId)) return;
-    const entry = { id: logId, date: today(), member: step.owner, hours: Number(step.estHours), description: `${inst.workflowName}: ${step.title}` };
-    updateDoc(doc(db, "clients", client.id), { hours: { ...client.hours, log: [...(client.hours?.log || []), entry] } });
+    const log = client.hours?.log || [];
+    const linkKey = `${instId}|${stepId}`;
+    const linkedOpen = (client.reminders || []).filter((r) => r.linkedStep === linkKey && !r.done);
+    const needsEntry = Number(step.estHours) > 0 && !log.some((h) => h.id === logId);
+    if (!needsEntry && linkedOpen.length === 0) return;
+    const update = {};
+    if (needsEntry) {
+      update.hours = { ...client.hours, log: [...log, { id: logId, date: today(), member: step.owner, hours: Number(step.estHours), description: `${inst.workflowName}: ${step.title}`, src: { t: "s", inst: instId, step: stepId } }] };
+    }
+    // A task linked to this stage is the same job, so finishing the stage finishes it too.
+    if (linkedOpen.length > 0) update.reminders = (client.reminders || []).map((r) => (r.linkedStep === linkKey ? { ...r, done: true } : r));
+    updateDoc(doc(db, "clients", client.id), update);
+  };
+  // Changing a stage's hours after it's logged updates the same log entry.
+  const setStepHours = (inst, s, value) => {
+    updateStepField(inst.id, s.id, "estHours", value);
+    const logId = `wf-stage-${inst.id}-${s.id}`;
+    if ((client.hours?.log || []).some((h) => h.id === logId)) {
+      updateDoc(doc(db, "clients", client.id), { hours: { ...client.hours, log: client.hours.log.map((h) => (h.id === logId ? { ...h, hours: Number(value) || 0 } : h)) } });
+    }
   };
   const markDone = (instId, stepId) => {
     logStageHours(instId, stepId);
@@ -5218,7 +5235,7 @@ function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, wor
     const logId = "wf-billable-" + inst.id;
     const withoutOld = (client.hours?.log || []).filter((h) => h.id !== logId);
     const nextLog = billable && safeHours
-      ? [...withoutOld, { id: logId, date: inst.completedDate || today(), member: "Workflow", hours: Number(safeHours) || 0, description: `Billable: ${inst.workflowName}` }]
+      ? [...withoutOld, { id: logId, date: inst.completedDate || today(), member: "Workflow", hours: Number(safeHours) || 0, description: `Billable: ${inst.workflowName}`, src: { t: "b", inst: inst.id } }]
       : withoutOld;
     updateDoc(doc(db, "clients", client.id), { hours: { ...client.hours, log: nextLog } });
   };
@@ -5292,7 +5309,7 @@ function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, wor
                   <input type="number" min="0" step="0.5" value={inst.billableHours ?? ""}
                     onChange={(e) => setInstanceBillable(inst, true, e.target.value ? Number(e.target.value) : 0)}
                     placeholder="0" className="w-16 px-2 py-1 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
-                  <span>extra hrs not covered by the stage hours below (stage hours log automatically when each stage is done)</span>
+                  <span>extra hrs</span>
                 </>
               )}
             </div>
@@ -5320,17 +5337,14 @@ function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, wor
                               <input type="date" value={s.dueDate || ""} onChange={(e) => updateStepField(inst.id, s.id, "dueDate", e.target.value)}
                                 className="text-xs px-1.5 py-0.5 rounded-md outline-none" style={{ border: `1px solid ${T.border}`, color: urgencyColor(s.dueDate) }} />
                             )}
-                            {s.done ? (
-                              Number(s.estHours) > 0 && <span style={{ color: T.slateLight }}>{s.estHours}h logged</span>
-                            ) : (
-                              <span className="flex items-center gap-1">
-                                <input type="number" min="0" step="0.25" value={s.estHours ?? ""} placeholder="0"
-                                  onChange={(e) => updateStepField(inst.id, s.id, "estHours", e.target.value ? Number(e.target.value) : 0)}
-                                  title="Hours for this stage: logged to Activity and Billing when it's marked done"
-                                  className="w-14 text-xs px-1.5 py-0.5 rounded-md outline-none text-center" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
-                                hrs
-                              </span>
-                            )}
+                            <span className="flex items-center gap-1">
+                              <input type="number" min="0" step="0.25" value={s.estHours ?? ""} placeholder="0"
+                                onChange={(e) => setStepHours(inst, s, e.target.value ? Number(e.target.value) : 0)}
+                                title="Hours for this stage"
+                                className="w-14 text-xs px-1.5 py-0.5 rounded-md outline-none text-center" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+                              hrs
+                            </span>
+                            {!s.done && SCHEDULE_PEOPLE.includes(s.owner) && s.dueDate && Number(s.estHours) > 0 && <Pill color={T.blue} bg={T.paperAlt}>On schedule</Pill>}
                             {s.recurring && s.recurring !== "none" && (
                               <span className="flex items-center gap-1" style={{ color: T.slateLight }}><Repeat size={10} /> {s.recurring}</span>
                             )}
@@ -5396,6 +5410,23 @@ function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, wor
       )}
     </div>
   );
+}
+
+// One hours-log entry per job, whichever screen it was finished from. The id is derived
+// from the job itself, so completing it from a task, a workflow stage or the schedule can
+// only ever write the same entry once.
+function reminderLogId(r) {
+  if (r.linkedStep) return `wf-stage-${String(r.linkedStep).replace("|", "-")}`;
+  if (String(r.id).startsWith("sched-task-")) return `sched-hours-${r.id}`;
+  if (r.recurring && r.recurring !== "none") return `task-hours-${r.id}-${r.date}`;
+  return `task-hours-${r.id}`;
+}
+function hoursEntrySource(h) {
+  if (h.src) return h.src;
+  const id = String(h.id);
+  if (id.startsWith("sched-hours-")) return { t: "r", id: id.slice("sched-hours-".length) };
+  if (id.startsWith("wf-billable-")) return { t: "b", inst: id.slice("wf-billable-".length) };
+  return null;
 }
 
 /* ---------- Files tab + task card (shared helpers) ---------- */
@@ -5471,10 +5502,15 @@ function ClientFilesTab({ client, updateClient }) {
   return (
     <div className="flex flex-col gap-3">
       <Card style={{ padding: 14 }}>
-        <div className="flex items-center justify-between mb-2">
-          <div className="flex items-center gap-1.5 text-sm font-semibold" style={{ color: T.ink }}>
+        {crumb && (
+          <button onClick={() => setOpenFolder(null)} className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg mb-3" style={{ background: T.paperAlt, color: T.tealDark }}>
+            <ChevronLeft size={14} /> Back to all folders
+          </button>
+        )}
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-1.5 text-base font-semibold" style={{ color: T.ink }}>
             <button onClick={() => setOpenFolder(null)} style={{ color: crumb ? T.tealDark : T.ink }}>Files</button>
-            {crumb && (<><ChevronRight size={13} color={T.slateLight} /><span>{crumb}</span></>)}
+            {crumb && (<><ChevronRight size={14} color={T.slateLight} /><span>{crumb}</span></>)}
           </div>
           {current && (
             <div className="flex items-center gap-2 text-xs">
@@ -5506,7 +5542,6 @@ function ClientFilesTab({ client, updateClient }) {
 
         {openFolder === "__generated" ? (
           <div className="flex flex-col gap-1.5">
-            <div className="text-[11px] mb-1" style={{ color: T.slateLight }}>Every Manual, Policy, Procedure, ERP and Report generated for {client.name} is filed here automatically.</div>
             {[...generated].reverse().map((d) => (
               <div key={d.id} className="flex items-center justify-between text-xs rounded-lg px-2.5 py-1.5" style={{ background: T.paperAlt }}>
                 <button onClick={() => openStoragePath(d.path)} className="truncate text-left flex-1 flex items-center gap-2" style={{ color: T.tealDark }} title={d.name}>
@@ -5544,7 +5579,6 @@ function ClientFilesTab({ client, updateClient }) {
               <Upload size={13} /> {uploading ? "Uploading…" : `Upload to ${crumb || "top level"}`}
               <input type="file" multiple className="hidden" disabled={uploading} onChange={(e) => { upload(e.target.files); e.target.value = ""; }} />
             </label>
-            <div className="text-[11px] mt-1.5" style={{ color: T.slateLight }}>Any file type. Save an email as .eml/.msg/PDF first to file correspondence.</div>
           </>
         )}
       </Card>
@@ -5556,20 +5590,28 @@ function ClientFilesTab({ client, updateClient }) {
 // date, owner and hours on the task itself: the Schedule tab's workload already counts
 // client tasks that have estimated hours, so no separate block is created (that would
 // count the same hours twice).
-function ClientTaskCard({ client, r, updateClient, toggleReminderDone, removeReminder }) {
+function ClientTaskCard({ client, r, updateClient, toggleReminderDone, removeReminder, openSteps }) {
   const [mode, setMode] = useState(null); // null | "edit" | "schedule"
   const [draft, setDraft] = useState(null);
   const [uploading, setUploading] = useState(false);
-  const patch = (changes) => updateClient((c) => ({ ...c, reminders: c.reminders.map((x) => (x.id === r.id ? { ...x, ...changes } : x)) }));
+  // Editing a task also updates the hours-log entry it already produced, so the numbers in
+  // Activity and Billing never drift from what the task says.
+  const patch = (changes) => updateClient((c) => {
+    const next = { ...r, ...changes };
+    if (next.linkedStep === "") delete next.linkedStep;
+    const lid = reminderLogId(r);
+    const log = (c.hours?.log || []).map((h) => (h.id === lid ? { ...h, hours: Number(next.estHours) || 0, member: next.assignee || h.member } : h));
+    return { ...c, reminders: c.reminders.map((x) => (x.id === r.id ? next : x)), hours: { ...c.hours, log } };
+  });
   const startMode = (m) => {
-    setDraft({ text: r.text, date: r.date || today(), assignee: r.assignee || TEAM[0], estHours: r.estHours || "", recurring: r.recurring || "none" });
+    setDraft({ text: r.text, date: r.date || today(), assignee: r.assignee || TEAM[0], estHours: r.estHours || "", recurring: r.recurring || "none", linkedStep: r.linkedStep || "" });
     setMode(m);
   };
   const save = () => {
     if (mode === "edit" && !draft.text.trim()) return;
     if (mode === "schedule" && (!draft.date || !draft.estHours)) { alert("Pick a date and the hours to book."); return; }
     const base = { date: draft.date, assignee: draft.assignee, estHours: draft.estHours ? Number(draft.estHours) : 0 };
-    patch(mode === "edit" ? { ...base, text: draft.text.trim(), recurring: draft.recurring } : { ...base, onSchedule: true });
+    patch(mode === "edit" ? { ...base, text: draft.text.trim(), recurring: draft.recurring, linkedStep: draft.linkedStep } : { ...base, onSchedule: true });
     setMode(null);
   };
   const attach = async (fileList) => {
@@ -5608,6 +5650,7 @@ function ClientTaskCard({ client, r, updateClient, toggleReminderDone, removeRem
               {r.recurring !== "none" && <span className="flex items-center gap-1"><Repeat size={11} /> {r.recurring}</span>}
               <Pill color={T.tealDark} bg={T.paperAlt}>{r.assignee || "Unassigned"}</Pill>
               {r.onSchedule && <Pill color={T.blue} bg={T.paperAlt}>On schedule</Pill>}
+              {r.linkedStep && <Pill color={T.amber} bg={T.paperAlt}>Linked to workflow</Pill>}
             </div>
           </div>
         </div>
@@ -5620,7 +5663,7 @@ function ClientTaskCard({ client, r, updateClient, toggleReminderDone, removeRem
           <button onClick={() => (mode === "edit" ? setMode(null) : startMode("edit"))} className="text-[11px] font-semibold px-2 py-1 rounded-lg" style={{ background: T.paperAlt, color: T.tealDark }}>Edit</button>
           <input type="number" min="0" step="0.25" value={r.estHours || ""}
             onChange={(e) => patch({ estHours: e.target.value ? Number(e.target.value) : 0 })}
-            placeholder="hrs" title="Estimated hours — counts toward Schedule workload"
+            placeholder="hrs" title="Estimated hours, counts toward Schedule workload"
             className="w-14 text-xs px-1.5 py-1 rounded-lg outline-none text-center" style={inputStyle} />
           <button onClick={() => removeReminder(r.id)}><Trash2 size={14} color={T.slateLight} /></button>
         </div>
@@ -5641,9 +5684,14 @@ function ClientTaskCard({ client, r, updateClient, toggleReminderDone, removeRem
               <option value="none">One-off</option><option value="monthly">Monthly</option><option value="quarterly">Quarterly</option><option value="yearly">Yearly</option>
             </select>
           )}
+          {mode === "edit" && (openSteps || []).length > 0 && (
+            <select value={draft.linkedStep} onChange={(e) => setDraft({ ...draft, linkedStep: e.target.value })} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ ...inputStyle, maxWidth: 240 }}>
+              <option value="">Not linked to a workflow stage</option>
+              {openSteps.map((o) => <option key={o.key} value={o.key}>Linked: {o.label}</option>)}
+            </select>
+          )}
           <button onClick={save} className="text-xs font-semibold px-3 py-1.5 rounded-lg" style={{ background: T.tealDark, color: "#fff" }}>{mode === "schedule" ? "Add to schedule" : "Save"}</button>
           <button onClick={() => setMode(null)} className="text-xs font-semibold px-3 py-1.5 rounded-lg" style={{ background: T.paperAlt, color: T.slate }}>Cancel</button>
-          {mode === "schedule" && <div className="w-full text-[11px]" style={{ color: T.slateLight }}>Books the task into the Schedule tab workload on that date, no separate entry is created.</div>}
         </div>
       )}
 
@@ -5699,6 +5747,7 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
   }, [tabRequest && tabRequest.nonce]);
   const [newHour, setNewHour] = useState({ member: TEAM[0], hours: "", description: "", date: today() });
   const [newExtra, setNewExtra] = useState({ description: "", hours: "" });
+  const [editingHour, setEditingHour] = useState(null);
   const [newUserCount, setNewUserCount] = useState("");
   const [newContact, setNewContact] = useState({ name: "", role: "", email: "", phone: "" });
   const [noteDraft, setNoteDraft] = useState({ text: "", tags: [] });
@@ -5851,6 +5900,27 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
   };
   // Deletes straight out of the same hours log Billing reads from — nothing else to sync,
   // it disappears from the itemised Billing breakdown the moment it's gone here.
+  // Saving an edited entry also writes the new hours/owner back to whatever produced it (a
+  // task, a workflow stage or a billable workflow), so both places always agree.
+  const saveEditedHour = () => {
+    const e = editingHour;
+    if (!e || !e.description.trim() || !e.date) return;
+    const hrs = Number(e.hours) || 0;
+    const entry = client.hours.log.find((h) => h.id === e.id);
+    const src = entry ? hoursEntrySource(entry) : null;
+    updateClient((c) => {
+      let next = { ...c, hours: { ...c.hours, log: c.hours.log.map((h) => (h.id === e.id ? { ...h, member: e.member, date: e.date, description: e.description.trim(), hours: hrs } : h)) } };
+      if (src && src.t === "r") next = { ...next, reminders: (c.reminders || []).map((r) => (String(r.id) === String(src.id) ? { ...r, estHours: hrs, assignee: e.member } : r)) };
+      return next;
+    });
+    if (src && src.t === "s") {
+      updateOnboardingsForClient(client.id, (list) => list.map((i) => (i.id === src.inst ? { ...i, steps: i.steps.map((st) => (st.id === src.step ? { ...st, estHours: hrs, owner: e.member } : st)) } : i)));
+    }
+    if (src && src.t === "b") {
+      updateOnboardingsForClient(client.id, (list) => list.map((i) => (i.id === src.inst ? { ...i, billableHours: hrs } : i)));
+    }
+    setEditingHour(null);
+  };
   const removeHour = (id) => updateClient((c) => ({ ...c, hours: { ...c.hours, log: c.hours.log.filter((h) => h.id !== id) } }));
   const addUserCount = () => {
     if (!newUserCount) return;
@@ -5955,13 +6025,13 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
         ? [...c.notes, { id: Date.now(), author: currentUser || "You", date: today(), text: `Completed reminder: "${reminder.text}"` }]
         : c.notes;
       let hours = c.hours;
-      if (completing && String(id).startsWith("sched-task-") && reminder.estHours) {
-        const logId = `sched-hours-${id}`;
-        const alreadyLogged = (c.hours?.log || []).some((h) => h.id === logId);
-        if (!alreadyLogged) {
-          const logEntry = { id: logId, date: today(), member: reminder.assignee, hours: reminder.estHours, description: `Schedule: ${reminder.text}` };
-          hours = { ...c.hours, log: [...(c.hours?.log || []), logEntry] };
-        }
+      const logId = reminderLogId(reminder);
+      const existing = (c.hours?.log || []).some((h) => h.id === logId);
+      if (completing && reminder.estHours && !existing) {
+        const logEntry = { id: logId, date: today(), member: reminder.assignee || "Team", hours: reminder.estHours, description: String(id).startsWith("sched-task-") ? `Schedule: ${reminder.text}` : reminder.text, src: { t: "r", id } };
+        hours = { ...c.hours, log: [...(c.hours?.log || []), logEntry] };
+      } else if (!completing && existing) {
+        hours = { ...c.hours, log: (c.hours?.log || []).filter((h) => h.id !== logId) };
       }
       return { ...c, reminders, notes, hours };
     });
@@ -5978,13 +6048,14 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
     // stick — the real way to stop it recurring for good is deleting the schedule entry
     // itself (Scheduling tab), this is just for "skip this one occurrence".
     if (String(id).startsWith("sched-task-")) {
-      const logId = `sched-hours-${id}`;
+      const logId = reminderLogId({ id });
       patch.hours = { ...c.hours, log: (c.hours?.log || []).filter((h) => h.id !== logId) };
       patch.deletedScheduleTaskIds = [...(c.deletedScheduleTaskIds || []), id];
     }
     return { ...c, ...patch };
   });
 
+  const openSteps = (onboardings[client.id] || []).filter((i) => !i.completedDate).flatMap((i) => i.steps.filter((s) => !s.done).map((s) => ({ key: `${i.id}|${s.id}`, label: `${i.workflowName}: ${s.title}` })));
   const dueIn = daysUntil(client.ohsmsDue);
   const urgency = dueIn < 0 ? { label: "Overdue", color: T.coral } : dueIn <= 30 ? { label: `Due in ${dueIn}d`, color: T.amber } : { label: "On track", color: T.tealDark };
 
@@ -6427,7 +6498,6 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
               {(onboardings[client.id] || []).some((i) => i.billable) && (
                 <Card style={{ padding: 16 }}>
                   <div className="text-sm font-semibold mb-1" style={{ color: T.ink }}>Billable workflows</div>
-                  <div className="text-[11px] mb-3" style={{ color: T.slateLight }}>Already counted in the hours log below — this is just the rollup across all workflows.</div>
                   <div className="flex flex-col gap-2">
                     {(onboardings[client.id] || []).filter((i) => i.billable).map((i) => (
                       <div key={i.id} className="flex items-center justify-between text-sm py-1.5" style={{ borderBottom: `1px solid ${T.border}` }}>
@@ -6455,14 +6525,28 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
                 </div>
                 <div className="flex flex-col gap-2 mb-3">
                   {client.hours.log.filter((h) => h.date.slice(0, 7) === viewMonth).map((h) => (
-                    <div key={h.id} className="flex items-center justify-between text-sm py-1.5" style={{ borderBottom: `1px solid ${T.border}` }}>
-                      <div><span className="font-medium" style={{ color: T.ink }}>{h.member}</span><span className="ml-2" style={{ color: T.slate }}>{h.description}</span></div>
-                      <div className="flex items-center gap-3 shrink-0">
-                        <span style={{ color: T.slate }}>{fmtDate(h.date)}</span>
-                        <span className="font-bold" style={{ color: T.tealDark }}>{h.hours}h</span>
-                        <ConfirmButton onConfirm={() => removeHour(h.id)} title="Remove this hours entry" iconSize={13} />
+                    editingHour && editingHour.id === h.id ? (
+                      <div key={h.id} className="flex items-center gap-2 flex-wrap py-1.5" style={{ borderBottom: `1px solid ${T.border}` }}>
+                        <select value={editingHour.member} onChange={(e) => setEditingHour({ ...editingHour, member: e.target.value })} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
+                          {[...new Set([...TEAM, editingHour.member])].map((m) => <option key={m} value={m}>{m}</option>)}
+                        </select>
+                        <input type="date" value={editingHour.date} onChange={(e) => setEditingHour({ ...editingHour, date: e.target.value })} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+                        <input value={editingHour.description} onChange={(e) => setEditingHour({ ...editingHour, description: e.target.value })} className="flex-1 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink, minWidth: 140 }} />
+                        <input type="number" min="0" step="0.25" value={editingHour.hours} onChange={(e) => setEditingHour({ ...editingHour, hours: e.target.value })} className="w-16 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+                        <button onClick={saveEditedHour} className="text-xs font-semibold px-3 py-1.5 rounded-lg" style={{ background: T.tealDark, color: "#fff" }}>Save</button>
+                        <button onClick={() => setEditingHour(null)} className="text-xs font-semibold px-3 py-1.5 rounded-lg" style={{ background: T.paperAlt, color: T.slate }}>Cancel</button>
                       </div>
-                    </div>
+                    ) : (
+                      <div key={h.id} className="flex items-center justify-between text-sm py-1.5" style={{ borderBottom: `1px solid ${T.border}` }}>
+                        <div><span className="font-medium" style={{ color: T.ink }}>{h.member}</span><span className="ml-2" style={{ color: T.slate }}>{h.description}</span></div>
+                        <div className="flex items-center gap-3 shrink-0">
+                          <span style={{ color: T.slate }}>{fmtDate(h.date)}</span>
+                          <span className="font-bold" style={{ color: T.tealDark }}>{h.hours}h</span>
+                          <button onClick={() => setEditingHour({ id: h.id, member: h.member, date: h.date, description: h.description, hours: h.hours })} className="text-[11px] font-semibold" style={{ color: T.tealDark }}>Edit</button>
+                          <ConfirmButton onConfirm={() => removeHour(h.id)} title="Remove this hours entry" iconSize={13} />
+                        </div>
+                      </div>
+                    )
                   ))}
                   {client.hours.log.filter((h) => h.date.slice(0, 7) === viewMonth).length === 0 && (
                     <div className="text-xs" style={{ color: T.slateLight }}>No hours logged {viewMonth === currentMonth() ? "yet this month" : `for ${monthLabel(viewMonth)}`}.</div>
@@ -6510,7 +6594,7 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
                         <div className="flex items-center gap-2">
                           {e.status !== "Done" && (
                             <button onClick={() => scheduleExtra(e)} className="text-[11px] font-semibold px-2 py-1 rounded-lg flex items-center gap-1" style={{ background: T.paperAlt, color: T.tealDark }}
-                              title="Creates a task on the Tasks tab, which counts in the Schedule workload">
+                              title="Add to schedule">
                               <CalendarClock size={12} /> {(client.reminders || []).some((r) => r.id === "extra-sched-" + e.id) ? "On schedule" : "Add to schedule"}
                             </button>
                           )}
@@ -6540,7 +6624,6 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
 
           {tab === "notes" && (
             <div className="flex flex-col gap-3">
-              <div className="text-[11px]" style={{ color: T.slateLight }}>Files, emails and generated PDFs now live on the Files tab.</div>
               <Card style={{ padding: 14 }}>
                 <textarea placeholder="Write a client note..." rows={2} value={noteDraft.text} onChange={(e) => setNoteDraft({ ...noteDraft, text: e.target.value })}
                   className="w-full text-sm outline-none resize-none bg-transparent" style={{ color: T.ink }} />
@@ -6574,7 +6657,7 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
           {tab === "reminders" && (
             <div className="flex flex-col gap-3">
               {client.reminders.map((r) => (
-                <ClientTaskCard key={r.id} client={client} r={r} updateClient={updateClient} toggleReminderDone={toggleReminderDone} removeReminder={removeReminder} />
+                <ClientTaskCard key={r.id} client={client} r={r} updateClient={updateClient} toggleReminderDone={toggleReminderDone} removeReminder={removeReminder} openSteps={openSteps} />
               ))}
               {client.reminders.length === 0 && <div className="text-xs" style={{ color: T.slateLight }}>No tasks yet.</div>}
               <Card style={{ padding: 14 }} className="flex items-center gap-2 flex-wrap">
@@ -6583,7 +6666,7 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
                 <input type="date" value={newReminder.date} onChange={(e) => setNewReminder({ ...newReminder, date: e.target.value })}
                   className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
                 <input type="number" min="0" step="0.25" placeholder="hrs" value={newReminder.estHours} onChange={(e) => setNewReminder({ ...newReminder, estHours: e.target.value })}
-                  title="Estimated hours — counts toward Schedule workload"
+                  title="Estimated hours, counts toward Schedule workload"
                   className="w-16 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
                 <select value={newReminder.assignee} onChange={(e) => setNewReminder({ ...newReminder, assignee: e.target.value })}
                   className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
@@ -9918,7 +10001,7 @@ function TasksView({ tasks, clients, onboardings, currentUser, goToClient, resel
               </div>
               <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
                 <input type="number" min="0" step="0.5" value={t.estHours || ""} onChange={(e) => setEstHours(t.id, e.target.value)}
-                  placeholder="hrs" title="Estimated hours — counts toward Schedule workload"
+                  placeholder="hrs" title="Estimated hours, counts toward Schedule workload"
                   className="w-14 text-xs px-1.5 py-1 rounded-lg outline-none text-center" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
                 <select value={t.priority} onChange={(e) => setPriority(t.id, e.target.value)} className="text-xs font-semibold px-2.5 py-1 rounded-full outline-none border-none"
                   style={{ color: meta.color, background: meta.bg }}>
@@ -9958,7 +10041,7 @@ function TasksView({ tasks, clients, onboardings, currentUser, goToClient, resel
         <input type="date" value={draft.dueDate} onChange={(e) => setDraft({ ...draft, dueDate: e.target.value })}
           className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
         <input type="number" min="0" step="0.5" placeholder="hrs" value={draft.estHours} onChange={(e) => setDraft({ ...draft, estHours: e.target.value })}
-          title="Estimated hours — counts toward Schedule workload"
+          title="Estimated hours, counts toward Schedule workload"
           className="w-16 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
         <select value={draft.priority} onChange={(e) => setDraft({ ...draft, priority: e.target.value })} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }}>
           {Object.keys(priorityMeta).map((p) => <option key={p} value={p}>{p}</option>)}
@@ -10079,7 +10162,7 @@ function WorkflowsView({ workflows }) {
                   {step.type !== "email" && (
                     <>
                       <input type="number" min="0" step="0.5" value={step.estHours ?? ""} onChange={(e) => updateWorkflow(wf.id, (w) => ({ ...w, steps: w.steps.map((s) => (s.id === step.id ? { ...s, estHours: e.target.value ? Number(e.target.value) : 0 } : s)) }))}
-                        className="w-14 px-2 py-1.5 rounded-lg outline-none text-xs" style={{ border: `1px solid ${T.border}`, color: T.ink }} title="Estimated hours — counts toward Schedule workload" placeholder="hrs" />
+                        className="w-14 px-2 py-1.5 rounded-lg outline-none text-xs" style={{ border: `1px solid ${T.border}`, color: T.ink }} title="Estimated hours, counts toward Schedule workload" placeholder="hrs" />
                       <span className="text-[11px] shrink-0" style={{ color: T.slateLight }}>hrs</span>
                     </>
                   )}
@@ -11325,8 +11408,10 @@ function gatherWorkloadItems(person, tasks, onboardings, clients, scheduleBlocks
     items.push({ type: "task", title: t.title, date: t.dueDate, hours: t.estHours || 0, clientId: t.clientId, clientName: t.clientName });
   });
   clients.forEach((c) => {
+    const linkedKeys = new Set((c.reminders || []).filter((r) => r.linkedStep && !r.done).map((r) => r.linkedStep));
     (onboardings[c.id] || []).forEach((inst) => {
       inst.steps.forEach((step) => {
+        if (linkedKeys.has(`${inst.id}|${step.id}`)) return;
         if (step.owner === person && !step.done && step.dueDate && step.dueDate >= start && step.dueDate < end) {
           items.push({ type: "workflow", title: step.title, date: step.dueDate, hours: step.estHours || 0, clientId: c.id, clientName: c.name, workflowName: inst.workflowName });
         }

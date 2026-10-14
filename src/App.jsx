@@ -5106,7 +5106,20 @@ function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, wor
   const activeList = list.filter((i) => !i.completedDate);
   const archived = list.filter((i) => i.completedDate);
 
+  // Each stage's hours are logged into this client's hours log (the same one Activity and
+  // Billing read) the moment the stage is completed, keyed by a fixed id so it can never be
+  // logged twice.
+  const logStageHours = (instId, stepId) => {
+    const inst = (onboardings[client.id] || []).find((i) => i.id === instId);
+    const step = inst && inst.steps.find((s) => s.id === stepId);
+    if (!step || !(Number(step.estHours) > 0)) return;
+    const logId = `wf-stage-${instId}-${stepId}`;
+    if ((client.hours?.log || []).some((h) => h.id === logId)) return;
+    const entry = { id: logId, date: today(), member: step.owner, hours: Number(step.estHours), description: `${inst.workflowName}: ${step.title}` };
+    updateDoc(doc(db, "clients", client.id), { hours: { ...client.hours, log: [...(client.hours?.log || []), entry] } });
+  };
   const markDone = (instId, stepId) => {
+    logStageHours(instId, stepId);
     updateOnboardingsForClient(client.id, (clientList) => clientList.map((inst) => {
       if (inst.id !== instId) return inst;
       // Recurring steps complete like any other step here. They don't reopen themselves or
@@ -5279,7 +5292,7 @@ function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, wor
                   <input type="number" min="0" step="0.5" value={inst.billableHours ?? ""}
                     onChange={(e) => setInstanceBillable(inst, true, e.target.value ? Number(e.target.value) : 0)}
                     placeholder="0" className="w-16 px-2 py-1 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
-                  <span>hrs for this workflow, added to this client's Activity hours log</span>
+                  <span>extra hrs not covered by the stage hours below (stage hours log automatically when each stage is done)</span>
                 </>
               )}
             </div>
@@ -5306,6 +5319,17 @@ function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, wor
                             {!s.done && (
                               <input type="date" value={s.dueDate || ""} onChange={(e) => updateStepField(inst.id, s.id, "dueDate", e.target.value)}
                                 className="text-xs px-1.5 py-0.5 rounded-md outline-none" style={{ border: `1px solid ${T.border}`, color: urgencyColor(s.dueDate) }} />
+                            )}
+                            {s.done ? (
+                              Number(s.estHours) > 0 && <span style={{ color: T.slateLight }}>{s.estHours}h logged</span>
+                            ) : (
+                              <span className="flex items-center gap-1">
+                                <input type="number" min="0" step="0.25" value={s.estHours ?? ""} placeholder="0"
+                                  onChange={(e) => updateStepField(inst.id, s.id, "estHours", e.target.value ? Number(e.target.value) : 0)}
+                                  title="Hours for this stage: logged to Activity and Billing when it's marked done"
+                                  className="w-14 text-xs px-1.5 py-0.5 rounded-md outline-none text-center" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+                                hrs
+                              </span>
                             )}
                             {s.recurring && s.recurring !== "none" && (
                               <span className="flex items-center gap-1" style={{ color: T.slateLight }}><Repeat size={10} /> {s.recurring}</span>
@@ -5371,6 +5395,271 @@ function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, wor
         </div>
       )}
     </div>
+  );
+}
+
+/* ---------- Files tab + task card (shared helpers) ---------- */
+async function openStoragePath(path) {
+  try {
+    const url = await getDownloadURL(storageRef(storage, path));
+    window.open(url, "_blank");
+  } catch (err) {
+    console.error("Couldn't open file:", err);
+    alert("Couldn't open that file.");
+  }
+}
+
+// One place for everything filed against a client: folders you create, files you upload into
+// them, and every generated PDF (listed automatically under its own "Generated documents"
+// folder, grouped by category, since saveGeneratedDocument already files them on the client).
+function ClientFilesTab({ client, updateClient }) {
+  const [openFolder, setOpenFolder] = useState(null); // null = top level, folder id, or "__generated"
+  const [newFolder, setNewFolder] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const folders = client.fileFolders || [];
+  const files = client.files || [];
+  const generated = client.generatedDocuments || [];
+  const current = folders.find((f) => f.id === openFolder);
+  const inView = files.filter((f) => (f.folderId || null) === (openFolder === "__generated" ? "__none" : openFolder));
+
+  const addFolder = () => {
+    const name = newFolder.trim();
+    if (!name) return;
+    updateClient((c) => ({ ...c, fileFolders: [...(c.fileFolders || []), { id: "fd" + Date.now(), name }] }));
+    setNewFolder("");
+  };
+  const renameFolder = (id) => {
+    const f = folders.find((x) => x.id === id);
+    const name = window.prompt("Rename folder", f ? f.name : "");
+    if (!name || !name.trim()) return;
+    updateClient((c) => ({ ...c, fileFolders: (c.fileFolders || []).map((x) => (x.id === id ? { ...x, name: name.trim() } : x)) }));
+  };
+  const deleteFolder = (id) => {
+    // Files inside fall back to the top level rather than being lost.
+    updateClient((c) => ({
+      ...c,
+      fileFolders: (c.fileFolders || []).filter((x) => x.id !== id),
+      files: (c.files || []).map((f) => (f.folderId === id ? { ...f, folderId: null } : f)),
+    }));
+    setOpenFolder(null);
+  };
+  const upload = async (fileList) => {
+    const picked = Array.from(fileList || []);
+    if (picked.length === 0) return;
+    setUploading(true);
+    try {
+      const entries = [];
+      for (const file of picked) {
+        const path = `client-files/${client.id}/${Date.now()}-${file.name}`;
+        await uploadBytes(storageRef(storage, path), file);
+        entries.push({ id: Date.now() + entries.length, path, name: file.name, uploadedAt: today(), folderId: openFolder && openFolder !== "__generated" ? openFolder : null });
+      }
+      updateClient((c) => ({ ...c, files: [...(c.files || []), ...entries] }));
+    } catch (err) {
+      console.error("Client file upload failed:", err);
+      alert(`Couldn't upload that file: ${err.message || err}`);
+    } finally {
+      setUploading(false);
+    }
+  };
+  const moveFile = (fileId, folderId) => updateClient((c) => ({ ...c, files: (c.files || []).map((f) => (f.id === fileId ? { ...f, folderId: folderId || null } : f)) }));
+  const removeFile = (fileId) => updateClient((c) => ({ ...c, files: (c.files || []).filter((f) => f.id !== fileId) }));
+  const removeGenerated = (docId) => updateClient((c) => ({ ...c, generatedDocuments: (c.generatedDocuments || []).filter((d) => d.id !== docId) }));
+
+  const crumb = openFolder === "__generated" ? "Generated documents" : current ? current.name : null;
+
+  return (
+    <div className="flex flex-col gap-3">
+      <Card style={{ padding: 14 }}>
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-1.5 text-sm font-semibold" style={{ color: T.ink }}>
+            <button onClick={() => setOpenFolder(null)} style={{ color: crumb ? T.tealDark : T.ink }}>Files</button>
+            {crumb && (<><ChevronRight size={13} color={T.slateLight} /><span>{crumb}</span></>)}
+          </div>
+          {current && (
+            <div className="flex items-center gap-2 text-xs">
+              <button onClick={() => renameFolder(current.id)} className="font-semibold" style={{ color: T.tealDark }}>Rename</button>
+              <ConfirmButton onConfirm={() => deleteFolder(current.id)} title="Delete folder (files move to top level)" iconSize={13} />
+            </div>
+          )}
+        </div>
+
+        {openFolder === null && (
+          <div className="flex flex-col gap-1.5 mb-3">
+            <button onClick={() => setOpenFolder("__generated")} className="flex items-center justify-between text-sm rounded-lg px-3 py-2 text-left" style={{ background: T.paperAlt, color: T.ink }}>
+              <span className="flex items-center gap-2"><FileText size={14} color={T.tealDark} /> Generated documents</span>
+              <span className="text-xs" style={{ color: T.slateLight }}>{generated.length}</span>
+            </button>
+            {folders.map((f) => (
+              <button key={f.id} onClick={() => setOpenFolder(f.id)} className="flex items-center justify-between text-sm rounded-lg px-3 py-2 text-left" style={{ background: T.paperAlt, color: T.ink }}>
+                <span className="flex items-center gap-2"><Layers size={14} color={T.amber} /> {f.name}</span>
+                <span className="text-xs" style={{ color: T.slateLight }}>{files.filter((x) => x.folderId === f.id).length}</span>
+              </button>
+            ))}
+            <div className="flex items-center gap-2 mt-1">
+              <input placeholder="New folder name" value={newFolder} onChange={(e) => setNewFolder(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addFolder(); }}
+                className="flex-1 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
+              <button onClick={addFolder} className="text-xs font-semibold px-3 py-1.5 rounded-lg" style={{ background: T.paperAlt, color: T.tealDark }}>Create folder</button>
+            </div>
+          </div>
+        )}
+
+        {openFolder === "__generated" ? (
+          <div className="flex flex-col gap-1.5">
+            <div className="text-[11px] mb-1" style={{ color: T.slateLight }}>Every Manual, Policy, Procedure, ERP and Report generated for {client.name} is filed here automatically.</div>
+            {[...generated].reverse().map((d) => (
+              <div key={d.id} className="flex items-center justify-between text-xs rounded-lg px-2.5 py-1.5" style={{ background: T.paperAlt }}>
+                <button onClick={() => openStoragePath(d.path)} className="truncate text-left flex-1 flex items-center gap-2" style={{ color: T.tealDark }} title={d.name}>
+                  <Pill color={T.blue} bg={T.card}>{d.category}</Pill><span className="truncate">{d.name}</span>
+                </button>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span style={{ color: T.slateLight }}>{fmtDate(d.date)}</span>
+                  <ConfirmButton onConfirm={() => removeGenerated(d.id)} title="Remove from list" iconSize={12} />
+                </div>
+              </div>
+            ))}
+            {generated.length === 0 && <div className="text-xs" style={{ color: T.slateLight }}>Nothing generated yet.</div>}
+          </div>
+        ) : (
+          <>
+            <div className="flex flex-col gap-1.5 mb-2">
+              {openFolder === null && inView.length > 0 && <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: T.slate }}>Loose files</div>}
+              {inView.map((f) => (
+                <div key={f.id} className="flex items-center justify-between text-xs rounded-lg px-2.5 py-1.5" style={{ background: T.paperAlt }}>
+                  <button onClick={() => openStoragePath(f.path)} className="truncate text-left flex-1" style={{ color: T.tealDark }} title={f.name}>{f.name}</button>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <select value={f.folderId || ""} onChange={(e) => moveFile(f.id, e.target.value)} title="Move to folder"
+                      className="text-[11px] px-1 py-0.5 rounded-md outline-none" style={{ border: `1px solid ${T.border}`, color: T.slate, background: "transparent" }}>
+                      <option value="">Top level</option>
+                      {folders.map((fd) => <option key={fd.id} value={fd.id}>{fd.name}</option>)}
+                    </select>
+                    <span style={{ color: T.slateLight }}>{fmtDate(f.uploadedAt)}</span>
+                    <button onClick={() => removeFile(f.id)} title="Remove file"><Trash2 size={12} color={T.slateLight} /></button>
+                  </div>
+                </div>
+              ))}
+              {inView.length === 0 && (openFolder !== null || folders.length === 0) && <div className="text-xs" style={{ color: T.slateLight }}>Nothing here yet.</div>}
+            </div>
+            <label className="text-xs font-semibold px-3 py-1.5 rounded-lg cursor-pointer inline-flex items-center gap-1.5" style={{ background: T.paperAlt, color: T.tealDark }}>
+              <Upload size={13} /> {uploading ? "Uploading…" : `Upload to ${crumb || "top level"}`}
+              <input type="file" multiple className="hidden" disabled={uploading} onChange={(e) => { upload(e.target.files); e.target.value = ""; }} />
+            </label>
+            <div className="text-[11px] mt-1.5" style={{ color: T.slateLight }}>Any file type. Save an email as .eml/.msg/PDF first to file correspondence.</div>
+          </>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+// A client task row with view, edit and schedule modes. "Add to schedule" only sets the
+// date, owner and hours on the task itself: the Schedule tab's workload already counts
+// client tasks that have estimated hours, so no separate block is created (that would
+// count the same hours twice).
+function ClientTaskCard({ client, r, updateClient, toggleReminderDone, removeReminder }) {
+  const [mode, setMode] = useState(null); // null | "edit" | "schedule"
+  const [draft, setDraft] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const patch = (changes) => updateClient((c) => ({ ...c, reminders: c.reminders.map((x) => (x.id === r.id ? { ...x, ...changes } : x)) }));
+  const startMode = (m) => {
+    setDraft({ text: r.text, date: r.date || today(), assignee: r.assignee || TEAM[0], estHours: r.estHours || "", recurring: r.recurring || "none" });
+    setMode(m);
+  };
+  const save = () => {
+    if (mode === "edit" && !draft.text.trim()) return;
+    if (mode === "schedule" && (!draft.date || !draft.estHours)) { alert("Pick a date and the hours to book."); return; }
+    const base = { date: draft.date, assignee: draft.assignee, estHours: draft.estHours ? Number(draft.estHours) : 0 };
+    patch(mode === "edit" ? { ...base, text: draft.text.trim(), recurring: draft.recurring } : { ...base, onSchedule: true });
+    setMode(null);
+  };
+  const attach = async (fileList) => {
+    const picked = Array.from(fileList || []);
+    if (picked.length === 0) return;
+    setUploading(true);
+    try {
+      const added = [];
+      for (const file of picked) {
+        const path = `client-files/${client.id}/tasks/${Date.now()}-${file.name}`;
+        await uploadBytes(storageRef(storage, path), file);
+        added.push({ id: Date.now() + added.length, path, name: file.name });
+      }
+      updateClient((c) => ({ ...c, reminders: c.reminders.map((x) => (x.id === r.id ? { ...x, attachments: [...(x.attachments || []), ...added] } : x)) }));
+    } catch (err) {
+      console.error("Task attachment failed:", err);
+      alert(`Couldn't attach that file: ${err.message || err}`);
+    } finally {
+      setUploading(false);
+    }
+  };
+  const detach = (attId) => patch({ attachments: (r.attachments || []).filter((a) => a.id !== attId) });
+  const inputStyle = { border: `1px solid ${T.border}`, color: T.ink };
+
+  return (
+    <Card style={{ padding: 14, opacity: r.done ? 0.55 : 1 }}>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <button onClick={() => toggleReminderDone(r.id)}>
+            {r.done ? <CheckCircle2 size={16} color={T.tealDark} /> : <Circle size={16} color={T.slate} />}
+          </button>
+          <div>
+            <div className="text-sm font-medium" style={{ color: T.ink, textDecoration: r.done ? "line-through" : "none" }}>{r.text}</div>
+            <div className="text-xs flex items-center gap-2 mt-0.5 flex-wrap" style={{ color: T.slate }}>
+              <span className="flex items-center gap-1" style={{ color: urgencyColor(r.date) }}><Calendar size={11} /> {fmtDate(r.date)}</span>
+              {r.recurring !== "none" && <span className="flex items-center gap-1"><Repeat size={11} /> {r.recurring}</span>}
+              <Pill color={T.tealDark} bg={T.paperAlt}>{r.assignee || "Unassigned"}</Pill>
+              {r.onSchedule && <Pill color={T.blue} bg={T.paperAlt}>On schedule</Pill>}
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+          {!r.done && (
+            <button onClick={() => (mode === "schedule" ? setMode(null) : startMode("schedule"))} className="text-[11px] font-semibold px-2 py-1 rounded-lg flex items-center gap-1" style={{ background: T.paperAlt, color: T.tealDark }}>
+              <CalendarClock size={12} /> {r.onSchedule ? "Reschedule" : "Add to schedule"}
+            </button>
+          )}
+          <button onClick={() => (mode === "edit" ? setMode(null) : startMode("edit"))} className="text-[11px] font-semibold px-2 py-1 rounded-lg" style={{ background: T.paperAlt, color: T.tealDark }}>Edit</button>
+          <input type="number" min="0" step="0.25" value={r.estHours || ""}
+            onChange={(e) => patch({ estHours: e.target.value ? Number(e.target.value) : 0 })}
+            placeholder="hrs" title="Estimated hours — counts toward Schedule workload"
+            className="w-14 text-xs px-1.5 py-1 rounded-lg outline-none text-center" style={inputStyle} />
+          <button onClick={() => removeReminder(r.id)}><Trash2 size={14} color={T.slateLight} /></button>
+        </div>
+      </div>
+
+      {mode && draft && (
+        <div className="flex items-center gap-2 flex-wrap mt-3 pt-3" style={{ borderTop: `1px solid ${T.border}` }}>
+          {mode === "edit" && (
+            <input value={draft.text} onChange={(e) => setDraft({ ...draft, text: e.target.value })} className="flex-1 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ ...inputStyle, minWidth: 180 }} />
+          )}
+          <input type="date" value={draft.date} onChange={(e) => setDraft({ ...draft, date: e.target.value })} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle} />
+          <input type="number" min="0" step="0.25" placeholder="hrs" value={draft.estHours} onChange={(e) => setDraft({ ...draft, estHours: e.target.value })} className="w-16 text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle} />
+          <select value={draft.assignee} onChange={(e) => setDraft({ ...draft, assignee: e.target.value })} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle}>
+            {(mode === "schedule" ? SCHEDULE_PEOPLE : TEAM).map((m) => <option key={m} value={m}>{m}</option>)}
+          </select>
+          {mode === "edit" && (
+            <select value={draft.recurring} onChange={(e) => setDraft({ ...draft, recurring: e.target.value })} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle}>
+              <option value="none">One-off</option><option value="monthly">Monthly</option><option value="quarterly">Quarterly</option><option value="yearly">Yearly</option>
+            </select>
+          )}
+          <button onClick={save} className="text-xs font-semibold px-3 py-1.5 rounded-lg" style={{ background: T.tealDark, color: "#fff" }}>{mode === "schedule" ? "Add to schedule" : "Save"}</button>
+          <button onClick={() => setMode(null)} className="text-xs font-semibold px-3 py-1.5 rounded-lg" style={{ background: T.paperAlt, color: T.slate }}>Cancel</button>
+          {mode === "schedule" && <div className="w-full text-[11px]" style={{ color: T.slateLight }}>Books the task into the Schedule tab workload on that date, no separate entry is created.</div>}
+        </div>
+      )}
+
+      <div className="flex items-center gap-2 flex-wrap mt-2">
+        {(r.attachments || []).map((a) => (
+          <span key={a.id} className="inline-flex items-center gap-1.5 text-[11px] rounded-full px-2 py-0.5" style={{ background: T.paperAlt }}>
+            <button onClick={() => openStoragePath(a.path)} style={{ color: T.tealDark }} title={a.name}>{a.name.length > 28 ? a.name.slice(0, 26) + "…" : a.name}</button>
+            <button onClick={() => detach(a.id)} title="Remove attachment"><X size={10} color={T.slateLight} /></button>
+          </span>
+        ))}
+        <label className="text-[11px] font-semibold cursor-pointer inline-flex items-center gap-1" style={{ color: T.slate }}>
+          <Upload size={11} /> {uploading ? "Attaching…" : "Attach file"}
+          <input type="file" multiple className="hidden" disabled={uploading} onChange={(e) => { attach(e.target.files); e.target.value = ""; }} />
+        </label>
+      </div>
+    </Card>
   );
 }
 
@@ -5538,6 +5827,18 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
     });
   };
 
+  // Extra work becomes a normal client task (fixed id, so clicking twice never duplicates it).
+  // Hours only land in Activity/Billing when the extra itself is moved to Done, not when the
+  // task is ticked, so nothing is counted twice.
+  const scheduleExtra = (e) => {
+    const id = "extra-sched-" + e.id;
+    if ((client.reminders || []).some((r) => r.id === id)) { setTab("reminders"); return; }
+    const date = window.prompt("Schedule for which date? (YYYY-MM-DD)", today());
+    if (!date) return;
+    const who = window.prompt("Who? (Jo or Judith)", "Jo");
+    const assignee = SCHEDULE_PEOPLE.includes(who) ? who : "Jo";
+    updateClient((c) => ({ ...c, reminders: [...(c.reminders || []), { id, text: `Extra: ${e.description}`, date, recurring: "none", assignee, estHours: e.hours || 0, done: false, onSchedule: true }] }));
+  };
   const addExtra = () => {
     if (!newExtra.description.trim()) return;
     updateClient((c) => ({ ...c, extras: [...c.extras, { id: Date.now(), date: today(), description: newExtra.description, status: "Requested", hours: Number(newExtra.hours) || 0 }] }));
@@ -5864,6 +6165,7 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
               { id: "billing", label: "Activity", icon: ClipboardList },
               { id: "onboarding", label: "Workflows", icon: ListChecks },
               { id: "notes", label: "Notes", icon: StickyNote },
+              { id: "files", label: "Files", icon: FileText },
               { id: "reminders", label: "Tasks", icon: Bell },
               { id: "scheduling", label: "Scheduling", icon: CalendarClock },
             ].filter((t) => t.id !== "scheduling" || client.profile === "Enterprise Client").map((t) => (
@@ -6205,7 +6507,15 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
                     return (
                       <div key={e.id} className="flex items-center justify-between text-sm py-1.5" style={{ borderBottom: `1px solid ${T.border}` }}>
                         <div><span style={{ color: T.ink }}>{e.description}</span><span className="ml-2 text-xs" style={{ color: T.slateLight }}>{fmtDate(e.date)} &middot; {e.hours}h</span></div>
-                        <button onClick={() => cycleExtraStatus(e.id)}><Pill color={meta.color} bg={meta.bg}>{e.status}</Pill></button>
+                        <div className="flex items-center gap-2">
+                          {e.status !== "Done" && (
+                            <button onClick={() => scheduleExtra(e)} className="text-[11px] font-semibold px-2 py-1 rounded-lg flex items-center gap-1" style={{ background: T.paperAlt, color: T.tealDark }}
+                              title="Creates a task on the Tasks tab, which counts in the Schedule workload">
+                              <CalendarClock size={12} /> {(client.reminders || []).some((r) => r.id === "extra-sched-" + e.id) ? "On schedule" : "Add to schedule"}
+                            </button>
+                          )}
+                          <button onClick={() => cycleExtraStatus(e.id)}><Pill color={meta.color} bg={meta.bg}>{e.status}</Pill></button>
+                        </div>
                       </div>
                     );
                   })}
@@ -6226,57 +6536,11 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
             <ClientOnboarding client={client} onboardings={onboardings} updateOnboardingsForClient={updateOnboardingsForClient} workflows={workflows} pushNotification={pushNotification} goToWorkflows={goToWorkflows} />
           )}
 
+          {tab === "files" && <ClientFilesTab client={client} updateClient={updateClient} />}
+
           {tab === "notes" && (
             <div className="flex flex-col gap-3">
-              <Card style={{ padding: 14 }}>
-                <div className="text-sm font-semibold mb-2" style={{ color: T.ink }}>Files & emails</div>
-                <div className="flex flex-col gap-1.5 mb-2">
-                  {(client.files || []).map((f) => (
-                    <div key={f.id} className="flex items-center justify-between text-xs rounded-lg px-2.5 py-1.5" style={{ background: T.paperAlt }}>
-                      <button onClick={() => viewClientFile(f.path)} className="truncate text-left flex-1" style={{ color: T.tealDark }} title={f.name}>{f.name}</button>
-                      <div className="flex items-center gap-2 shrink-0">
-                        <span style={{ color: T.slateLight }}>{fmtDate(f.uploadedAt)}</span>
-                        <button onClick={() => removeClientFile(f.id)} title="Remove file"><Trash2 size={12} color={T.slateLight} /></button>
-                      </div>
-                    </div>
-                  ))}
-                  {(client.files || []).length === 0 && <div className="text-xs" style={{ color: T.slateLight }}>Nothing uploaded yet.</div>}
-                </div>
-                <label className="text-xs font-semibold px-3 py-1.5 rounded-lg cursor-pointer inline-flex items-center gap-1.5" style={{ background: T.paperAlt, color: T.tealDark }}>
-                  <Upload size={13} /> {uploadingClientFile ? "Uploading…" : "Upload file or email"}
-                  <input type="file" className="hidden" disabled={uploadingClientFile} onChange={(e) => uploadClientFile(e.target.files?.[0])} />
-                </label>
-                <div className="text-[11px] mt-1.5" style={{ color: T.slateLight }}>Any file type — save an email as a .eml/.msg/PDF first if you're uploading correspondence.</div>
-              </Card>
-              <Card style={{ padding: 14 }}>
-                <button onClick={() => setShowGeneratedDocs((v) => !v)} className="w-full flex items-center justify-between text-left">
-                  <div className="flex items-center gap-1.5">
-                    <ChevronDown size={13} color={T.slateLight} style={{ transform: showGeneratedDocs ? "none" : "rotate(-90deg)" }} />
-                    <span className="text-sm font-semibold" style={{ color: T.ink }}>Generated documents</span>
-                  </div>
-                  <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{ background: T.paperAlt, color: T.slate }}>{(client.generatedDocuments || []).length}</span>
-                </button>
-                {showGeneratedDocs && (
-                  <>
-                    <div className="text-[11px] mt-2 mb-2" style={{ color: T.slateLight }}>Every Manual, Policy, Procedure, ERP, and Monthly Report generated for {client.name} — a running record of what's actually been produced.</div>
-                    <div className="flex flex-col gap-1.5">
-                      {[...(client.generatedDocuments || [])].reverse().map((d) => (
-                        <div key={d.id} className="flex items-center justify-between text-xs rounded-lg px-2.5 py-1.5" style={{ background: T.paperAlt }}>
-                          <button onClick={() => viewGeneratedDocument(d.path)} className="truncate text-left flex-1 flex items-center gap-2" style={{ color: T.tealDark }} title={d.name}>
-                            <Pill color={T.blue} bg={T.card}>{d.category}</Pill>
-                            <span className="truncate">{d.name}</span>
-                          </button>
-                          <div className="flex items-center gap-2 shrink-0">
-                            <span style={{ color: T.slateLight }}>{fmtDate(d.date)}</span>
-                            <ConfirmButton onConfirm={() => removeGeneratedDocument(d.id)} title="Remove from history" iconSize={12} />
-                          </div>
-                        </div>
-                      ))}
-                      {(client.generatedDocuments || []).length === 0 && <div className="text-xs" style={{ color: T.slateLight }}>Nothing generated yet — anything downloaded from Systems or Reports will show up here automatically.</div>}
-                    </div>
-                  </>
-                )}
-              </Card>
+              <div className="text-[11px]" style={{ color: T.slateLight }}>Files, emails and generated PDFs now live on the Files tab.</div>
               <Card style={{ padding: 14 }}>
                 <textarea placeholder="Write a client note..." rows={2} value={noteDraft.text} onChange={(e) => setNoteDraft({ ...noteDraft, text: e.target.value })}
                   className="w-full text-sm outline-none resize-none bg-transparent" style={{ color: T.ink }} />
@@ -6310,28 +6574,7 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
           {tab === "reminders" && (
             <div className="flex flex-col gap-3">
               {client.reminders.map((r) => (
-                <Card key={r.id} style={{ padding: 14, opacity: r.done ? 0.55 : 1 }} className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <button onClick={() => toggleReminderDone(r.id)}>
-                      {r.done ? <CheckCircle2 size={16} color={T.tealDark} /> : <Circle size={16} color={T.slate} />}
-                    </button>
-                    <div>
-                      <div className="text-sm font-medium" style={{ color: T.ink, textDecoration: r.done ? "line-through" : "none" }}>{r.text}</div>
-                      <div className="text-xs flex items-center gap-2 mt-0.5" style={{ color: T.slate }}>
-                        <span className="flex items-center gap-1" style={{ color: urgencyColor(r.date) }}><Calendar size={11} /> {fmtDate(r.date)}</span>
-                        {r.recurring !== "none" && <span className="flex items-center gap-1"><Repeat size={11} /> {r.recurring}</span>}
-                        <Pill color={T.tealDark} bg={T.paperAlt}>{r.assignee || "Unassigned"}</Pill>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                    <input type="number" min="0" step="0.25" value={r.estHours || ""}
-                      onChange={(e) => updateClient((c) => ({ ...c, reminders: c.reminders.map((x) => (x.id === r.id ? { ...x, estHours: e.target.value ? Number(e.target.value) : 0 } : x)) }))}
-                      placeholder="hrs" title="Estimated hours — counts toward Schedule workload"
-                      className="w-14 text-xs px-1.5 py-1 rounded-lg outline-none text-center" style={{ border: `1px solid ${T.border}`, color: T.ink }} />
-                    <button onClick={() => removeReminder(r.id)}><Trash2 size={14} color={T.slateLight} /></button>
-                  </div>
-                </Card>
+                <ClientTaskCard key={r.id} client={client} r={r} updateClient={updateClient} toggleReminderDone={toggleReminderDone} removeReminder={removeReminder} />
               ))}
               {client.reminders.length === 0 && <div className="text-xs" style={{ color: T.slateLight }}>No tasks yet.</div>}
               <Card style={{ padding: 14 }} className="flex items-center gap-2 flex-wrap">

@@ -11993,8 +11993,11 @@ async function downloadSiteBriefPdf({ client, site, reviews }) {
     sortedAll.forEach((r) => {
       if (y - rh < 50) { newPage(); head(); }
       page.drawLine({ start: { x: M, y: y - rh }, end: { x: M + CW, y: y - rh }, thickness: 0.75, color: grey });
-      const wk = new Date(mondayOf(r.date) + "T00:00:00").toLocaleDateString("en-NZ", { day: "numeric", month: "long", year: "numeric" });
-      page.drawText(clean("Week of " + wk), { x: M + 12, y: y - 18, size: 10.5, font: fonts.body, color: body });
+      // Once a review is booked (or done) it shows its actual date, otherwise just the week.
+      const when = (r.sched || r.done)
+        ? new Date(r.date + "T00:00:00").toLocaleDateString("en-NZ", { weekday: "long", day: "numeric", month: "long", year: "numeric" })
+        : "Week of " + new Date(mondayOf(r.date) + "T00:00:00").toLocaleDateString("en-NZ", { day: "numeric", month: "long", year: "numeric" });
+      page.drawText(clean(when), { x: M + 12, y: y - 18, size: 10.5, font: fonts.body, color: body });
       const month = r.date.slice(0, 7);
       const kind = r.done ? "completed" : r.sched ? "scheduled" : month < currentMonth() ? "overdue" : month === currentMonth() ? "action" : "pending";
       drawStatusLabel({ page, rgb, fonts, x: M + 360, y: y - rh + 6, kind });
@@ -14382,7 +14385,22 @@ export default function App() {
     return unsub;
   }, []);
   const addMasterScheduleEntry = (entry) => setDoc(doc(db, "masterScheduleEntries", "mcal" + Date.now()), entry);
-  const updateMasterScheduleEntry = (id, patch) => updateDoc(doc(db, "masterScheduleEntries", id), patch);
+  const updateMasterScheduleEntry = async (id, patch) => {
+    await updateDoc(doc(db, "masterScheduleEntries", id), patch);
+    // Setting or moving a site review on the Schedule tab marks it Scheduled on the Site Reviews
+    // tab and keeps the review's date and person in step.
+    try {
+      const entry = masterScheduleEntries.find((e) => e.id === id);
+      if (!entry || !entry.siteReviewId || !entry.clientId || !String(entry.linked || "").startsWith("task:") || patch.date === undefined) return;
+      const taskId = String(entry.linked).slice(5);
+      const c = clients.find((x) => x.id === entry.clientId);
+      if (!c) return;
+      const reminders = (c.reminders || []).map((r) => (String(r.id) === taskId && !r.done
+        ? { ...r, sched: true, date: patch.date, ...(patch.assignee ? { assignee: patch.assignee } : {}), ...(patch.hours !== undefined ? { estHours: Number(patch.hours) || 0 } : {}) }
+        : r));
+      await updateDoc(doc(db, "clients", entry.clientId), { reminders });
+    } catch (err) { console.error("Site review sync from schedule failed:", err); }
+  };
   const removeMasterScheduleEntry = async (entry) => {
     // If this entry was confirmed (and so has a matching hours-log entry sitting in that
     // client's billing, and possibly a matching done-reminder counting toward a monthly

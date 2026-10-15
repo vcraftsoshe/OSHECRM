@@ -496,6 +496,295 @@ exports.submitSignup = onCall({ cors: true, memory: "512MiB" }, async (request) 
   return { clientId };
 });
 
+/* ---------- Site review requests (public form at sitereviews.*) ----------
+   The public page can't write to Firestore directly, so it calls this. It stores the request
+   for the team to assign to a client and schedule from the CRM's Schedule tab. */
+const SITE_REVIEW_FREQUENCIES = ["weekly", "fortnightly", "monthly", "bimonthly", "quarterly"];
+function clip(v, max) {
+  return String(v == null ? "" : v).trim().slice(0, max);
+}
+exports.submitSiteReview = onCall({ cors: true }, async (request) => {
+  const d = request.data || {};
+  // Filled in only by bots.
+  if (d.website) return { ok: true };
+
+  const company = clip(d.company, 200);
+  const address = clip(d.address, 300);
+  const region = clip(d.region, 60);
+  const contactName = clip(d.contactName, 120);
+  const email = clip(d.email, 200);
+  const phone = clip(d.phone, 60);
+  const frequency = clip(d.frequency, 20);
+  const startMonth = clip(d.startMonth, 7);
+  const onApp = clip(d.onApp, 20);
+  if (!company || !address || !region || !contactName || !email || !phone) {
+    throw new HttpsError("invalid-argument", "Missing required details.");
+  }
+  if (!SITE_REVIEW_FREQUENCIES.includes(frequency)) {
+    throw new HttpsError("invalid-argument", "Please choose how often you would like site reviews.");
+  }
+  if (!/^\d{4}-\d{2}$/.test(startMonth)) {
+    throw new HttpsError("invalid-argument", "Please choose a start month.");
+  }
+  if (!["Yes", "No", "Not sure"].includes(onApp)) {
+    throw new HttpsError("invalid-argument", "Please say whether the site is on the app.");
+  }
+  const isoDate = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || "")) ? String(v) : null);
+
+  // Suggest an existing client when the name matches, so the team just confirms it.
+  let suggestedClientId = null;
+  const clientsSnap = await db.collection("clients").get();
+  const wanted = company.toLowerCase();
+  clientsSnap.forEach((c) => {
+    const data = c.data();
+    if (suggestedClientId || data.archived) return;
+    if (String(data.name || "").toLowerCase() === wanted || String(data.legalName || "").toLowerCase() === wanted) suggestedClientId = c.id;
+  });
+
+  const id = "sr" + Date.now();
+  await db.collection("siteReviewRequests").doc(id).set({
+    status: "new",
+    submittedDate: today(),
+    company, address, region, contactName, email, phone, frequency, startMonth, onApp,
+    inductionDetails: clip(d.inductionDetails, 2000),
+    siteAccess: clip(d.siteAccess, 2000),
+    ppeRequirements: clip(d.ppeRequirements, 2000),
+    parkingRequirements: clip(d.parkingRequirements, 2000),
+    siteStart: isoDate(d.siteStart),
+    siteEnd: isoDate(d.siteEnd),
+    suggestedClientId,
+  });
+  return { ok: true };
+});
+
+/* ---------- Training sessions (public page at training.*) ----------
+   Sessions are created in the CRM's Training tab and stored in "trainingSessions", with
+   sign-ups held on the session itself in an "attendees" array. The public page can't read or
+   write Firestore directly, so it goes through these two functions. The join link for online
+   sessions is never sent to the page, only in the confirmation email. */
+function nzNow() {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Pacific/Auckland", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date());
+  const get = (t) => parts.find((p) => p.type === t).value;
+  return { date: `${get("year")}-${get("month")}-${get("day")}`, time: `${get("hour")}:${get("minute")}` };
+}
+function isUpcoming(s) {
+  const now = nzNow();
+  return s.date > now.date || (s.date === now.date && (s.time || "00:00") > now.time);
+}
+function escapeHtml(v) {
+  return String(v == null ? "" : v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+exports.getTrainingSessions = onCall({ cors: true }, async () => {
+  const snap = await db.collection("trainingSessions").get();
+  const sessions = snap.docs
+    .map((d) => ({ id: d.id, ...d.data() }))
+    .filter((s) => s.date && s.time && isUpcoming(s))
+    .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time))
+    .map((s) => {
+      const taken = (s.attendees || []).length;
+      return {
+        id: s.id, title: s.title || "Training session", date: s.date, time: s.time, durationMins: s.durationMins || null,
+        platform: s.platform || "", venue: s.platform === "In person" ? (s.venue || "") : "", description: s.description || "",
+        spotsLeft: s.capacity ? Math.max(0, Number(s.capacity) - taken) : null,
+      };
+    });
+  return { sessions };
+});
+exports.signupForTraining = onCall({ cors: true }, async (request) => {
+  const d = request.data || {};
+  if (d.website) return { ok: true };
+  const sessionId = clip(d.sessionId, 80);
+  const company = clip(d.company, 200);
+  const name = clip(d.name, 120);
+  const email = clip(d.email, 200).toLowerCase();
+  if (!sessionId || !company || !name || !/^\S+@\S+\.\S+$/.test(email)) {
+    throw new HttpsError("invalid-argument", "Please fill in your company, name and a valid email.");
+  }
+  const ref = db.collection("trainingSessions").doc(sessionId);
+  const session = await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) throw new HttpsError("not-found", "That session is no longer available.");
+    const s = snap.data();
+    if (!isUpcoming(s)) throw new HttpsError("failed-precondition", "That session has already started.");
+    const attendees = s.attendees || [];
+    if (s.capacity && attendees.length >= Number(s.capacity)) throw new HttpsError("resource-exhausted", "Sorry, that session is full.");
+    if (attendees.some((a) => (a.email || "").toLowerCase() === email)) throw new HttpsError("already-exists", "That email is already signed up for this session.");
+    tx.update(ref, { attendees: [...attendees, { id: "a" + Date.now(), company, name, email, signedUpDate: today() }] });
+    return s;
+  });
+
+  const when = new Date(session.date + "T00:00:00").toLocaleDateString("en-NZ", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  const [h, m] = String(session.time).split(":").map(Number);
+  const timeText = `${h % 12 === 0 ? 12 : h % 12}:${String(m).padStart(2, "0")} ${h >= 12 ? "pm" : "am"} (NZ time)`;
+  const where = session.platform === "In person"
+    ? `In person${session.venue ? `: ${escapeHtml(session.venue)}` : ""}`
+    : `${escapeHtml(session.platform || "Online")}${session.link ? `: <a href="${escapeHtml(session.link)}">${escapeHtml(session.link)}</a>` : ""}`;
+  await db.collection("mail").add({
+    to: [email],
+    message: {
+      subject: `You're booked: ${session.title || "OSHE training"}`,
+      html: `<p>Hi ${escapeHtml(name.split(" ")[0])},</p><p>You're signed up for <strong>${escapeHtml(session.title || "OSHE training")}</strong>.</p><p>${when}, ${timeText}<br>${where}</p><p>If you can't make it, just reply to this email.</p><p>Thanks,<br>The OSHE Team</p>`,
+    },
+  });
+  return { ok: true };
+});
+
+/* ---------- Pre-qualification portal (public page at prequal.*) ----------
+   Templates (questions, required uploads, internal steps) are edited in the CRM's Pre-Qual tab and
+   stored in "prequalTemplates". A client starts one from the public page, which creates a draft in
+   "prequalSubmissions" keyed by a private code. The draft saves as they go, they can come back
+   with the emailed link, and uploads are stored privately in the bucket. The public page never
+   reads Firestore directly, it only goes through these functions. */
+const crypto = require("crypto");
+const PREQUAL_NOTIFY = "info@oshe.co.nz";
+const PREQUAL_SITE = "https://prequal.oshe.co.nz";
+const PREQUAL_MAX_FILE = 7 * 1024 * 1024;
+
+async function loadPrequal(code) {
+  const id = clip(code, 60);
+  if (!/^[A-Za-z0-9]{16,60}$/.test(id)) throw new HttpsError("not-found", "That pre-qual link isn't valid.");
+  const ref = db.collection("prequalSubmissions").doc(id);
+  const snap = await ref.get();
+  if (!snap.exists) throw new HttpsError("not-found", "That pre-qual link isn't valid.");
+  return { ref, data: snap.data() };
+}
+function prequalPublic(d) {
+  return {
+    schemeName: d.schemeName, company: d.company, contactName: d.contactName, email: d.email, status: d.status,
+    questions: d.questions || [], uploads: d.uploads || [], answers: d.answers || {}, files: d.files || {},
+  };
+}
+function prequalMissing(d) {
+  const missing = [];
+  (d.questions || []).forEach((q) => {
+    const a = (d.answers || {})[q.id] || {};
+    if (!a.inApp && !String(a.value || "").trim()) missing.push(q.text);
+  });
+  (d.uploads || []).forEach((u) => {
+    if (!u.required) return;
+    const f = (d.files || {})[u.id] || {};
+    if (!f.inApp && !(f.items || []).length) missing.push(u.label);
+  });
+  return missing;
+}
+exports.getPrequalSchemes = onCall({ cors: true }, async () => {
+  const snap = await db.collection("prequalTemplates").get();
+  const schemes = snap.docs
+    .map((d) => ({ id: d.id, ...d.data() }))
+    .filter((t) => (t.questions || []).length || (t.uploads || []).length)
+    .map((t) => ({ id: t.id, name: t.name || t.id, description: t.description || "" }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  return { schemes };
+});
+exports.startPrequal = onCall({ cors: true }, async (request) => {
+  const d = request.data || {};
+  if (d.website) return { ok: true };
+  const company = clip(d.company, 200);
+  const contactName = clip(d.contactName, 120);
+  const email = clip(d.email, 200).toLowerCase();
+  if (!company || !contactName || !/^\S+@\S+\.\S+$/.test(email)) throw new HttpsError("invalid-argument", "Please fill in your company, name and a valid email.");
+  const tSnap = await db.collection("prequalTemplates").doc(clip(d.schemeId, 80) || "none").get();
+  if (!tSnap.exists) throw new HttpsError("not-found", "That pre-qual isn't available.");
+  const t = tSnap.data();
+  let suggestedClientId = null;
+  const clientsSnap = await db.collection("clients").get();
+  const wanted = company.toLowerCase();
+  clientsSnap.forEach((c) => {
+    const data = c.data();
+    if (suggestedClientId || data.archived) return;
+    if (String(data.name || "").toLowerCase() === wanted || String(data.legalName || "").toLowerCase() === wanted) suggestedClientId = c.id;
+  });
+  const code = crypto.randomBytes(12).toString("hex");
+  await db.collection("prequalSubmissions").doc(code).set({
+    status: "draft", createdDate: today(), updatedDate: today(),
+    schemeId: tSnap.id, schemeName: t.name || tSnap.id,
+    company, contactName, email, suggestedClientId, clientId: null,
+    questions: t.questions || [], uploads: t.uploads || [], answers: {}, files: {},
+  });
+  await db.collection("mail").add({
+    to: [email],
+    message: {
+      subject: `Your ${t.name || "pre-qual"} pre-qualification, saved`,
+      html: `<p>Hi ${escapeHtml(contactName.split(" ")[0])},</p><p>Your <strong>${escapeHtml(t.name || "pre-qual")}</strong> pre-qualification has been started. Your answers save as you go, and you can come back and upload documents whenever you have them using this private link:</p><p><a href="${PREQUAL_SITE}/?c=${code}">${PREQUAL_SITE}/?c=${code}</a></p><p>Thanks,<br>The OSHE Team</p>`,
+    },
+  });
+  return { ok: true, code };
+});
+exports.getPrequal = onCall({ cors: true }, async (request) => {
+  const { data } = await loadPrequal((request.data || {}).code);
+  return prequalPublic(data);
+});
+exports.savePrequal = onCall({ cors: true }, async (request) => {
+  const d = request.data || {};
+  const { ref, data } = await loadPrequal(d.code);
+  const answers = {};
+  (data.questions || []).forEach((q) => {
+    const a = (d.answers || {})[q.id] || {};
+    answers[q.id] = { value: clip(a.value, 4000), inApp: Boolean(a.inApp) };
+  });
+  const files = { ...(data.files || {}) };
+  (data.uploads || []).forEach((u) => {
+    const flag = ((d.fileFlags || {})[u.id]) ;
+    files[u.id] = { items: (files[u.id] || {}).items || [], inApp: Boolean(flag) };
+  });
+  const next = { ...data, answers, files };
+  const patch = { answers, files, updatedDate: today() };
+  if (d.submit) {
+    const missing = prequalMissing(next);
+    if (missing.length) throw new HttpsError("failed-precondition", `Still to complete: ${missing.slice(0, 6).join("; ")}${missing.length > 6 ? ` and ${missing.length - 6} more` : ""}.`);
+    patch.status = "submitted";
+    patch.submittedDate = today();
+  }
+  await ref.update(patch);
+  if (d.submit) {
+    await db.collection("mail").add({
+      to: [PREQUAL_NOTIFY],
+      message: {
+        subject: `Pre-qual submitted: ${data.schemeName} - ${data.company}`,
+        html: `<p><strong>${escapeHtml(data.company)}</strong> has completed their <strong>${escapeHtml(data.schemeName)}</strong> pre-qual (${escapeHtml(data.contactName)}, ${escapeHtml(data.email)}). Open the Pre-Qual tab in the CRM to review it.</p>`,
+      },
+    });
+    await db.collection("mail").add({
+      to: [data.email],
+      message: {
+        subject: `We've received your ${data.schemeName} pre-qual`,
+        html: `<p>Hi ${escapeHtml(String(data.contactName).split(" ")[0])},</p><p>Thanks, your <strong>${escapeHtml(data.schemeName)}</strong> pre-qual information is complete and with the OSHE team. We'll be in touch if we need anything else.</p><p>You can still view or update it here: <a href="${PREQUAL_SITE}/?c=${ref.id}">${PREQUAL_SITE}/?c=${ref.id}</a></p><p>Thanks,<br>The OSHE Team</p>`,
+      },
+    });
+  }
+  return { ok: true, status: patch.status || data.status };
+});
+exports.uploadPrequalFile = onCall({ cors: true, memory: "512MiB" }, async (request) => {
+  const d = request.data || {};
+  const { ref, data } = await loadPrequal(d.code);
+  const upload = (data.uploads || []).find((u) => u.id === d.uploadId);
+  if (!upload) throw new HttpsError("invalid-argument", "Unknown upload.");
+  const buf = Buffer.from(String(d.data || ""), "base64");
+  if (!buf.length || buf.length > PREQUAL_MAX_FILE) throw new HttpsError("invalid-argument", "Files must be under 7MB. For larger files, email them to OSHE.");
+  const name = clip(d.name, 120) || "file";
+  const safeName = name.replace(/[^A-Za-z0-9._-]+/g, "_");
+  const path = `prequal/${ref.id}/${upload.id}/${Date.now()}-${safeName}`;
+  await bucket.file(path).save(buf, { contentType: clip(d.contentType, 100) || "application/octet-stream" });
+  const files = { ...(data.files || {}) };
+  const cur = files[upload.id] || { items: [], inApp: false };
+  if ((cur.items || []).length >= 10) throw new HttpsError("resource-exhausted", "That's the maximum number of files for this item.");
+  files[upload.id] = { ...cur, items: [...(cur.items || []), { id: "f" + Date.now(), name, path, size: buf.length }] };
+  await ref.update({ files, updatedDate: today() });
+  return { ok: true, files: files[upload.id] };
+});
+exports.removePrequalFile = onCall({ cors: true }, async (request) => {
+  const d = request.data || {};
+  const { ref, data } = await loadPrequal(d.code);
+  const files = { ...(data.files || {}) };
+  const cur = files[d.uploadId];
+  if (!cur) return { ok: true };
+  const gone = (cur.items || []).find((f) => f.id === d.fileId);
+  files[d.uploadId] = { ...cur, items: (cur.items || []).filter((f) => f.id !== d.fileId) };
+  await ref.update({ files, updatedDate: today() });
+  if (gone) await bucket.file(gone.path).delete().catch(() => {});
+  return { ok: true, files: files[d.uploadId] };
+});
+
 /* ---------- Email sending (Resend) ----------
    App.jsx writes a doc to the "mail" collection whenever it needs to send something,
    either { to: [...], message: { subject, html } } for raw content, or
@@ -517,6 +806,8 @@ exports.sendQueuedEmail = onDocumentCreated(
         // before oshe.co.nz is verified there). See the setup notes for this part.
         from: "OSHE Limited <hello@oshe.co.nz>",
         to: data.to,
+        // Replies go to the shared inbox rather than the no-reply style sending address.
+        replyTo: data.replyTo || "info@oshe.co.nz",
       };
       if (data.template && data.template.id) {
         payload.template = { id: data.template.id, variables: data.template.variables || {} };

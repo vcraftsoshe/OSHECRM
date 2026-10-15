@@ -510,13 +510,14 @@ exports.submitSiteReview = onCall({ cors: true }, async (request) => {
 
   const company = clip(d.company, 200);
   const address = clip(d.address, 300);
+  const region = clip(d.region, 60);
   const contactName = clip(d.contactName, 120);
   const email = clip(d.email, 200);
   const phone = clip(d.phone, 60);
   const frequency = clip(d.frequency, 20);
   const startMonth = clip(d.startMonth, 7);
   const onApp = clip(d.onApp, 20);
-  if (!company || !address || !contactName || !email || !phone) {
+  if (!company || !address || !region || !contactName || !email || !phone) {
     throw new HttpsError("invalid-argument", "Missing required details.");
   }
   if (!SITE_REVIEW_FREQUENCIES.includes(frequency)) {
@@ -544,8 +545,11 @@ exports.submitSiteReview = onCall({ cors: true }, async (request) => {
   await db.collection("siteReviewRequests").doc(id).set({
     status: "new",
     submittedDate: today(),
-    company, address, contactName, email, phone, frequency, startMonth, onApp,
+    company, address, region, contactName, email, phone, frequency, startMonth, onApp,
     inductionDetails: clip(d.inductionDetails, 2000),
+    siteAccess: clip(d.siteAccess, 2000),
+    ppeRequirements: clip(d.ppeRequirements, 2000),
+    parkingRequirements: clip(d.parkingRequirements, 2000),
     siteStart: isoDate(d.siteStart),
     siteEnd: isoDate(d.siteEnd),
     suggestedClientId,

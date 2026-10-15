@@ -629,6 +629,162 @@ exports.signupForTraining = onCall({ cors: true }, async (request) => {
   return { ok: true };
 });
 
+/* ---------- Pre-qualification portal (public page at prequal.*) ----------
+   Templates (questions, required uploads, internal steps) are edited in the CRM's Pre-Qual tab and
+   stored in "prequalTemplates". A client starts one from the public page, which creates a draft in
+   "prequalSubmissions" keyed by a private code. The draft saves as they go, they can come back
+   with the emailed link, and uploads are stored privately in the bucket. The public page never
+   reads Firestore directly, it only goes through these functions. */
+const crypto = require("crypto");
+const PREQUAL_NOTIFY = "info@oshe.co.nz";
+const PREQUAL_SITE = "https://prequal.oshe.co.nz";
+const PREQUAL_MAX_FILE = 7 * 1024 * 1024;
+
+async function loadPrequal(code) {
+  const id = clip(code, 60);
+  if (!/^[A-Za-z0-9]{16,60}$/.test(id)) throw new HttpsError("not-found", "That pre-qual link isn't valid.");
+  const ref = db.collection("prequalSubmissions").doc(id);
+  const snap = await ref.get();
+  if (!snap.exists) throw new HttpsError("not-found", "That pre-qual link isn't valid.");
+  return { ref, data: snap.data() };
+}
+function prequalPublic(d) {
+  return {
+    schemeName: d.schemeName, company: d.company, contactName: d.contactName, email: d.email, status: d.status,
+    questions: d.questions || [], uploads: d.uploads || [], answers: d.answers || {}, files: d.files || {},
+  };
+}
+function prequalMissing(d) {
+  const missing = [];
+  (d.questions || []).forEach((q) => {
+    const a = (d.answers || {})[q.id] || {};
+    if (!a.inApp && !String(a.value || "").trim()) missing.push(q.text);
+  });
+  (d.uploads || []).forEach((u) => {
+    if (!u.required) return;
+    const f = (d.files || {})[u.id] || {};
+    if (!f.inApp && !(f.items || []).length) missing.push(u.label);
+  });
+  return missing;
+}
+exports.getPrequalSchemes = onCall({ cors: true }, async () => {
+  const snap = await db.collection("prequalTemplates").get();
+  const schemes = snap.docs
+    .map((d) => ({ id: d.id, ...d.data() }))
+    .filter((t) => (t.questions || []).length || (t.uploads || []).length)
+    .map((t) => ({ id: t.id, name: t.name || t.id, description: t.description || "" }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  return { schemes };
+});
+exports.startPrequal = onCall({ cors: true }, async (request) => {
+  const d = request.data || {};
+  if (d.website) return { ok: true };
+  const company = clip(d.company, 200);
+  const contactName = clip(d.contactName, 120);
+  const email = clip(d.email, 200).toLowerCase();
+  if (!company || !contactName || !/^\S+@\S+\.\S+$/.test(email)) throw new HttpsError("invalid-argument", "Please fill in your company, name and a valid email.");
+  const tSnap = await db.collection("prequalTemplates").doc(clip(d.schemeId, 80) || "none").get();
+  if (!tSnap.exists) throw new HttpsError("not-found", "That pre-qual isn't available.");
+  const t = tSnap.data();
+  let suggestedClientId = null;
+  const clientsSnap = await db.collection("clients").get();
+  const wanted = company.toLowerCase();
+  clientsSnap.forEach((c) => {
+    const data = c.data();
+    if (suggestedClientId || data.archived) return;
+    if (String(data.name || "").toLowerCase() === wanted || String(data.legalName || "").toLowerCase() === wanted) suggestedClientId = c.id;
+  });
+  const code = crypto.randomBytes(12).toString("hex");
+  await db.collection("prequalSubmissions").doc(code).set({
+    status: "draft", createdDate: today(), updatedDate: today(),
+    schemeId: tSnap.id, schemeName: t.name || tSnap.id,
+    company, contactName, email, suggestedClientId, clientId: null,
+    questions: t.questions || [], uploads: t.uploads || [], answers: {}, files: {},
+  });
+  await db.collection("mail").add({
+    to: [email],
+    message: {
+      subject: `Your ${t.name || "pre-qual"} pre-qualification, saved`,
+      html: `<p>Hi ${escapeHtml(contactName.split(" ")[0])},</p><p>Your <strong>${escapeHtml(t.name || "pre-qual")}</strong> pre-qualification has been started. Your answers save as you go, and you can come back and upload documents whenever you have them using this private link:</p><p><a href="${PREQUAL_SITE}/?c=${code}">${PREQUAL_SITE}/?c=${code}</a></p><p>Thanks,<br>The OSHE Team</p>`,
+    },
+  });
+  return { ok: true, code };
+});
+exports.getPrequal = onCall({ cors: true }, async (request) => {
+  const { data } = await loadPrequal((request.data || {}).code);
+  return prequalPublic(data);
+});
+exports.savePrequal = onCall({ cors: true }, async (request) => {
+  const d = request.data || {};
+  const { ref, data } = await loadPrequal(d.code);
+  const answers = {};
+  (data.questions || []).forEach((q) => {
+    const a = (d.answers || {})[q.id] || {};
+    answers[q.id] = { value: clip(a.value, 4000), inApp: Boolean(a.inApp) };
+  });
+  const files = { ...(data.files || {}) };
+  (data.uploads || []).forEach((u) => {
+    const flag = ((d.fileFlags || {})[u.id]) ;
+    files[u.id] = { items: (files[u.id] || {}).items || [], inApp: Boolean(flag) };
+  });
+  const next = { ...data, answers, files };
+  const patch = { answers, files, updatedDate: today() };
+  if (d.submit) {
+    const missing = prequalMissing(next);
+    if (missing.length) throw new HttpsError("failed-precondition", `Still to complete: ${missing.slice(0, 6).join("; ")}${missing.length > 6 ? ` and ${missing.length - 6} more` : ""}.`);
+    patch.status = "submitted";
+    patch.submittedDate = today();
+  }
+  await ref.update(patch);
+  if (d.submit) {
+    await db.collection("mail").add({
+      to: [PREQUAL_NOTIFY],
+      message: {
+        subject: `Pre-qual submitted: ${data.schemeName} - ${data.company}`,
+        html: `<p><strong>${escapeHtml(data.company)}</strong> has completed their <strong>${escapeHtml(data.schemeName)}</strong> pre-qual (${escapeHtml(data.contactName)}, ${escapeHtml(data.email)}). Open the Pre-Qual tab in the CRM to review it.</p>`,
+      },
+    });
+    await db.collection("mail").add({
+      to: [data.email],
+      message: {
+        subject: `We've received your ${data.schemeName} pre-qual`,
+        html: `<p>Hi ${escapeHtml(String(data.contactName).split(" ")[0])},</p><p>Thanks, your <strong>${escapeHtml(data.schemeName)}</strong> pre-qual information is complete and with the OSHE team. We'll be in touch if we need anything else.</p><p>You can still view or update it here: <a href="${PREQUAL_SITE}/?c=${ref.id}">${PREQUAL_SITE}/?c=${ref.id}</a></p><p>Thanks,<br>The OSHE Team</p>`,
+      },
+    });
+  }
+  return { ok: true, status: patch.status || data.status };
+});
+exports.uploadPrequalFile = onCall({ cors: true, memory: "512MiB" }, async (request) => {
+  const d = request.data || {};
+  const { ref, data } = await loadPrequal(d.code);
+  const upload = (data.uploads || []).find((u) => u.id === d.uploadId);
+  if (!upload) throw new HttpsError("invalid-argument", "Unknown upload.");
+  const buf = Buffer.from(String(d.data || ""), "base64");
+  if (!buf.length || buf.length > PREQUAL_MAX_FILE) throw new HttpsError("invalid-argument", "Files must be under 7MB. For larger files, email them to OSHE.");
+  const name = clip(d.name, 120) || "file";
+  const safeName = name.replace(/[^A-Za-z0-9._-]+/g, "_");
+  const path = `prequal/${ref.id}/${upload.id}/${Date.now()}-${safeName}`;
+  await bucket.file(path).save(buf, { contentType: clip(d.contentType, 100) || "application/octet-stream" });
+  const files = { ...(data.files || {}) };
+  const cur = files[upload.id] || { items: [], inApp: false };
+  if ((cur.items || []).length >= 10) throw new HttpsError("resource-exhausted", "That's the maximum number of files for this item.");
+  files[upload.id] = { ...cur, items: [...(cur.items || []), { id: "f" + Date.now(), name, path, size: buf.length }] };
+  await ref.update({ files, updatedDate: today() });
+  return { ok: true, files: files[upload.id] };
+});
+exports.removePrequalFile = onCall({ cors: true }, async (request) => {
+  const d = request.data || {};
+  const { ref, data } = await loadPrequal(d.code);
+  const files = { ...(data.files || {}) };
+  const cur = files[d.uploadId];
+  if (!cur) return { ok: true };
+  const gone = (cur.items || []).find((f) => f.id === d.fileId);
+  files[d.uploadId] = { ...cur, items: (cur.items || []).filter((f) => f.id !== d.fileId) };
+  await ref.update({ files, updatedDate: today() });
+  if (gone) await bucket.file(gone.path).delete().catch(() => {});
+  return { ok: true, files: files[d.uploadId] };
+});
+
 /* ---------- Email sending (Resend) ----------
    App.jsx writes a doc to the "mail" collection whenever it needs to send something,
    either { to: [...], message: { subject, html } } for raw content, or

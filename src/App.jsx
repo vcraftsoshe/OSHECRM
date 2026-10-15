@@ -5421,6 +5421,8 @@ function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, wor
 // One hours-log entry per job, whichever screen it was finished from. The id is derived
 // from the job itself, so completing it from a task, a workflow stage or the schedule can
 // only ever write the same entry once.
+const SITE_REVIEW_COLOR = "#7C5CE6";
+const SITE_REVIEW_BG = "#EFEAFD";
 function reminderLogId(r) {
   if (r.linkedStep) return `wf-stage-${String(r.linkedStep).replace("|", "-")}`;
   if (String(r.id).startsWith("sched-task-")) return `sched-hours-${r.id}`;
@@ -5626,12 +5628,44 @@ function ClientTaskCard({ client, r, updateClient, toggleReminderDone, removeRem
     updateDoc(doc(db, "masterScheduleEntries", r.masterEntryId), { title, date, hours, billedHours: hours, assignee }).catch((err) => console.error("Master calendar sync failed:", err));
   };
   const startMode = (m) => {
-    setDraft({ text: r.text, date: r.date || today(), assignee: r.assignee || TEAM[0], estHours: r.estHours || "", recurring: r.recurring || "none", linkedStep: r.linkedStep || "" });
+    setDraft({ address: String(r.text || "").replace(/^site reviews?:?\s*/i, ""), region: "", frequency: "monthly", last: addMonthsISO(r.date || today(), 6), contactName: "", phone: "", email: "", text: r.text, date: r.date || today(), assignee: r.assignee || TEAM[0], estHours: r.estHours || "", recurring: r.recurring || "none", linkedStep: r.linkedStep || "" });
     setMode(m);
+  };
+  // Turns this task into the first review of a new site on the Site Reviews tab, and books the
+  // reviews that follow it on the client's tasks and the master calendar.
+  const addToSiteReviews = () => {
+    if (!draft.address.trim()) { alert("Enter the site address."); return; }
+    const hrs = draft.estHours ? Number(draft.estHours) : 0;
+    const siteId = "sr" + Date.now();
+    const dates = siteReviewDates(draft.date, draft.last || null, draft.frequency).filter((d, i) => i > 0 && d > draft.date);
+    const masterEntryId = r.masterEntryId || `mcal${Date.now()}`;
+    const title = `Site review: ${draft.address.trim()}`;
+    const extra = dates.map((date, i) => ({ taskId: `sitereview-${siteId}-${i}`, masterId: `mcal${Date.now()}${i + 1}`, date }));
+    const site = {
+      id: siteId, address: draft.address.trim(), region: draft.region.trim(), frequency: draft.frequency, onApp: "Not sure", inductionDetails: "", siteAccess: "", ppeRequirements: "", parkingRequirements: "",
+      siteStart: null, siteEnd: draft.last || null, requestedStartMonth: draft.date.slice(0, 7), contactName: draft.contactName.trim(), email: draft.email.trim(), phone: draft.phone.trim(),
+      assignee: draft.assignee, hours: hrs, addedDate: today(),
+    };
+    updateClient((c) => ({
+      ...c,
+      siteReviews: [...(c.siteReviews || []), site],
+      reminders: [
+        ...c.reminders.map((x) => (x.id === r.id ? { ...x, text: title, date: draft.date, assignee: draft.assignee, estHours: hrs, onSchedule: true, masterEntryId, siteReviewId: siteId } : x)),
+        ...extra.map((e) => ({ id: e.taskId, text: title, date: e.date, recurring: "none", assignee: draft.assignee, estHours: hrs, done: false, onSchedule: true, masterEntryId: e.masterId, siteReviewId: siteId })),
+      ],
+    }));
+    const entry = (date, linkedTask, confirmed) => ({
+      title, clientId: client.id, clientName: client.name, assignee: draft.assignee, date, hours: hrs, billable: r.billable !== false, billedHours: hrs,
+      workType: "Site review", workTypeColor: SITE_REVIEW_COLOR, targetId: null, linked: `task:${linkedTask}`, confirmed, confirmedHoursLogId: null, siteReviewId: siteId,
+    });
+    setDoc(doc(db, "masterScheduleEntries", masterEntryId), entry(draft.date, r.id, Boolean(r.done)), { merge: true }).catch((err) => console.error("Master calendar entry failed:", err));
+    extra.forEach((e) => setDoc(doc(db, "masterScheduleEntries", e.masterId), entry(e.date, e.taskId, false)).catch((err) => console.error("Master calendar entry failed:", err)));
+    setMode(null);
   };
   const save = () => {
     if (mode === "edit" && !draft.text.trim()) return;
     if (mode === "schedule" && (!draft.date || !draft.estHours)) { alert("Pick a date and the hours to book."); return; }
+    if (mode === "sitereview") { addToSiteReviews(); return; }
     const base = { date: draft.date, assignee: draft.assignee, estHours: draft.estHours ? Number(draft.estHours) : 0 };
     if (mode === "edit") {
       patch({ ...base, text: draft.text.trim(), recurring: draft.recurring, linkedStep: draft.linkedStep });
@@ -5644,8 +5678,8 @@ function ClientTaskCard({ client, r, updateClient, toggleReminderDone, removeRem
       patch({ ...base, onSchedule: true, masterEntryId });
       setDoc(doc(db, "masterScheduleEntries", masterEntryId), {
         title: r.text, clientId: client.id, clientName: client.name, assignee: base.assignee, date: base.date, hours: base.estHours,
-        billable: r.billable !== false, billedHours: base.estHours, workType: WORK_TYPE_PRESETS[0].label, workTypeColor: WORK_TYPE_PRESETS[0].color,
-        targetId: null, linked: `task:${r.id}`, confirmed: Boolean(r.done), confirmedHoursLogId: null,
+        billable: r.billable !== false, billedHours: base.estHours, workType: r.siteReviewId ? "Site review" : WORK_TYPE_PRESETS[0].label, workTypeColor: r.siteReviewId ? SITE_REVIEW_COLOR : WORK_TYPE_PRESETS[0].color,
+        targetId: null, linked: `task:${r.id}`, confirmed: Boolean(r.done), confirmedHoursLogId: null, ...(r.siteReviewId ? { siteReviewId: r.siteReviewId } : {}),
       }, { merge: true }).catch((err) => console.error("Master calendar entry failed:", err));
     }
     setMode(null);
@@ -5673,7 +5707,7 @@ function ClientTaskCard({ client, r, updateClient, toggleReminderDone, removeRem
   const inputStyle = { border: `1px solid ${T.border}`, color: T.ink };
 
   return (
-    <Card style={{ padding: 14, opacity: r.done ? 0.55 : 1 }}>
+    <Card style={{ padding: 14, opacity: r.done ? 0.55 : 1, ...(r.siteReviewId ? { borderLeft: `4px solid ${SITE_REVIEW_COLOR}` } : {}) }}>
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <button onClick={() => toggleReminderDone(r.id)}>
@@ -5685,6 +5719,7 @@ function ClientTaskCard({ client, r, updateClient, toggleReminderDone, removeRem
               <span className="flex items-center gap-1" style={{ color: urgencyColor(r.date) }}><Calendar size={11} /> {fmtDate(r.date)}</span>
               {r.recurring !== "none" && <span className="flex items-center gap-1"><Repeat size={11} /> {r.recurring}</span>}
               <Pill color={T.tealDark} bg={T.paperAlt}>{r.assignee || "Unassigned"}</Pill>
+              {r.siteReviewId && <Pill color={SITE_REVIEW_COLOR} bg={SITE_REVIEW_BG}>Site review</Pill>}
               {r.onSchedule && <Pill color={T.blue} bg={T.paperAlt}>On schedule</Pill>}
               {r.linkedStep && <Pill color={T.amber} bg={T.paperAlt}>Linked to workflow</Pill>}
             </div>
@@ -5695,6 +5730,9 @@ function ClientTaskCard({ client, r, updateClient, toggleReminderDone, removeRem
             <button onClick={() => (mode === "schedule" ? setMode(null) : startMode("schedule"))} className="text-[11px] font-semibold px-2 py-1 rounded-lg flex items-center gap-1" style={{ background: T.paperAlt, color: T.tealDark }}>
               <CalendarClock size={12} /> {r.onSchedule ? "Reschedule" : "Add to schedule"}
             </button>
+          )}
+          {!r.done && !r.siteReviewId && (
+            <button onClick={() => (mode === "sitereview" ? setMode(null) : startMode("sitereview"))} className="text-[11px] font-semibold px-2 py-1 rounded-lg" style={{ background: SITE_REVIEW_BG, color: SITE_REVIEW_COLOR }}>Add to site reviews</button>
           )}
           <button onClick={() => (mode === "edit" ? setMode(null) : startMode("edit"))} className="text-[11px] font-semibold px-2 py-1 rounded-lg" style={{ background: T.paperAlt, color: T.tealDark }}>Edit</button>
           <label className="flex items-center gap-1 text-[11px]" style={{ color: T.slate }}>
@@ -5714,6 +5752,19 @@ function ClientTaskCard({ client, r, updateClient, toggleReminderDone, removeRem
           {mode === "edit" && (
             <input value={draft.text} onChange={(e) => setDraft({ ...draft, text: e.target.value })} className="flex-1 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ ...inputStyle, minWidth: 180 }} />
           )}
+          {mode === "sitereview" && (
+            <>
+              <input placeholder="Site address" value={draft.address} onChange={(e) => setDraft({ ...draft, address: e.target.value })} className="flex-1 text-xs px-2 py-1.5 rounded-lg outline-none" style={{ ...inputStyle, minWidth: 220 }} />
+              <input placeholder="Region" value={draft.region} onChange={(e) => setDraft({ ...draft, region: e.target.value })} className="w-28 text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle} />
+              <select value={draft.frequency} onChange={(e) => setDraft({ ...draft, frequency: e.target.value })} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle}>
+                {Object.entries(SITE_REVIEW_FREQ_LABELS).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+              </select>
+              <input type="date" title="Last review on or before" value={draft.last} onChange={(e) => setDraft({ ...draft, last: e.target.value })} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle} />
+              <input placeholder="Contact name" value={draft.contactName} onChange={(e) => setDraft({ ...draft, contactName: e.target.value })} className="w-36 text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle} />
+              <input placeholder="Phone" value={draft.phone} onChange={(e) => setDraft({ ...draft, phone: e.target.value })} className="w-32 text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle} />
+              <input placeholder="Email" value={draft.email} onChange={(e) => setDraft({ ...draft, email: e.target.value })} className="w-44 text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle} />
+            </>
+          )}
           <input type="date" value={draft.date} onChange={(e) => setDraft({ ...draft, date: e.target.value })} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle} />
           <input type="number" min="0" step="0.25" placeholder="hrs" value={draft.estHours} onChange={(e) => setDraft({ ...draft, estHours: e.target.value })} className="w-16 text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle} />
           <select value={draft.assignee} onChange={(e) => setDraft({ ...draft, assignee: e.target.value })} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle}>
@@ -5730,7 +5781,7 @@ function ClientTaskCard({ client, r, updateClient, toggleReminderDone, removeRem
               {openSteps.map((o) => <option key={o.key} value={o.key}>Linked: {o.label}</option>)}
             </select>
           )}
-          <button onClick={save} className="text-xs font-semibold px-3 py-1.5 rounded-lg" style={{ background: T.tealDark, color: "#fff" }}>{mode === "schedule" ? "Add to schedule" : "Save"}</button>
+          <button onClick={save} className="text-xs font-semibold px-3 py-1.5 rounded-lg" style={{ background: T.tealDark, color: "#fff" }}>{mode === "schedule" ? "Add to schedule" : mode === "sitereview" ? "Add to site reviews" : "Save"}</button>
           <button onClick={() => setMode(null)} className="text-xs font-semibold px-3 py-1.5 rounded-lg" style={{ background: T.paperAlt, color: T.slate }}>Cancel</button>
         </div>
       )}
@@ -11515,6 +11566,76 @@ function defaultFirstReviewDate(startMonth) {
   return nextWeekdayISO(monthStart < today() ? today() : monthStart);
 }
 
+async function createSiteWithReviews(r, v, dates) {
+  const hrs = Number(v.hours) || 0;
+  let clientId = v.clientId;
+  let base;
+  if (clientId === "__new") {
+    clientId = "c" + Date.now();
+    base = {
+      name: r.company, legalName: r.company, logo: null,
+      contract: { start: today(), renewal: addDays(today(), 365), plan: "Plan to confirm" },
+      billing: { contact: r.contactName, email: r.email, terms: "20th of following month", status: "Current" },
+      billingType: "FlatFee", billingSetupDone: false, profile: "Standard Client", archived: false,
+      contacts: [], notes: [], reminders: [], extras: [], hours: { included: 0, log: [] }, users: { log: [] },
+      ohsmsLastIssued: null, ohsmsDue: null, intake: null,
+    };
+  } else {
+    const snap = await getDoc(doc(db, "clients", clientId));
+    base = snap.data();
+  }
+  const clientName = base.name;
+  const site = {
+    id: r.id, address: r.address, region: r.region || "", frequency: v.frequency, onApp: r.onApp, inductionDetails: r.inductionDetails || "",
+    siteAccess: r.siteAccess || "", ppeRequirements: r.ppeRequirements || "", parkingRequirements: r.parkingRequirements || "",
+    siteStart: r.siteStart || null, siteEnd: r.siteEnd || null, requestedStartMonth: r.startMonth,
+    contactName: r.contactName, email: r.email, phone: r.phone, assignee: v.assignee, hours: hrs, addedDate: today(),
+  };
+  // One task per review on the client, each with its own linked master calendar entry, so
+  // the same review is on the client's Tasks tab, the master calendar and Jo/Judith's
+  // capacity, and its hours are logged to Activity and Billing once.
+  const tasks = [];
+  const masterEntries = [];
+  dates.forEach((date, i) => {
+    const taskId = `sitereview-${r.id}-${i}`;
+    const masterId = `mcal${Date.now()}${i}`;
+    tasks.push({ id: taskId, text: `Site review: ${r.address}`, date, recurring: "none", assignee: v.assignee, estHours: hrs, done: false, onSchedule: true, masterEntryId: masterId, siteReviewId: r.id });
+    masterEntries.push({
+      id: masterId,
+      data: {
+        title: `Site review: ${r.address}`, clientId, clientName, assignee: v.assignee, date, hours: hrs,
+        billable: true, billedHours: hrs, workType: "Site review", workTypeColor: SITE_REVIEW_COLOR,
+        targetId: null, linked: `task:${taskId}`, confirmed: false, confirmedHoursLogId: null, siteReviewId: r.id,
+      },
+    });
+  });
+  const contacts = base.contacts || [];
+  const hasContact = !(r.contactName || r.email) || contacts.some((c) => (c.email || "").toLowerCase() === (r.email || "").toLowerCase());
+  const noteLines = [
+    `Site review request accepted: ${r.address}`,
+    `${SITE_REVIEW_FREQ_LABELS[v.frequency]}, ${dates.length} reviews from ${fmtDate(dates[0])}`,
+    `On the app: ${r.onApp}`,
+    r.region ? `Region: ${r.region}` : null,
+    r.inductionDetails ? `Induction: ${r.inductionDetails}` : null,
+    r.siteAccess ? `Site access: ${r.siteAccess}` : null,
+    r.ppeRequirements ? `PPE: ${r.ppeRequirements}` : null,
+    r.parkingRequirements ? `Parking: ${r.parkingRequirements}` : null,
+    r.siteStart ? `Site start: ${fmtDate(r.siteStart)}` : null,
+    r.siteEnd ? `Approximate closing: ${fmtDate(r.siteEnd)}` : null,
+  ].filter(Boolean);
+  const nextClient = {
+    ...base,
+    contacts: hasContact ? contacts : [...contacts, { id: Date.now(), name: r.contactName, role: "Site contact", email: r.email, phone: r.phone }],
+    siteReviews: [...(base.siteReviews || []), site],
+    reminders: [...(base.reminders || []), ...tasks],
+    notes: [...(base.notes || []), { id: Date.now(), author: "Site review form", date: today(), text: noteLines.join("\n"), tags: [] }],
+  };
+  if (v.clientId === "__new") await setDoc(doc(db, "clients", clientId), nextClient);
+  else await updateDoc(doc(db, "clients", clientId), { contacts: nextClient.contacts, siteReviews: nextClient.siteReviews, reminders: nextClient.reminders, notes: nextClient.notes });
+  await Promise.all(masterEntries.map((m) => setDoc(doc(db, "masterScheduleEntries", m.id), m.data)));
+  return clientId;
+}
+
 function SiteReviewInbox({ clients, externalConsultants }) {
   const [requests, setRequests] = useState([]);
   const [open, setOpen] = useState(true);
@@ -11548,76 +11669,11 @@ function SiteReviewInbox({ clients, externalConsultants }) {
   const accept = async (r) => {
     const v = get(r);
     if (!v.clientId) { alert("Choose a client first."); return; }
-    const hrs = Number(v.hours) || 0;
     const dates = siteReviewDates(v.first, v.last, v.frequency);
     if (dates.length === 0) { alert("No review dates fall between those dates."); return; }
     setBusy(r.id);
     try {
-      let clientId = v.clientId;
-      let base;
-      if (clientId === "__new") {
-        clientId = "c" + Date.now();
-        base = {
-          name: r.company, legalName: r.company, logo: null,
-          contract: { start: today(), renewal: addDays(today(), 365), plan: "Plan to confirm" },
-          billing: { contact: r.contactName, email: r.email, terms: "20th of following month", status: "Current" },
-          billingType: "FlatFee", billingSetupDone: false, profile: "Standard Client", archived: false,
-          contacts: [], notes: [], reminders: [], extras: [], hours: { included: 0, log: [] }, users: { log: [] },
-          ohsmsLastIssued: null, ohsmsDue: null, intake: null,
-        };
-      } else {
-        const snap = await getDoc(doc(db, "clients", clientId));
-        base = snap.data();
-      }
-      const clientName = base.name;
-      const site = {
-        id: r.id, address: r.address, region: r.region || "", frequency: v.frequency, onApp: r.onApp, inductionDetails: r.inductionDetails || "",
-        siteAccess: r.siteAccess || "", ppeRequirements: r.ppeRequirements || "", parkingRequirements: r.parkingRequirements || "",
-        siteStart: r.siteStart || null, siteEnd: r.siteEnd || null, requestedStartMonth: r.startMonth,
-        contactName: r.contactName, email: r.email, phone: r.phone, assignee: v.assignee, hours: hrs, addedDate: today(),
-      };
-      // One task per review on the client, each with its own linked master calendar entry, so
-      // the same review is on the client's Tasks tab, the master calendar and Jo/Judith's
-      // capacity, and its hours are logged to Activity and Billing once.
-      const tasks = [];
-      const masterEntries = [];
-      dates.forEach((date, i) => {
-        const taskId = `sitereview-${r.id}-${i}`;
-        const masterId = `mcal${Date.now()}${i}`;
-        tasks.push({ id: taskId, text: `Site review: ${r.address}`, date, recurring: "none", assignee: v.assignee, estHours: hrs, done: false, onSchedule: true, masterEntryId: masterId, siteReviewId: r.id });
-        masterEntries.push({
-          id: masterId,
-          data: {
-            title: `Site review: ${r.address}`, clientId, clientName, assignee: v.assignee, date, hours: hrs,
-            billable: true, billedHours: hrs, workType: "Site review", workTypeColor: "#13DCCC",
-            targetId: null, linked: `task:${taskId}`, confirmed: false, confirmedHoursLogId: null, siteReviewId: r.id,
-          },
-        });
-      });
-      const contacts = base.contacts || [];
-      const hasContact = contacts.some((c) => (c.email || "").toLowerCase() === (r.email || "").toLowerCase());
-      const noteLines = [
-        `Site review request accepted: ${r.address}`,
-        `${SITE_REVIEW_FREQ_LABELS[v.frequency]}, ${dates.length} reviews from ${fmtDate(dates[0])}`,
-        `On the app: ${r.onApp}`,
-        r.region ? `Region: ${r.region}` : null,
-        r.inductionDetails ? `Induction: ${r.inductionDetails}` : null,
-        r.siteAccess ? `Site access: ${r.siteAccess}` : null,
-        r.ppeRequirements ? `PPE: ${r.ppeRequirements}` : null,
-        r.parkingRequirements ? `Parking: ${r.parkingRequirements}` : null,
-        r.siteStart ? `Site start: ${fmtDate(r.siteStart)}` : null,
-        r.siteEnd ? `Approximate closing: ${fmtDate(r.siteEnd)}` : null,
-      ].filter(Boolean);
-      const nextClient = {
-        ...base,
-        contacts: hasContact ? contacts : [...contacts, { id: Date.now(), name: r.contactName, role: "Site contact", email: r.email, phone: r.phone }],
-        siteReviews: [...(base.siteReviews || []), site],
-        reminders: [...(base.reminders || []), ...tasks],
-        notes: [...(base.notes || []), { id: Date.now(), author: "Site review form", date: today(), text: noteLines.join("\n"), tags: [] }],
-      };
-      if (v.clientId === "__new") await setDoc(doc(db, "clients", clientId), nextClient);
-      else await updateDoc(doc(db, "clients", clientId), { contacts: nextClient.contacts, siteReviews: nextClient.siteReviews, reminders: nextClient.reminders, notes: nextClient.notes });
-      await Promise.all(masterEntries.map((m) => setDoc(doc(db, "masterScheduleEntries", m.id), m.data)));
+      const clientId = await createSiteWithReviews(r, v, dates);
       await updateDoc(doc(db, "siteReviewRequests", r.id), { status: "done", clientId, processedDate: today() });
     } catch (err) {
       console.error("Site review accept failed:", err);
@@ -11775,7 +11831,7 @@ function SiteReviewsView({ clients, externalConsultants, goToClient }) {
       await updateDoc(doc(db, "clients", row.client.id), { reminders: [...(row.client.reminders || []), task] });
       await setDoc(doc(db, "masterScheduleEntries", masterId), {
         title: `Site review: ${row.site.address}`, clientId: row.client.id, clientName: row.client.name, assignee: b.person, date: b.date, hours: hrs,
-        billable: true, billedHours: hrs, workType: "Site review", workTypeColor: "#13DCCC",
+        billable: true, billedHours: hrs, workType: "Site review", workTypeColor: SITE_REVIEW_COLOR,
         targetId: null, linked: `task:${taskId}`, confirmed: false, confirmedHoursLogId: null, siteReviewId: row.site.id,
       });
       setBooking(null);
@@ -11800,6 +11856,42 @@ function SiteReviewsView({ clients, externalConsultants, goToClient }) {
     }
   };
 
+  const editReviewDate = async (row, task, date) => {
+    if (!date || date === task.date) return;
+    try {
+      await updateDoc(doc(db, "clients", row.client.id), { reminders: (row.client.reminders || []).map((r) => (r.id === task.id ? { ...r, date } : r)) });
+      if (task.masterEntryId) await updateDoc(doc(db, "masterScheduleEntries", task.masterEntryId), { date }).catch(() => {});
+    } catch (err) { console.error("Review date change failed:", err); alert(`Couldn't change this date: ${err.message || err}`); }
+  };
+  const removeReviews = async (row, tasks, removeSite) => {
+    const ids = new Set(tasks.map((t) => t.id));
+    const logIds = new Set(tasks.map((t) => reminderLogId(t)));
+    try {
+      const patch = {
+        reminders: (row.client.reminders || []).filter((r) => !ids.has(r.id)),
+        hours: { ...(row.client.hours || {}), log: ((row.client.hours || {}).log || []).filter((h) => !logIds.has(h.id)) },
+      };
+      if (removeSite) patch.siteReviews = (row.client.siteReviews || []).filter((x) => x.id !== row.site.id);
+      await updateDoc(doc(db, "clients", row.client.id), patch);
+      await Promise.all(tasks.filter((t) => t.masterEntryId).map((t) => deleteDoc(doc(db, "masterScheduleEntries", t.masterEntryId)).catch(() => {})));
+    } catch (err) { console.error("Site review removal failed:", err); alert(`Couldn't remove this: ${err.message || err}`); }
+  };
+  const emptyAdd = { clientId: "", newName: "", address: "", region: "", frequency: "monthly", assignee: "Jo", hours: "1", first: nextWeekdayISO(today()), last: addMonthsISO(today(), 6) };
+  const [adding, setAdding] = useState(null);
+  const [addBusy, setAddBusy] = useState(false);
+  const addSiteNow = async () => {
+    const a = adding;
+    if (!a.address.trim() || !a.clientId || (a.clientId === "__new" && !a.newName.trim())) { alert("Choose a client and enter the site address."); return; }
+    const dates = siteReviewDates(a.first, a.last, a.frequency);
+    if (dates.length === 0) { alert("No review dates fall between those dates."); return; }
+    const existing = clients.find((c) => c.id === a.clientId);
+    const r = { id: "sr" + Date.now(), company: a.clientId === "__new" ? a.newName.trim() : existing.name, address: a.address.trim(), region: a.region.trim(), contactName: "", email: "", phone: "", onApp: "Not sure", startMonth: a.first.slice(0, 7), inductionDetails: "", siteAccess: "", ppeRequirements: "", parkingRequirements: "", siteStart: null, siteEnd: null };
+    setAddBusy(true);
+    try { await createSiteWithReviews(r, { clientId: a.clientId, assignee: a.assignee, hours: a.hours, frequency: a.frequency, first: a.first, last: a.last }, dates); setAdding(null); }
+    catch (err) { console.error("Add site failed:", err); alert(`Couldn't add this site: ${err.message || err}`); }
+    finally { setAddBusy(false); }
+  };
+
   const Stat = ({ label, value, color }) => (
     <div className="flex-1 rounded-xl px-4 py-3" style={{ background: T.card, border: `1px solid ${T.border}` }}>
       <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: T.slate }}>{label}</div>
@@ -11821,13 +11913,45 @@ function SiteReviewsView({ clients, externalConsultants, goToClient }) {
           <div className="text-base font-bold px-2" style={{ color: T.ink, minWidth: 150, textAlign: "center" }}>{month === currentMonth() ? "This month" : monthLabel(month)}</div>
           <button onClick={() => setMonth(shiftMonth(month, 1))} className="p-1.5 rounded-lg" style={{ background: T.paperAlt }}><ChevronRight size={15} color={T.slate} /></button>
         </div>
-        <div className="flex rounded-lg p-1" style={{ background: T.paperAlt }}>
-          {[["all", "All"], ["needs", "Needs scheduling"], ["scheduled", "Scheduled"]].map(([k, label]) => (
-            <button key={k} onClick={() => setFilter(k)} className="text-xs font-semibold px-3 py-1.5 rounded-md"
-              style={{ background: filter === k ? T.card : "transparent", color: filter === k ? T.tealDark : T.slate }}>{label}</button>
-          ))}
+        <div className="flex items-center gap-3">
+          <div className="flex rounded-lg p-1" style={{ background: T.paperAlt }}>
+            {[["all", "All"], ["needs", "Needs scheduling"], ["scheduled", "Scheduled"]].map(([k, label]) => (
+              <button key={k} onClick={() => setFilter(k)} className="text-xs font-semibold px-3 py-1.5 rounded-md"
+                style={{ background: filter === k ? T.card : "transparent", color: filter === k ? T.tealDark : T.slate }}>{label}</button>
+            ))}
+          </div>
+          <button onClick={() => setAdding(adding ? null : emptyAdd)} className="text-xs font-semibold px-3 py-2 rounded-lg flex items-center gap-1.5" style={{ background: T.tealDark, color: "#fff" }}><Plus size={13} /> Add site</button>
         </div>
       </div>
+
+      {adding && (
+        <Card style={{ padding: 16 }}>
+          <div className="flex items-center gap-2 flex-wrap">
+            <select value={adding.clientId} onChange={(e) => setAdding({ ...adding, clientId: e.target.value })} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ ...inputStyle, maxWidth: 200 }}>
+              <option value="">Choose client</option>
+              <option value="__new">New client</option>
+              {clients.filter((c) => !c.archived).sort((a, b) => a.name.localeCompare(b.name)).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            {adding.clientId === "__new" && <input placeholder="Client name" value={adding.newName} onChange={(e) => setAdding({ ...adding, newName: e.target.value })} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle} />}
+            <input placeholder="Site address" value={adding.address} onChange={(e) => setAdding({ ...adding, address: e.target.value })} className="flex-1 min-w-[200px] text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle} />
+            <input placeholder="Region" value={adding.region} onChange={(e) => setAdding({ ...adding, region: e.target.value })} className="w-32 text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle} />
+          </div>
+          <div className="flex items-center gap-2 flex-wrap mt-2">
+            <select value={adding.assignee} onChange={(e) => setAdding({ ...adding, assignee: e.target.value })} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle}>
+              {people.map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>
+            <select value={adding.frequency} onChange={(e) => setAdding({ ...adding, frequency: e.target.value })} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle}>
+              {Object.entries(SITE_REVIEW_FREQ_LABELS).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+            </select>
+            <input type="number" min="0" step="0.25" value={adding.hours} onChange={(e) => setAdding({ ...adding, hours: e.target.value })} placeholder="hrs each" className="w-20 text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle} />
+            <input type="date" value={adding.first} onChange={(e) => setAdding({ ...adding, first: e.target.value })} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle} />
+            <input type="date" value={adding.last} onChange={(e) => setAdding({ ...adding, last: e.target.value })} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle} />
+            <div className="flex-1" />
+            <button onClick={() => setAdding(null)} className="text-xs font-semibold px-3 py-1.5 rounded-lg" style={{ background: T.paperAlt, color: T.slate }}>Cancel</button>
+            <button onClick={addSiteNow} disabled={addBusy} className="text-xs font-semibold px-3 py-1.5 rounded-lg" style={{ background: T.tealDark, color: "#fff", opacity: addBusy ? 0.6 : 1 }}>{addBusy ? "Adding…" : "Add and schedule"}</button>
+          </div>
+        </Card>
+      )}
 
       <div className="flex gap-3">
         <Stat label="Active sites" value={counts.sites} />
@@ -11858,7 +11982,7 @@ function SiteReviewsView({ clients, externalConsultants, goToClient }) {
                 </select>
                 <div className="flex items-center gap-1.5 flex-wrap">
                   {(status.kind === "scheduled" || status.kind === "done") && status.tasks.map((t) => (
-                    <span key={t.id} className="text-xs font-semibold px-2 py-1 rounded-md" style={{ background: t.done ? T.paperAlt : T.tealDark, color: t.done ? T.slate : "#fff", textDecoration: t.done ? "line-through" : "none" }}>{fmtDayShort(t.date)}</span>
+                    <span key={t.id} className="text-xs font-semibold px-2 py-1 rounded-md" style={{ background: t.done ? T.paperAlt : SITE_REVIEW_COLOR, color: t.done ? T.slate : "#fff", textDecoration: t.done ? "line-through" : "none" }}>{fmtDayShort(t.date)}</span>
                   ))}
                   {status.kind === "unscheduled" && (
                     <button onClick={() => (isBooking ? setBooking(null) : startBooking(row))} className="text-xs font-semibold px-2.5 py-1 rounded-md" style={{ background: "#FBF1E3", color: T.amber }}>Needs scheduling</button>
@@ -11901,6 +12025,22 @@ function SiteReviewsView({ clients, externalConsultants, goToClient }) {
                       <div style={{ color: T.ink }}>{v}</div>
                     </div>
                   ))}
+                  <div style={{ gridColumn: "1 / -1" }}>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <div className="font-semibold uppercase tracking-wide text-[10px]" style={{ color: T.slateLight }}>Reviews</div>
+                      <ConfirmButton onConfirm={() => removeReviews(row, (client.reminders || []).filter((r) => r.siteReviewId === site.id), true)} title="Delete site and all its reviews" iconSize={13} />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      {(client.reminders || []).filter((r) => r.siteReviewId === site.id).sort((a, b) => (a.date || "").localeCompare(b.date || "")).map((t) => (
+                        <div key={t.id} className="flex items-center gap-2">
+                          <input type="date" defaultValue={t.date} key={t.id + t.date} onBlur={(e) => editReviewDate(row, t, e.target.value)} className="text-xs px-2 py-1 rounded-lg outline-none" style={inputStyle} />
+                          <span style={{ color: t.done ? T.slateLight : T.slate }}>{t.assignee}{t.done ? " · done" : ""}</span>
+                          <div className="flex-1" />
+                          <ConfirmButton onConfirm={() => removeReviews(row, [t], false)} title="Delete this review" iconSize={12} />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
@@ -12909,7 +13049,7 @@ function MasterScheduleCalendar({ clients, tasks, onboardings, entries, addEntry
                 )}
                 <div className="flex flex-col gap-1 mt-1">
                   {dayEntries.map((e) => {
-                    const chipColor = colorBy === "assignee" ? colorForAssignee(e.assignee) : (e.workTypeColor || T.slateLight);
+                    const chipColor = colorBy === "assignee" ? colorForAssignee(e.assignee) : (e.siteReviewId ? SITE_REVIEW_COLOR : (e.workTypeColor || T.slateLight));
                     return (
                       <div key={e.id} draggable onDragStart={(ev) => startDragEntry(ev, e)}
                         onClick={(ev) => { ev.stopPropagation(); openEditForm(e); }}
@@ -12951,7 +13091,7 @@ function MasterScheduleCalendar({ clients, tasks, onboardings, entries, addEntry
         {monthEntries.map((e) => (
           <Card key={e.id} style={{ padding: 12 }} className="flex items-center justify-between">
             <div className="flex items-center gap-3 min-w-0">
-              <span style={{ width: 10, height: 10, borderRadius: 3, background: colorBy === "assignee" ? colorForAssignee(e.assignee) : (e.workTypeColor || T.slateLight), flexShrink: 0 }} />
+              <span style={{ width: 10, height: 10, borderRadius: 3, background: colorBy === "assignee" ? colorForAssignee(e.assignee) : (e.siteReviewId ? SITE_REVIEW_COLOR : (e.workTypeColor || T.slateLight)), flexShrink: 0 }} />
               <div className="min-w-0">
                 <div className="text-sm font-medium truncate" style={{ color: T.ink }}>
                   {e.title || e.workType}

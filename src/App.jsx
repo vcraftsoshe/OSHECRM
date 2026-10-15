@@ -11943,7 +11943,7 @@ async function downloadSiteBriefPdf({ client, site, reviews }) {
     sorted.forEach((r, i) => {
       if (y - rh < M + 30) { newPage(false); }
       if (i % 2) page.drawRectangle({ x: M, y: y - rh + 6, width: CW, height: rh, color: paperAlt });
-      page.drawText(clean(new Date(r.date + "T00:00:00").toLocaleDateString("en-NZ", { weekday: "long", day: "numeric", month: "long", year: "numeric" })), { x: M + 12, y: y - 8, size: 9.5, font, color: ink });
+      page.drawText(clean("Week of " + new Date(mondayOf(r.date) + "T00:00:00").toLocaleDateString("en-NZ", { day: "numeric", month: "long", year: "numeric" })), { x: M + 12, y: y - 8, size: 9.5, font, color: ink });
       page.drawText(r.done ? "Completed" : "Scheduled", { x: M + 400, y: y - 8, size: 9.5, font: bold, color: r.done ? slate : tealDark });
       y -= rh;
     });

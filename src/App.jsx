@@ -7023,7 +7023,8 @@ async function exportReviewLogPdf(entries) {
   entries = (entries || []).map((e) => ({ ...e, type: sanitizeForPdf(e.type), person: sanitizeForPdf(e.person), notes: sanitizeForPdf(e.notes) }));
   const { PDFDocument, StandardFonts, rgb } = await importWithReloadOnStaleChunk(() => import("pdf-lib"));
   const pdfDoc = await PDFDocument.create();
-  const { body: font, head: boldFont } = await embedBrandFonts(pdfDoc, StandardFonts);
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
   const margin = 50;
   let page = pdfDoc.addPage([595, 842]);
   let y = 792;
@@ -7297,7 +7298,8 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
   if (isFlowing) {
     // Manual: one flowing document, sections stack continuously.
     const pdfDoc = await PDFDocument.create();
-    const { body: font, head: boldFont } = await embedBrandFonts(pdfDoc, StandardFonts);
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
     const logoImage = await loadClientLogoImage(client, pdfDoc);
 
     let page = pdfDoc.addPage([pageWidth, pageHeight]);
@@ -7486,7 +7488,8 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
     // they fit, only breaking to a fresh page when a section genuinely doesn't fit where
     // it is, so a heading is never stranded away from its own body.
     const pdfDoc = await PDFDocument.create();
-    const { body: font, head: boldFont } = await embedBrandFonts(pdfDoc, StandardFonts);
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
     const logoImage = await loadClientLogoImage(client, pdfDoc);
 
     const centerX = pageWidth / 2;
@@ -7699,7 +7702,8 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
 
     if (label === "Health & Safety Policy") {
       const pdfDoc = await PDFDocument.create();
-      const { body: font, head: boldFont } = await embedBrandFonts(pdfDoc, StandardFonts);
+      const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+      const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
       const logoImage = await loadClientLogoImage(client, pdfDoc);
       const lw = pageHeight, lh = pageWidth, lMargin = 40; // landscape: swap portrait dims
       const page = pdfDoc.addPage([lw, lh]);
@@ -7762,7 +7766,8 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
     const POLICIES_WITH_SIGNOFF = ["Wellbeing Policy", "Driver Statement Policy", "Environmental Policy", "Fatigue & Stress Management Policy", "Drug & Alcohol Policy"];
     if (POLICIES_WITH_SIGNOFF.includes(label)) {
       const pdfDoc = await PDFDocument.create();
-      const { body: font, head: boldFont } = await embedBrandFonts(pdfDoc, StandardFonts);
+      const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+      const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
       const logoImage = await loadClientLogoImage(client, pdfDoc);
 
       let page = pdfDoc.addPage([pageWidth, pageHeight]);
@@ -7898,7 +7903,8 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
     }
 
     const pdfDoc = await PDFDocument.create();
-    const { body: font, head: boldFont } = await embedBrandFonts(pdfDoc, StandardFonts);
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
     const logoImage = await loadClientLogoImage(client, pdfDoc);
 
     let page = pdfDoc.addPage([pageWidth, pageHeight]);
@@ -10859,7 +10865,8 @@ async function downloadResellerPdf({ reseller, monthYear, usersForMonth }) {
   const bandHeight = 74;
 
   const pdfDoc = await PDFDocument.create();
-  const { body: font, head: boldFont } = await embedBrandFonts(pdfDoc, StandardFonts);
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
   const monthLbl = monthYear === currentMonth() ? monthLabel(currentMonth()) : monthLabel(monthYear);
 
   let page = pdfDoc.addPage([pageWidth, pageHeight]);
@@ -10930,7 +10937,8 @@ async function downloadMonthlyReportPdf({ client, monthYear, sections, highlight
   const chartColors = CHART_COLORS_RGB.map(([r, g, b]) => rgb(r, g, b));
 
   const pdfDoc = await PDFDocument.create();
-  const { body: font, head: boldFont } = await embedBrandFonts(pdfDoc, StandardFonts);
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
   const logoImage = await loadClientLogoImage(client, pdfDoc);
   const monthLabel = monthYearLabel(monthYear);
 

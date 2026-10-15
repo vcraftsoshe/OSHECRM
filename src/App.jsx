@@ -12096,6 +12096,371 @@ function TrainingView({ clients }) {
   );
 }
 
+/* ---------- Weekly reports (per-client site checklist, matches the BMC weekly report layout) ---------- */
+const WEEKLY_DEFAULT_CHECKS = [{ id: "c1", name: "Site Review" }, { id: "c2", name: "Toolbox Talk" }, { id: "c3", name: "Task Analysis" }];
+const WEEKLY_VALUES = ["", "Y", "N", "P", "N/A"];
+const WEEKLY_SITE_STATES = { active: "Active", onhold: "On hold", notstarted: "Not started" };
+
+function mondayOf(iso) {
+  const d = new Date(iso + "T00:00:00");
+  const dow = d.getDay();
+  d.setDate(d.getDate() - (dow === 0 ? 6 : dow - 1));
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function ordinalDay(n) {
+  const s = ["th", "st", "nd", "rd"], v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+}
+// Week numbers follow the month the week's Friday falls in, which is how the BMC tracker
+// numbers them (28 Sep to 2 Oct is October's week 1).
+function weekInfo(monday) {
+  const friday = addDays(monday, 4);
+  const f = new Date(friday + "T00:00:00");
+  const m = new Date(monday + "T00:00:00");
+  const monthName = (d) => d.toLocaleDateString("en-NZ", { month: "long" });
+  return {
+    friday,
+    num: Math.ceil(f.getDate() / 7),
+    range: `${ordinalDay(m.getDate())} ${monthName(m)} - ${ordinalDay(f.getDate())} ${monthName(f)} ${f.getFullYear()}`,
+  };
+}
+function weeklyTrackerOf(client) {
+  const t = client.weeklyTracker || {};
+  return { title: t.title || "Weekly Task Report for All Sites", checks: t.checks && t.checks.length ? t.checks : WEEKLY_DEFAULT_CHECKS, sites: t.sites || [], weeks: t.weeks || {} };
+}
+function sitesInWeek(tracker, monday) {
+  const friday = addDays(monday, 4);
+  return tracker.sites.filter((s) => (!s.openedDate || s.openedDate <= friday) && (!s.closedDate || s.closedDate >= monday));
+}
+// What a cell shows: whatever was entered, otherwise N/A for sites that are on hold or not started.
+function weeklyCell(site, entry, checkId) {
+  const v = entry && entry.v ? entry.v[checkId] : "";
+  if (v) return v;
+  return site.state === "onhold" || site.state === "notstarted" ? "N/A" : "";
+}
+function weeklyNote(site, entry) {
+  if (entry && entry.notes) return entry.notes;
+  return site.state === "onhold" ? "On hold" : site.state === "notstarted" ? "Not started yet" : "";
+}
+
+async function loadWeeklyLogo(client, pdfDoc) {
+  const paths = [client.logo, client.intake?.logoPath, ...((client.files || []).filter((f) => /logo/i.test(f.name || "") && /\.(png|jpe?g)$/i.test(f.name || "")).map((f) => f.path || f.storagePath))].filter(Boolean);
+  for (const p of paths) {
+    try {
+      const url = await getDownloadURL(storageRef(storage, p));
+      const bytes = await (await fetch(url)).arrayBuffer();
+      return /\.jpe?g$/i.test(p) ? await pdfDoc.embedJpg(bytes) : await pdfDoc.embedPng(bytes);
+    } catch (err) { console.error("Weekly report logo failed:", p, err); }
+  }
+  return null;
+}
+
+async function downloadWeeklyReportPdf({ client, tracker, monday }) {
+  const { PDFDocument, StandardFonts, rgb } = await importWithReloadOnStaleChunk(() => import("pdf-lib"));
+  const info = weekInfo(monday);
+  const sites = sitesInWeek(tracker, monday);
+  const dark = rgb(0.114, 0.29, 0.30), band = rgb(0.18, 0.486, 0.494), ink = rgb(0.08, 0.14, 0.13), grey = rgb(0.45, 0.5, 0.5);
+  const white = rgb(1, 1, 1), line = rgb(0.86, 0.89, 0.89), zebra = rgb(0.96, 0.975, 0.975);
+  const green = rgb(0.573, 0.816, 0.314), red = rgb(0.9, 0.2, 0.2), amber = rgb(1, 0.753, 0);
+  const pageWidth = 842, pageHeight = 595, margin = 40;
+  const pdfDoc = await PDFDocument.create();
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const italic = await pdfDoc.embedFont(StandardFonts.HelveticaOblique);
+  const logoImage = await loadWeeklyLogo(client, pdfDoc);
+  const clean = (t) => sanitizeForPdf(t || "");
+  const checks = tracker.checks;
+  const tableW = pageWidth - margin * 2;
+  const siteW = 200;
+  const checkW = Math.min(78, Math.max(48, (tableW - siteW - 160) / Math.max(1, checks.length)));
+  const notesW = tableW - siteW - checkW * checks.length;
+  const rowH = 24;
+  const center = (pg, text, f, size, x, w, yy, color) => pg.drawText(text, { x: x + (w - f.widthOfTextAtSize(text, size)) / 2, y: yy, size, font: f, color });
+
+  // Totals for the summary strip
+  let done = 0, notDone = 0, partial = 0;
+  sites.forEach((s) => { const e = (tracker.weeks[monday] || {})[s.id]; checks.forEach((c) => { const v = weeklyCell(s, e, c.id); if (v === "Y") done++; else if (v === "N") notDone++; else if (v === "P") partial++; }); });
+
+  let page, y, pageNo = 0;
+  const pages = [];
+  const newPage = (first) => {
+    page = pdfDoc.addPage([pageWidth, pageHeight]); pages.push(page); pageNo++;
+    page.drawRectangle({ x: 0, y: pageHeight - 10, width: pageWidth, height: 10, color: dark });
+    y = pageHeight - 10 - 30;
+    if (first) {
+      let textX = margin;
+      if (logoImage) {
+        const scale = Math.min(54 / logoImage.height, 150 / logoImage.width);
+        const w = logoImage.width * scale, h = logoImage.height * scale;
+        page.drawImage(logoImage, { x: margin, y: y - h + 6, width: w, height: h });
+        textX = margin + w + 20;
+      }
+      const t = clean(tracker.title);
+      page.drawText(t, { x: textX, y: y - 14, size: 20, font: bold, color: dark });
+      page.drawText(clean(client.name), { x: textX, y: y - 32, size: 10.5, font, color: grey });
+      const wk = `Week ${info.num}`;
+      page.drawText(wk, { x: pageWidth - margin - bold.widthOfTextAtSize(wk, 16), y: y - 12, size: 16, font: bold, color: band });
+      const rg = clean(info.range);
+      page.drawText(rg, { x: pageWidth - margin - font.widthOfTextAtSize(rg, 9.5), y: y - 30, size: 9.5, font, color: grey });
+      y -= 58;
+      page.drawLine({ start: { x: margin, y }, end: { x: pageWidth - margin, y }, thickness: 1.5, color: dark });
+      y -= 22;
+      // summary chips
+      const chips = [["Sites", sites.length, dark], ["Completed", done, green], ["Partial", partial, amber], ["Not completed", notDone, red]];
+      let cx = margin;
+      chips.forEach(([label, n, col]) => {
+        const text = `${label}  ${n}`;
+        const w = bold.widthOfTextAtSize(text, 8.5) + 22;
+        page.drawRectangle({ x: cx, y: y - 4, width: w, height: 18, color: col, borderWidth: 0 });
+        page.drawText(text, { x: cx + 11, y: y + 2, size: 8.5, font: bold, color: col === amber ? ink : white });
+        cx += w + 8;
+      });
+      y -= 18;
+    } else {
+      y -= 4;
+    }
+  };
+  const header = () => {
+    const h = 30, top = y;
+    page.drawRectangle({ x: margin, y: top - h, width: siteW, height: h, color: dark });
+    page.drawText("SITE", { x: margin + 12, y: top - 19, size: 8.5, font: bold, color: white });
+    page.drawRectangle({ x: margin + siteW, y: top - h, width: checkW * checks.length, height: h, color: band });
+    checks.forEach((c, i) => {
+      const name = clean(c.name).toUpperCase();
+      center(page, name, bold, 7, margin + siteW + i * checkW, checkW, top - 19, white);
+    });
+    page.drawRectangle({ x: margin + siteW + checkW * checks.length, y: top - h, width: notesW, height: h, color: dark });
+    page.drawText("NOTES", { x: margin + siteW + checkW * checks.length + 12, y: top - 19, size: 8.5, font: bold, color: white });
+    y = top - h;
+  };
+
+  newPage(true);
+  y -= 4;
+  header();
+  sites.forEach((site, idx) => {
+    if (y - rowH < margin + 34) { newPage(false); header(); }
+    const entry = (tracker.weeks[monday] || {})[site.id];
+    page.drawRectangle({ x: margin, y: y - rowH, width: tableW, height: rowH, color: idx % 2 ? zebra : white });
+    page.drawLine({ start: { x: margin, y: y - rowH }, end: { x: margin + tableW, y: y - rowH }, thickness: 0.5, color: line });
+    let nm = clean(site.name);
+    while (nm.length > 3 && bold.widthOfTextAtSize(nm, 8.5) > siteW - 20) nm = nm.slice(0, -1);
+    if (nm.length < clean(site.name).length) nm = nm.slice(0, -2) + "...";
+    page.drawText(nm, { x: margin + 12, y: y - 15, size: 8.5, font: bold, color: ink });
+    checks.forEach((c, i) => {
+      const val = weeklyCell(site, entry, c.id);
+      const cx = margin + siteW + i * checkW;
+      if (!val) return;
+      if (val === "N/A") { center(page, "N/A", font, 7.5, cx, checkW, y - 15, grey); return; }
+      const col = val === "Y" ? green : val === "N" ? red : amber;
+      const bw = 34, bh = 15;
+      page.drawRectangle({ x: cx + (checkW - bw) / 2, y: y - rowH + (rowH - bh) / 2, width: bw, height: bh, color: col });
+      center(page, val, bold, 8, cx + (checkW - bw) / 2, bw, y - 15.5, val === "P" ? ink : white);
+    });
+    const note = clean(weeklyNote(site, entry));
+    let shown = note;
+    while (shown.length > 0 && italic.widthOfTextAtSize(shown, 7.5) > notesW - 22) shown = shown.slice(0, -1);
+    if (shown.length < note.length && shown.length > 3) shown = shown.slice(0, -3) + "...";
+    page.drawText(shown, { x: margin + siteW + checks.length * checkW + 12, y: y - 15, size: 7.5, font: italic, color: grey });
+    y -= rowH;
+  });
+
+  // Legend and footer
+  const generated = new Date().toLocaleDateString("en-NZ", { day: "numeric", month: "long", year: "numeric" });
+  pages.forEach((pg, i) => {
+    pg.drawLine({ start: { x: margin, y: margin + 6 }, end: { x: pageWidth - margin, y: margin + 6 }, thickness: 0.5, color: line });
+    pg.drawText("Enter Y (completed), N (not completed), P (partially completed), or N/A as applicable", { x: margin, y: margin - 6, size: 7.5, font: italic, color: grey });
+    const right = `${clean(client.name)}  |  ${generated}  |  Page ${i + 1} of ${pages.length}`;
+    pg.drawText(right, { x: pageWidth - margin - font.widthOfTextAtSize(right, 7.5), y: margin - 6, size: 7.5, font, color: grey });
+  });
+
+  const bytes = await pdfDoc.save();
+  const filename = `${safeFilenamePart(client.name)} Weekly Task Report Week ${info.num} ${monday}.pdf`;
+  saveGeneratedDocument(client, bytes, filename, "Weekly Report");
+  const blob = new Blob([bytes], { type: "application/pdf" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function WeeklyReportView({ clients }) {
+  const active = clients.filter((c) => !c.archived).sort((a, b) => a.name.localeCompare(b.name));
+  const [clientId, setClientId] = useState(active[0]?.id || "");
+  const client = clients.find((c) => c.id === clientId) || active[0];
+  const [monday, setMonday] = useState(mondayOf(today()));
+  const [setupOpen, setSetupOpen] = useState(false);
+  const [newSite, setNewSite] = useState("");
+  const [newCheck, setNewCheck] = useState("");
+  const [downloading, setDownloading] = useState(false);
+  if (!client) return <div className="text-sm" style={{ color: T.slateLight }}>No clients yet.</div>;
+
+  const tracker = weeklyTrackerOf(client);
+  const info = weekInfo(monday);
+  const sites = sitesInWeek(tracker, monday);
+  const inputStyle = { border: `1px solid ${T.border}`, color: T.ink };
+
+  const saveTracker = (patch) => updateDoc(doc(db, "clients", client.id), { weeklyTracker: { title: tracker.title, checks: tracker.checks, sites: tracker.sites, weeks: tracker.weeks, ...patch } });
+  const setCell = (siteId, checkId, value) => updateDoc(doc(db, "clients", client.id), { [`weeklyTracker.weeks.${monday}.${siteId}.v.${checkId}`]: value, ...(client.weeklyTracker ? {} : { "weeklyTracker.title": tracker.title, "weeklyTracker.checks": tracker.checks, "weeklyTracker.sites": tracker.sites }) });
+  const setNote = (siteId, value) => updateDoc(doc(db, "clients", client.id), { [`weeklyTracker.weeks.${monday}.${siteId}.notes`]: value });
+  const cycle = (site, checkId) => {
+    const entry = (tracker.weeks[monday] || {})[site.id];
+    const current = weeklyCell(site, entry, checkId);
+    const next = WEEKLY_VALUES[(WEEKLY_VALUES.indexOf(current) + 1) % WEEKLY_VALUES.length];
+    setCell(site.id, checkId, next);
+  };
+
+  const addSite = () => {
+    const name = newSite.trim();
+    if (!name) return;
+    saveTracker({ sites: [...tracker.sites, { id: "s" + Date.now(), name, state: "active", openedDate: monday, closedDate: null }] });
+    setNewSite("");
+  };
+  const updateSite = (id, patch) => saveTracker({ sites: tracker.sites.map((s) => (s.id === id ? { ...s, ...patch } : s)) });
+  const removeSite = (id) => saveTracker({ sites: tracker.sites.filter((s) => s.id !== id) });
+  const addCheck = () => {
+    const name = newCheck.trim();
+    if (!name) return;
+    saveTracker({ checks: [...tracker.checks, { id: "c" + Date.now(), name }] });
+    setNewCheck("");
+  };
+  const updateCheck = (id, name) => saveTracker({ checks: tracker.checks.map((c) => (c.id === id ? { ...c, name } : c)) });
+  const removeCheck = (id) => saveTracker({ checks: tracker.checks.filter((c) => c.id !== id) });
+
+  const download = async () => {
+    setDownloading(true);
+    try { await downloadWeeklyReportPdf({ client, tracker, monday }); }
+    catch (err) { console.error("Weekly report PDF failed:", err); alert(`Couldn't create the PDF: ${err.message || err}`); }
+    finally { setDownloading(false); }
+  };
+
+  const chip = (val) => {
+    const style = val === "Y" ? { background: "#92D050", color: "#fff" } : val === "N" ? { background: "#FF0000", color: "#fff" } : val === "P" ? { background: "#FFC000", color: T.ink } : val === "N/A" ? { background: T.paperAlt, color: T.slate } : { background: "transparent", color: T.slateLight, border: `1px dashed ${T.border}` };
+    return style;
+  };
+  const cols = `minmax(0, 2fr) repeat(${tracker.checks.length}, 76px) minmax(0, 2fr)`;
+  const closed = tracker.sites.filter((s) => s.closedDate && !sites.includes(s));
+
+  return (
+    <div className="flex flex-col gap-5 h-full min-h-0 overflow-y-auto pb-6">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-3">
+          <select value={client.id} onChange={(e) => setClientId(e.target.value)} className="text-sm font-semibold px-3 py-2 rounded-lg outline-none" style={inputStyle}>
+            {active.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+          <div className="flex items-center gap-1.5">
+            <button onClick={() => setMonday(addDays(monday, -7))} className="p-1.5 rounded-lg" style={{ background: T.paperAlt }}><ChevronLeft size={15} color={T.slate} /></button>
+            <div className="text-sm font-bold px-2 text-center" style={{ color: T.ink, minWidth: 220 }}>Week {info.num}, {info.range}</div>
+            <button onClick={() => setMonday(addDays(monday, 7))} className="p-1.5 rounded-lg" style={{ background: T.paperAlt }}><ChevronRight size={15} color={T.slate} /></button>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setSetupOpen((v) => !v)} className="text-xs font-semibold px-3 py-2 rounded-lg" style={{ background: T.paperAlt, color: T.tealDark }}>{setupOpen ? "Hide sites and checks" : "Sites and checks"}</button>
+          <button onClick={download} disabled={downloading || sites.length === 0} className="text-xs font-semibold px-4 py-2 rounded-lg flex items-center gap-1.5" style={{ background: sites.length === 0 ? T.slateLight : T.tealDark, color: "#fff" }}>
+            <FileText size={13} /> {downloading ? "Creating…" : "Download PDF"}
+          </button>
+        </div>
+      </div>
+
+      {(setupOpen || tracker.sites.length === 0) && (
+        <Card style={{ padding: 18 }}>
+          <div className="grid gap-8" style={{ gridTemplateColumns: "minmax(0, 3fr) minmax(0, 2fr)" }}>
+            <div>
+              <div className="text-sm font-semibold mb-2" style={{ color: T.ink }}>Sites</div>
+              <div className="flex flex-col gap-1.5">
+                {tracker.sites.map((s) => (
+                  <div key={s.id} className="flex items-center gap-2" style={{ opacity: s.closedDate && s.closedDate < monday ? 0.55 : 1 }}>
+                    <input defaultValue={s.name} key={s.id + s.name} onBlur={(e) => e.target.value.trim() && e.target.value.trim() !== s.name && updateSite(s.id, { name: e.target.value.trim() })} className="flex-1 text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle} />
+                    <select value={s.state || "active"} onChange={(e) => updateSite(s.id, { state: e.target.value })} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle}>
+                      {Object.entries(WEEKLY_SITE_STATES).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+                    </select>
+                    {s.closedDate ? (
+                      <button onClick={() => updateSite(s.id, { closedDate: null })} className="text-xs font-semibold px-2 py-1.5 rounded-lg" style={{ background: T.paperAlt, color: T.tealDark }}>Reopen</button>
+                    ) : (
+                      <button onClick={() => updateSite(s.id, { closedDate: info.friday })} className="text-xs font-semibold px-2 py-1.5 rounded-lg" style={{ background: T.paperAlt, color: T.slate }}>Close after this week</button>
+                    )}
+                    <ConfirmButton onConfirm={() => removeSite(s.id)} title="Delete site and its history" iconSize={12} />
+                  </div>
+                ))}
+                <div className="flex items-center gap-2 mt-1">
+                  <input placeholder="New site name" value={newSite} onChange={(e) => setNewSite(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addSite(); }} className="flex-1 text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle} />
+                  <button onClick={addSite} className="text-xs font-semibold px-3 py-1.5 rounded-lg" style={{ background: T.tealDark, color: "#fff" }}>Add site</button>
+                </div>
+              </div>
+            </div>
+            <div className="flex flex-col gap-4">
+              <div>
+                <div className="text-sm font-semibold mb-2" style={{ color: T.ink }}>Checks</div>
+                <div className="flex flex-col gap-1.5">
+                  {tracker.checks.map((c) => (
+                    <div key={c.id} className="flex items-center gap-2">
+                      <input defaultValue={c.name} key={c.id + c.name} onBlur={(e) => e.target.value.trim() && e.target.value.trim() !== c.name && updateCheck(c.id, e.target.value.trim())} className="flex-1 text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle} />
+                      {tracker.checks.length > 1 && <ConfirmButton onConfirm={() => removeCheck(c.id)} title="Remove check" iconSize={12} />}
+                    </div>
+                  ))}
+                  <div className="flex items-center gap-2 mt-1">
+                    <input placeholder="New check" value={newCheck} onChange={(e) => setNewCheck(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addCheck(); }} className="flex-1 text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle} />
+                    <button onClick={addCheck} className="text-xs font-semibold px-3 py-1.5 rounded-lg" style={{ background: T.tealDark, color: "#fff" }}>Add</button>
+                  </div>
+                </div>
+              </div>
+              <div>
+                <div className="text-sm font-semibold mb-2" style={{ color: T.ink }}>Report title</div>
+                <input defaultValue={tracker.title} key={client.id + tracker.title} onBlur={(e) => e.target.value.trim() && e.target.value.trim() !== tracker.title && saveTracker({ title: e.target.value.trim() })} className="w-full text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle} />
+              </div>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {tracker.sites.length > 0 && (
+        <div className="rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.border}` }}>
+          <div className="grid items-center px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide" style={{ gridTemplateColumns: cols, gap: 10, color: T.slate, background: T.paperAlt }}>
+            <div>Site</div>
+            {tracker.checks.map((c) => <div key={c.id} className="text-center">{c.name}</div>)}
+            <div>Notes</div>
+          </div>
+          {sites.length === 0 && <div className="px-4 py-8 text-sm text-center" style={{ color: T.slateLight }}>No sites open this week.</div>}
+          {sites.map((site) => {
+            const entry = (tracker.weeks[monday] || {})[site.id];
+            return (
+              <div key={site.id} className="grid items-center px-4 py-2" style={{ gridTemplateColumns: cols, gap: 10, borderTop: `1px solid ${T.border}` }}>
+                <div className="text-sm font-semibold truncate" style={{ color: T.ink }} title={site.name}>{site.name}</div>
+                {tracker.checks.map((c) => {
+                  const val = weeklyCell(site, entry, c.id);
+                  return (
+                    <button key={c.id} onClick={() => cycle(site, c.id)} className="text-xs font-bold rounded-md py-1.5" style={chip(val)}>{val || "·"}</button>
+                  );
+                })}
+                <input defaultValue={entry && entry.notes ? entry.notes : ""} key={monday + site.id + (entry && entry.notes)} placeholder={weeklyNote(site, null)} onBlur={(e) => e.target.value !== ((entry && entry.notes) || "") && setNote(site.id, e.target.value)}
+                  className="text-xs px-2 py-1.5 rounded-lg outline-none w-full" style={inputStyle} />
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {closed.length > 0 && <div className="text-xs" style={{ color: T.slateLight }}>Closed: {closed.map((s) => s.name).join(", ")}</div>}
+    </div>
+  );
+}
+
+function ReportsHub(props) {
+  const [mode, setMode] = useState("monthly");
+  return (
+    <div className="flex flex-col gap-4 h-full min-h-0">
+      <div className="flex rounded-lg p-1 self-start" style={{ background: T.paperAlt }}>
+        {[["monthly", "Monthly"], ["weekly", "Weekly"]].map(([k, label]) => (
+          <button key={k} onClick={() => setMode(k)} className="text-xs font-semibold px-5 py-1.5 rounded-md" style={{ background: mode === k ? T.card : "transparent", color: mode === k ? T.tealDark : T.slate }}>{label}</button>
+        ))}
+      </div>
+      <div className="flex-1 min-h-0">
+        {mode === "monthly" ? <ReportsView {...props} /> : <WeeklyReportView clients={props.clients} />}
+      </div>
+    </div>
+  );
+}
+
 function gatherWorkloadItems(person, tasks, onboardings, clients, scheduleBlocks, start, end) {
   const items = [];
   tasks.filter((t) => t.assignee === person && !t.done && t.dueDate && t.dueDate >= start && t.dueDate < end).forEach((t) => {
@@ -13834,7 +14199,7 @@ export default function App() {
           {module === "workflows" && <WorkflowsView workflows={workflows} />}
           {module === "resellers" && <ResellersView resellers={resellers} selectedId={selectedReseller} setSelectedId={setSelectedReseller} externalConsultants={externalConsultants} addExternalConsultant={addExternalConsultant} removeExternalConsultant={removeExternalConsultant} />}
           {module === "tasks" && <TasksView tasks={tasks} clients={clients} onboardings={onboardings} currentUser={currentUser} goToClient={goToClient} resellers={resellers} goToReseller={goToReseller} leads={leads} goToSales={() => setModule("sales")} />}
-          {module === "reports" && <ReportsView clients={clients} reportTemplates={reportTemplates} addReportTemplate={addReportTemplate} renameReportTemplate={renameReportTemplate} deleteReportTemplate={deleteReportTemplate} addTemplateSection={addTemplateSection} removeTemplateSection={removeTemplateSection} />}
+          {module === "reports" && <ReportsHub clients={clients} reportTemplates={reportTemplates} addReportTemplate={addReportTemplate} renameReportTemplate={renameReportTemplate} deleteReportTemplate={deleteReportTemplate} addTemplateSection={addTemplateSection} removeTemplateSection={removeTemplateSection} />}
           {module === "training" && <ErrorBoundary><TrainingView clients={clients} /></ErrorBoundary>}
           {module === "sitereviews" && <ErrorBoundary><SiteReviewsView clients={clients} externalConsultants={externalConsultants} goToClient={goToClient} /></ErrorBoundary>}
           {module === "schedule" && <ScheduleView tasks={tasks} clients={clients} onboardings={onboardings} scheduleBlocks={scheduleBlocks} addScheduleBlock={addScheduleBlock} removeScheduleBlock={removeScheduleBlock} goToClient={goToClient} masterScheduleEntries={masterScheduleEntries} addMasterScheduleEntry={addMasterScheduleEntry} updateMasterScheduleEntry={updateMasterScheduleEntry} removeMasterScheduleEntry={removeMasterScheduleEntry} confirmMasterScheduleEntry={confirmMasterScheduleEntry} externalConsultants={externalConsultants} />}

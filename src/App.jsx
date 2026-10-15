@@ -9,6 +9,7 @@ import { collection, doc, onSnapshot, updateDoc, setDoc, getDocs, getDoc, delete
 import { signOut } from "firebase/auth";
 import { ref as storageRef, getDownloadURL, uploadBytes } from "firebase/storage";
 import { db, auth, storage } from "./firebase";
+import { BRAND, hexColor, embedBrandFonts, drawBrandBand, drawStatusLabel, drawStatusChip } from "./brandPdf";
 import { SECTION_ITEMS, ALWAYS_PROCEDURES, CONDITIONAL_PROCEDURES, COMPLIANCE_EXTRA_PROCEDURES, ALWAYS_POLICIES, CONDITIONAL_POLICIES, ERP_ITEMS, ERP_CONTACT_ITEMS, ERP_ALWAYS_TICKED_EMERGENCIES } from "./ohsmsLogic";
 
 /* ---------- Resilient dynamic import ----------
@@ -4710,14 +4711,32 @@ function expandScheduleEntriesInRange(entries, start, end) {
   return out.sort((a, b) => a.occurrenceDate.localeCompare(b.occurrenceDate));
 }
 
+// One definition of a monthly target's progress, used by the client Scheduling tab and the
+// master Schedule tab so they always agree. Done = ticked-off tasks for the target in that
+// month (a confirmed calendar entry becomes one of these). Booked = done plus anything
+// still scheduled: open tasks and calendar entries not yet confirmed.
+function targetCounts(client, target, month, masterEntries) {
+  const rem = (client.reminders || []).filter((r) => r.targetId === target.id && r.date && r.date.slice(0, 7) === month);
+  const done = rem.filter((r) => r.done).length;
+  const open = rem.filter((r) => !r.done).length;
+  const pending = (masterEntries || []).filter((e) => e.clientId === client.id && e.targetId === target.id && !e.confirmed && e.date && e.date.slice(0, 7) === month).length;
+  return { done, booked: done + open + pending };
+}
+
 function ClientScheduling({ client, updateClient, toggleReminderDone, openTab }) {
+  const [masterEntries, setMasterEntries] = useState([]);
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "masterScheduleEntries"), (snap) => setMasterEntries(snap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((e) => e.clientId === client.id)), (err) => console.error("Master entries subscription failed:", err));
+    return unsub;
+  }, [client.id]);
   const [monthYear, setMonthYear] = useState(currentMonth());
-  const [draft, setDraft] = useState({ title: "", assignee: TEAM[0], date: today(), hours: "", repeat: "none", targetId: "", nth: 1, weekday: 4 });
+  const [draft, setDraft] = useState({ title: "", assignee: TEAM[0], date: today(), hours: "", repeat: "none", targetId: "", nth: 1, weekday: 4, billable: true });
   const [targetDraft, setTargetDraft] = useState({ title: "", count: "", repeat: "monthly" });
   const [billableDraft, setBillableDraft] = useState({ description: "", member: TEAM[0], date: today(), type: "hours", hours: "", amount: "" });
 
   const entries = client.scheduleEntries || [];
   const targets = client.scheduleTargets || [];
+  const linkedItems = (client.reminders || []).filter((r) => (r.siteReviewId || r.trainingId) && r.date && r.date.slice(0, 7) === monthYear);
   const monthStart = `${monthYear}-01`;
   const monthEnd = `${addMonthsToMonthYear(monthYear, 1)}-01`;
   const occurrences = expandScheduleEntriesInRange(entries, monthStart, monthEnd);
@@ -4749,7 +4768,7 @@ function ClientScheduling({ client, updateClient, toggleReminderDone, openTab })
       upcoming.forEach((occ) => {
         const taskId = `sched-task-${occ.id}-${occ.occurrenceDate}`;
         if (!existingIds.has(taskId) && !deletedIds.has(taskId)) {
-          newReminders.push({ id: taskId, text: occ.title, date: occ.occurrenceDate, assignee: occ.assignee, estHours: occ.hours || 0, done: false, recurring: "none", targetId: occ.targetId || null });
+          newReminders.push({ id: taskId, text: occ.title, date: occ.occurrenceDate, assignee: occ.assignee, estHours: occ.hours || 0, done: false, recurring: "none", targetId: occ.targetId || null, billable: occ.billable !== false });
         }
       });
 
@@ -4798,11 +4817,11 @@ function ClientScheduling({ client, updateClient, toggleReminderDone, openTab })
     if (!draft.title.trim() || !draft.date || !draft.hours) return;
     const entry = {
       id: "sched" + Date.now(), title: draft.title.trim(), assignee: draft.assignee, date: draft.date, hours: Number(draft.hours),
-      repeat: draft.repeat, targetId: draft.targetId || null,
+      repeat: draft.repeat, targetId: draft.targetId || null, billable: draft.billable !== false,
       ...(draft.repeat === "monthly-nth" ? { nth: Number(draft.nth), weekday: Number(draft.weekday) } : {}),
     };
     updateClient((c) => ({ ...c, scheduleEntries: [...(c.scheduleEntries || []), entry] }));
-    setDraft({ title: "", assignee: TEAM[0], date: today(), hours: "", repeat: "none", targetId: "", nth: 1, weekday: 4 });
+    setDraft({ title: "", assignee: TEAM[0], date: today(), hours: "", repeat: "none", targetId: "", nth: 1, weekday: 4, billable: true });
   };
   const removeEntry = (id) => {
     updateClient((c) => ({
@@ -4828,7 +4847,7 @@ function ClientScheduling({ client, updateClient, toggleReminderDone, openTab })
   // off, not 4/4 the moment they're on the calendar. "Repeats monthly" targets apply to
   // every month you look at; "This month only" targets are scoped to the specific month
   // they were created in and only show while viewing that month.
-  const progressFor = (target) => (client.reminders || []).filter((r) => r.targetId === target.id && r.done && r.date.slice(0, 7) === monthYear).length;
+  const progressFor = (target) => targetCounts(client, target, monthYear, masterEntries);
   const visibleTargets = targets.filter((t) => t.repeat === "monthly" || t.monthYear === monthYear);
   const addTarget = () => {
     if (!targetDraft.title.trim() || !targetDraft.count) return;
@@ -4891,11 +4910,12 @@ function ClientScheduling({ client, updateClient, toggleReminderDone, openTab })
   // what's scheduled. A completed occurrence drops off "left to do" the moment it's ticked.
   const thisRealMonth = currentMonth();
   const nextRealMonth = addMonthsToMonthYear(thisRealMonth, 1);
+  const isScheduledItem = (r) => String(r.id).startsWith("sched-task-") || r.siteReviewId || r.trainingId;
   const leftToDoThisMonth = (client.reminders || [])
-    .filter((r) => String(r.id).startsWith("sched-task-") && !r.done && r.date.slice(0, 7) === thisRealMonth)
+    .filter((r) => isScheduledItem(r) && !r.done && r.date.slice(0, 7) === thisRealMonth)
     .sort((a, b) => a.date.localeCompare(b.date));
   const comingUpNextMonth = (client.reminders || [])
-    .filter((r) => String(r.id).startsWith("sched-task-") && r.date.slice(0, 7) === nextRealMonth)
+    .filter((r) => isScheduledItem(r) && r.date.slice(0, 7) === nextRealMonth)
     .sort((a, b) => a.date.localeCompare(b.date));
 
   return (
@@ -4950,6 +4970,15 @@ function ClientScheduling({ client, updateClient, toggleReminderDone, openTab })
             <div key={i} style={{ minHeight: 120, background: date ? T.paperAlt : "transparent", borderRadius: 10, padding: 8 }}>
               {date && <div className="text-sm font-bold mb-1" style={{ color: date === today() ? T.tealDark : T.slate }}>{Number(date.slice(8))}</div>}
               <div className="flex flex-col gap-1">
+                {date && linkedItems.filter((r) => r.date === date).map((r) => {
+                  const col = r.trainingId ? TRAINING_COLOR : SITE_REVIEW_COLOR;
+                  return (
+                    <button key={r.id} onClick={() => openTab && openTab("reminders")} className="text-[13px] leading-snug rounded-md px-2 py-1.5 text-left font-semibold flex items-start gap-2" style={{ background: `${col}22`, color: T.ink, borderLeft: `4px solid ${col}`, opacity: r.done ? 0.55 : 1 }} title={`${r.text} - ${r.assignee} - ${r.estHours || 0}h`}>
+                      <span className="flex-1 min-w-0" style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{r.text} · {r.estHours || 0}h</span>
+                      <span className="shrink-0 text-[10px] font-bold rounded-full px-1.5 py-0.5 mt-0.5" style={{ background: col, color: "#fff" }}>{(r.assignee || "?").split(" ")[0]}</span>
+                    </button>
+                  );
+                })}
                 {date && occurrences.filter((o) => o.occurrenceDate === date).map((o) => {
                   const col = assigneeColor(o.assignee);
                   return (
@@ -4970,7 +4999,7 @@ function ClientScheduling({ client, updateClient, toggleReminderDone, openTab })
         <div className="text-[11px] mb-3" style={{ color: T.slateLight }}>How many of each thing should happen this month, checked against the calendar above for {monthYear === currentMonth() ? "this month" : monthLabel(monthYear)}.</div>
         <div className="flex flex-col gap-2 mb-3">
           {visibleTargets.map((t) => {
-            const done = progressFor(t);
+            const { done, booked } = progressFor(t);
             const complete = done >= t.targetCount;
             return (
               <div key={t.id} className="flex items-center justify-between text-sm py-1.5" style={{ borderBottom: `1px solid ${T.border}` }}>
@@ -4979,6 +5008,7 @@ function ClientScheduling({ client, updateClient, toggleReminderDone, openTab })
                   <span className="ml-2 text-[11px]" style={{ color: T.slateLight }}>{t.repeat === "monthly" ? "repeats monthly" : monthLabel(t.monthYear || monthYear) + " only"}</span>
                 </div>
                 <div className="flex items-center gap-2">
+                  {booked > done && <span className="text-[11px]" style={{ color: T.slate }}>{booked} booked</span>}
                   <span className="text-xs font-bold px-2 py-1 rounded-full" style={{ color: complete ? T.tealDark : T.amber, background: T.paperAlt }}>{done}/{t.targetCount}</span>
                   <ConfirmButton onConfirm={() => removeTarget(t.id)} title="Remove target" iconSize={13} />
                 </div>
@@ -5011,7 +5041,7 @@ function ClientScheduling({ client, updateClient, toggleReminderDone, openTab })
                 <span className="ml-2 text-xs" style={{ color: T.slate }}>
                   {e.assignee} · {fmtDate(e.date)}
                   {e.repeat === "weekly" ? " · weekly" : e.repeat === "monthly" ? " · monthly (same date)" : e.repeat === "monthly-nth" ? ` · ${NTH_LABELS[e.nth]} ${WEEKDAY_LABELS[e.weekday]} of each month` : ""}
-                  {" · "}{e.hours}h{e.targetId ? " · counts toward target" : ""}
+                  {" · "}{e.hours}h{e.billable === false ? " · not billable" : ""}{e.targetId ? " · counts toward target" : ""}
                 </span>
               </div>
               <ConfirmButton onConfirm={() => removeEntry(e.id)} title="Remove" iconSize={13} />
@@ -5060,6 +5090,9 @@ function ClientScheduling({ client, updateClient, toggleReminderDone, openTab })
               </select>
             </>
           )}
+          <label className="flex items-center gap-1.5 text-xs shrink-0" style={{ color: T.ink }}>
+            <input type="checkbox" checked={draft.billable === false} onChange={(e) => setDraft({ ...draft, billable: !e.target.checked })} /> Not billable
+          </label>
           <button onClick={addEntry} className="text-xs font-semibold px-3 py-1.5 rounded-lg shrink-0" style={{ background: T.tealDark, color: "#fff" }}>Add</button>
         </div>
       </Card>
@@ -5436,6 +5469,7 @@ function ClientOnboarding({ client, onboardings, updateOnboardingsForClient, wor
 // from the job itself, so completing it from a task, a workflow stage or the schedule can
 // only ever write the same entry once.
 const SITE_REVIEW_COLOR = "#7C5CE6";
+const TRAINING_COLOR = "#2E8BC0";
 const SITE_REVIEW_BG = "#EFEAFD";
 function reminderLogId(r) {
   if (r.linkedStep) return `wf-stage-${String(r.linkedStep).replace("|", "-")}`;
@@ -6989,8 +7023,7 @@ async function exportReviewLogPdf(entries) {
   entries = (entries || []).map((e) => ({ ...e, type: sanitizeForPdf(e.type), person: sanitizeForPdf(e.person), notes: sanitizeForPdf(e.notes) }));
   const { PDFDocument, StandardFonts, rgb } = await importWithReloadOnStaleChunk(() => import("pdf-lib"));
   const pdfDoc = await PDFDocument.create();
-  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-  const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const { body: font, head: boldFont } = await embedBrandFonts(pdfDoc, StandardFonts);
   const margin = 50;
   let page = pdfDoc.addPage([595, 842]);
   let y = 792;
@@ -7264,8 +7297,7 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
   if (isFlowing) {
     // Manual: one flowing document, sections stack continuously.
     const pdfDoc = await PDFDocument.create();
-    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-    const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    const { body: font, head: boldFont } = await embedBrandFonts(pdfDoc, StandardFonts);
     const logoImage = await loadClientLogoImage(client, pdfDoc);
 
     let page = pdfDoc.addPage([pageWidth, pageHeight]);
@@ -7454,8 +7486,7 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
     // they fit, only breaking to a fresh page when a section genuinely doesn't fit where
     // it is, so a heading is never stranded away from its own body.
     const pdfDoc = await PDFDocument.create();
-    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-    const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    const { body: font, head: boldFont } = await embedBrandFonts(pdfDoc, StandardFonts);
     const logoImage = await loadClientLogoImage(client, pdfDoc);
 
     const centerX = pageWidth / 2;
@@ -7668,8 +7699,7 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
 
     if (label === "Health & Safety Policy") {
       const pdfDoc = await PDFDocument.create();
-      const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-      const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+      const { body: font, head: boldFont } = await embedBrandFonts(pdfDoc, StandardFonts);
       const logoImage = await loadClientLogoImage(client, pdfDoc);
       const lw = pageHeight, lh = pageWidth, lMargin = 40; // landscape: swap portrait dims
       const page = pdfDoc.addPage([lw, lh]);
@@ -7732,8 +7762,7 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
     const POLICIES_WITH_SIGNOFF = ["Wellbeing Policy", "Driver Statement Policy", "Environmental Policy", "Fatigue & Stress Management Policy", "Drug & Alcohol Policy"];
     if (POLICIES_WITH_SIGNOFF.includes(label)) {
       const pdfDoc = await PDFDocument.create();
-      const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-      const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+      const { body: font, head: boldFont } = await embedBrandFonts(pdfDoc, StandardFonts);
       const logoImage = await loadClientLogoImage(client, pdfDoc);
 
       let page = pdfDoc.addPage([pageWidth, pageHeight]);
@@ -7869,8 +7898,7 @@ async function downloadBuildPdf({ client, category, categoryKey, included, docum
     }
 
     const pdfDoc = await PDFDocument.create();
-    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-    const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    const { body: font, head: boldFont } = await embedBrandFonts(pdfDoc, StandardFonts);
     const logoImage = await loadClientLogoImage(client, pdfDoc);
 
     let page = pdfDoc.addPage([pageWidth, pageHeight]);
@@ -9645,15 +9673,25 @@ function BillingOverview({ clients, resellers, tasks }) {
   })();
   const newClients = clients.filter((c) => c.billingSetupDone === false);
   const setUpClients = clients.filter((c) => c.billingSetupDone !== false);
-  const hasHoursThisMonth = (c) => c.hours.log.some((h) => h.date.slice(0, 7) === viewMonth) || (c.billableExpenses || []).some((x) => x.date && x.date.slice(0, 7) === viewMonth);
+  const hasHoursThisMonth = (c) => c.hours.log.some((h) => h.date.slice(0, 7) === viewMonth && isBillableLog(c, h)) || (c.billableExpenses || []).some((x) => x.date && x.date.slice(0, 7) === viewMonth);
 
+  // Hours that came from a task or entry marked not billable never belong on an invoice,
+  // including old log lines written before that was enforced.
+  const isBillableLog = (c, h) => {
+    if (!(Number(h.hours) > 0)) return false;
+    if (h.src && h.src.t === "r") {
+      const r = (c.reminders || []).find((x) => String(x.id) === String(h.src.id));
+      if (r && r.billable === false) return false;
+    }
+    return true;
+  };
   const needsAttention = setUpClients.filter((c) => (c.billingType || "FlatFee") !== "FlatFee" || hasHoursThisMonth(c)).map((c) => ({
     id: c.id, name: c.name, type: c.billingType || "FlatFee", adHoc: (c.billingType || "FlatFee") === "FlatFee",
-    logged: c.hours.log.filter((h) => h.date.slice(0, 7) === viewMonth).reduce((s, h) => s + h.hours, 0),
+    logged: c.hours.log.filter((h) => h.date.slice(0, 7) === viewMonth && isBillableLog(c, h)).reduce((s, h) => s + h.hours, 0),
     included: c.hours.included,
     users: c.users.log[c.users.log.length - 1]?.count ?? 0,
     status: c.billing.status,
-    hourItems: c.hours.log.filter((h) => h.date.slice(0, 7) === viewMonth),
+    hourItems: c.hours.log.filter((h) => h.date.slice(0, 7) === viewMonth && isBillableLog(c, h)),
     expenseItems: (c.billableExpenses || []).filter((x) => x.date && x.date.slice(0, 7) === viewMonth),
     billedForViewMonth: (c.billedMonths || []).includes(viewMonth),
     isNztg: (c.intake?.hearAboutUs || "").toLowerCase().includes("nztg"),
@@ -10821,8 +10859,7 @@ async function downloadResellerPdf({ reseller, monthYear, usersForMonth }) {
   const bandHeight = 74;
 
   const pdfDoc = await PDFDocument.create();
-  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-  const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const { body: font, head: boldFont } = await embedBrandFonts(pdfDoc, StandardFonts);
   const monthLbl = monthYear === currentMonth() ? monthLabel(currentMonth()) : monthLabel(monthYear);
 
   let page = pdfDoc.addPage([pageWidth, pageHeight]);
@@ -10893,8 +10930,7 @@ async function downloadMonthlyReportPdf({ client, monthYear, sections, highlight
   const chartColors = CHART_COLORS_RGB.map(([r, g, b]) => rgb(r, g, b));
 
   const pdfDoc = await PDFDocument.create();
-  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-  const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const { body: font, head: boldFont } = await embedBrandFonts(pdfDoc, StandardFonts);
   const logoImage = await loadClientLogoImage(client, pdfDoc);
   const monthLabel = monthYearLabel(monthYear);
 
@@ -11600,6 +11636,12 @@ function defaultFirstReviewDate(startMonth) {
   return nextWeekdayISO(monthStart < today() ? today() : monthStart);
 }
 
+function appJobText(x) {
+  if (!x || !x.onApp) return "";
+  if (x.onApp === "Yes") return x.appJobName ? `Yes, listed as ${x.appJobName}` : "Yes";
+  return x.onApp;
+}
+
 async function createSiteWithReviews(r, v, dates) {
   const hrs = Number(v.hours) || 0;
   let clientId = v.clientId;
@@ -11620,7 +11662,7 @@ async function createSiteWithReviews(r, v, dates) {
   }
   const clientName = base.name;
   const site = {
-    id: r.id, address: r.address, region: r.region || "", frequency: v.frequency, onApp: r.onApp, inductionDetails: r.inductionDetails || "",
+    id: r.id, address: r.address, siteName: r.siteName || "", region: r.region || "", frequency: v.frequency, onApp: r.onApp, appJobName: r.appJobName || "", sssp: r.sssp || "", notes: r.notes || "", inductionDetails: r.inductionDetails || "",
     siteAccess: r.siteAccess || "", ppeRequirements: r.ppeRequirements || "", parkingRequirements: r.parkingRequirements || "",
     siteStart: r.siteStart || null, siteEnd: r.siteEnd || null, requestedStartMonth: r.startMonth,
     contactName: r.contactName, email: r.email, phone: r.phone, assignee: v.assignee, hours: hrs, addedDate: today(),
@@ -11648,18 +11690,21 @@ async function createSiteWithReviews(r, v, dates) {
   const noteLines = [
     `Site review request accepted: ${r.address}`,
     `${SITE_REVIEW_FREQ_LABELS[v.frequency]}, ${dates.length} reviews from ${fmtDate(dates[0])}`,
-    `On the app: ${r.onApp}`,
+    r.siteName ? `Site name: ${r.siteName}` : null,
+    `OSHE App job: ${appJobText(r)}`,
+    r.sssp ? `SSSP created: ${r.sssp}` : null,
     r.region ? `Region: ${r.region}` : null,
     r.inductionDetails ? `Induction: ${r.inductionDetails}` : null,
     r.siteAccess ? `Site access: ${r.siteAccess}` : null,
     r.ppeRequirements ? `PPE: ${r.ppeRequirements}` : null,
     r.parkingRequirements ? `Parking: ${r.parkingRequirements}` : null,
+    r.notes ? `Additional notes: ${r.notes}` : null,
     r.siteStart ? `Site start: ${fmtDate(r.siteStart)}` : null,
     r.siteEnd ? `Approximate closing: ${fmtDate(r.siteEnd)}` : null,
   ].filter(Boolean);
   const nextClient = {
     ...base,
-    contacts: hasContact ? contacts : [...contacts, { id: Date.now(), name: r.contactName, role: "Site contact", email: r.email, phone: r.phone }],
+    contacts: hasContact ? contacts : [...contacts, { id: Date.now(), name: r.contactName, role: "Site supervisor", email: r.email, phone: r.phone }],
     siteReviews: [...(base.siteReviews || []), site],
     reminders: [...(base.reminders || []), ...tasks],
     notes: [...(base.notes || []), { id: Date.now(), author: "Site review form", date: today(), text: noteLines.join("\n"), tags: [] }],
@@ -11737,20 +11782,21 @@ function SiteReviewInbox({ clients, externalConsultants }) {
               <div key={r.id} className="rounded-lg p-3 flex flex-col gap-2" style={{ background: T.paperAlt }}>
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <div className="text-sm font-semibold" style={{ color: T.ink }}>{r.company}</div>
+                    <div className="text-sm font-semibold" style={{ color: T.ink }}>{r.company}{r.siteName ? <span className="font-normal" style={{ color: T.slate }}> on {r.siteName}</span> : null}</div>
                     <div className="text-xs" style={{ color: T.slate }}>{r.address}{r.region ? `, ${r.region}` : ""}</div>
-                    <div className="text-xs mt-1" style={{ color: T.slate }}>{r.contactName} · {r.email} · {r.phone}</div>
+                    <div className="text-xs mt-1" style={{ color: T.slate }}>Site supervisor: {r.contactName} · {r.email} · {r.phone}</div>
                   </div>
                   <div className="text-xs shrink-0" style={{ color: T.slateLight }}>{fmtDate(r.submittedDate)}</div>
                 </div>
                 <div className="text-xs flex flex-wrap gap-x-4 gap-y-1" style={{ color: T.slate }}>
                   <span>Wants {SITE_REVIEW_FREQ_LABELS[r.frequency]}</span>
                   <span>From {r.startMonth}</span>
-                  <span>On the app: {r.onApp}</span>
+                  <span>OSHE App job: {appJobText(r)}</span>
+                  {r.sssp && <span>SSSP: {r.sssp}</span>}
                   {r.siteStart && <span>Site start {fmtDate(r.siteStart)}</span>}
                   {r.siteEnd && <span>Closing about {fmtDate(r.siteEnd)}</span>}
                 </div>
-                {[["Induction", r.inductionDetails], ["Site access", r.siteAccess], ["PPE", r.ppeRequirements], ["Parking", r.parkingRequirements]].filter(([, v]) => v).map(([label, v]) => (
+                {[["Induction", r.inductionDetails], ["Site access", r.siteAccess], ["PPE", r.ppeRequirements], ["Parking", r.parkingRequirements], ["Additional notes", r.notes]].filter(([, v]) => v).map(([label, v]) => (
                   <div key={label} className="text-xs" style={{ color: T.ink }}><span className="font-semibold" style={{ color: T.slate }}>{label}: </span>{v}</div>
                 ))}
                 <div className="flex items-center gap-2 flex-wrap pt-1">
@@ -11799,7 +11845,7 @@ function ClientSiteReviews({ client }) {
           const next = (client.reminders || []).filter((r) => r.siteReviewId === s.id && !r.done).sort((a, b) => (a.date || "").localeCompare(b.date || ""))[0];
           return (
             <div key={s.id} className="flex items-center justify-between text-xs rounded-lg px-2.5 py-1.5" style={{ background: T.paperAlt }}>
-              <div style={{ color: T.ink }}>{s.address}<span className="ml-2" style={{ color: T.slate }}>{SITE_REVIEW_FREQ_LABELS[s.frequency]} · {s.assignee} · app {s.onApp}</span></div>
+              <div style={{ color: T.ink }}>{s.address}<span className="ml-2" style={{ color: T.slate }}>{SITE_REVIEW_FREQ_LABELS[s.frequency]} · {s.assignee} · app {s.onApp}{s.siteName ? ` · ${s.siteName}` : ""}</span></div>
               <div style={{ color: T.slate }}>{next ? `Next ${fmtDate(next.date)}` : "None open"}</div>
             </div>
           );
@@ -11834,12 +11880,11 @@ function siteMonthStatus(client, site, month) {
 
 async function downloadSiteBriefPdf({ client, site, reviews }) {
   const { PDFDocument, StandardFonts, rgb } = await importWithReloadOnStaleChunk(() => import("pdf-lib"));
-  const green = rgb(0.043, 0.235, 0.205);
-  const ink = rgb(0.082, 0.141, 0.137), slate = rgb(0.4, 0.45, 0.45), line = rgb(0.82, 0.85, 0.85), zebra = rgb(0.965, 0.975, 0.972), white = rgb(1, 1, 1);
-  const W = 595, H = 842, M = 40, CW = W - M * 2;
+  const col = (hex) => hexColor(rgb, hex);
+  const deep = col(BRAND.deep), headingGreen = col(BRAND.heading), teal = col(BRAND.teal), body = col(BRAND.body), muted = col(BRAND.muted), grey = col(BRAND.grey), white = rgb(1, 1, 1);
+  const W = 595, H = 842, M = 40, CW = W - M * 2, BAND = 84;
   const pdfDoc = await PDFDocument.create();
-  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-  const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const fonts = await embedBrandFonts(pdfDoc, StandardFonts);
   const clean = (t) => sanitizeForPdf(t || "");
   let osheLogo = null;
   try { const resp = await fetch("/logo.png"); if (resp.ok) osheLogo = await pdfDoc.embedPng(await resp.arrayBuffer()); } catch (err) { console.error("OSHE logo failed:", err); }
@@ -11847,45 +11892,34 @@ async function downloadSiteBriefPdf({ client, site, reviews }) {
 
   const pages = [];
   let page, y;
-  const drawLogo = (img, x, rightAlign) => {
-    const sc = Math.min(52 / img.height, 120 / img.width);
-    const w = img.width * sc, h = img.height * sc;
-    page.drawImage(img, { x: rightAlign ? x - w : x, y: H - 92 + (92 - h) / 2, width: w, height: h });
-  };
-  let headTitle = "SITE REVIEW BRIEF";
   const newPage = () => {
     page = pdfDoc.addPage([W, H]); pages.push(page);
-    page.drawRectangle({ x: 0, y: H - 92, width: W, height: 92, color: green });
-    if (osheLogo) drawLogo(osheLogo, M, false);
-    else page.drawText("OSHE", { x: M, y: H - 52, size: 22, font: bold, color: white });
-    if (clientLogo) drawLogo(clientLogo, W - M, true);
-    else page.drawText(clean(client.name), { x: W - M - bold.widthOfTextAtSize(clean(client.name), 12), y: H - 50, size: 12, font: bold, color: white });
-    const ttl = headTitle;
-    page.drawText(ttl, { x: (W - bold.widthOfTextAtSize(ttl, 12)) / 2, y: H - 51, size: 12, font: bold, color: white });
-    y = H - 92 - 28;
+    drawBrandBand({ page, rgb, fonts, W, H, bandH: BAND, M, title: "Site Review Brief", clientName: clean(client.name), osheLogo, clientLogo });
+    y = H - BAND - 3 - 30;
   };
-  const banner = (title) => {
-    if (y - 80 < 50) newPage();
-    y -= 20 + 16;
-    page.drawRectangle({ x: 0, y: y - 6, width: W, height: 22, color: green });
-    page.drawText(title.toUpperCase(), { x: M, y: y + 0.5, size: 9.5, font: bold, color: white });
-    y -= 6 + 20;
+  // Section headings are plain text in heading green, no banner and no colon.
+  const heading = (text) => {
+    if (y - 70 < 50) newPage();
+    y -= 8;
+    page.drawText(clean(text), { x: M, y, size: 12.5, font: fonts.head, color: headingGreen });
+    y -= 18;
   };
-  const label = (t, x, yy) => page.drawText(t, { x, y: yy, size: 7.5, font, color: slate });
+  const label = (t, x, yy) => page.drawText(clean(t), { x, y: yy, size: 8, font: fonts.label, color: muted });
 
   // ---- Page 1: site details ----
   newPage();
-  const titleLines = wrapTextLines(clean(site.address), bold, 17, CW);
-  titleLines.forEach((ln, i) => page.drawText(ln, { x: M, y: y - i * 21, size: 17, font: bold, color: ink }));
-  y -= titleLines.length * 21;
-  if (site.region) { page.drawText(clean(site.region), { x: M, y: y + 2, size: 10, font, color: slate }); y -= 14; }
-  y -= 10;
+  const titleLines = wrapTextLines(clean(site.siteName || site.address), fonts.title, 19, CW);
+  titleLines.forEach((ln, i) => page.drawText(ln, { x: M, y: y - i * 23, size: 19, font: fonts.title, color: deep }));
+  y -= titleLines.length * 23;
+  const subLine = [client.name, site.siteName ? site.address : null, site.region].filter(Boolean).join(" | ");
+  if (subLine) { page.drawText(clean(subLine), { x: M, y: y + 2, size: 10.5, font: fonts.body, color: muted }); y -= 14; }
+  y -= 12;
 
   const sortedAll = reviews.filter((r) => r.date).sort((a, b) => a.date.localeCompare(b.date));
   const startDate = site.siteStart || (sortedAll[0] && sortedAll[0].date) || null;
   const endDate = site.siteEnd || (sortedAll.length ? sortedAll[sortedAll.length - 1].date : null);
   const BOOK_IN = { weekly: "Every week", fortnightly: "Every 2 weeks", monthly: "Once a month", bimonthly: "Every 2 months", quarterly: "Every 3 months" };
-  banner("Site details");
+  heading("Site details");
   const cells = [
     ["Frequency", SITE_REVIEW_FREQ_LABELS[site.frequency] || site.frequency],
     ["Book in", BOOK_IN[site.frequency] || "-"],
@@ -11893,77 +11927,78 @@ async function downloadSiteBriefPdf({ client, site, reviews }) {
     ["Start date", startDate ? fmtDate(startDate) : "-"],
     ["End date", endDate ? fmtDate(endDate) : "-"],
   ];
-  const sh = 42, cw5 = CW / 5;
-  page.drawRectangle({ x: M, y: y - sh, width: CW, height: sh, color: white, borderColor: line, borderWidth: 0.8 });
+  const sh = 44, cw5 = CW / 5;
+  page.drawRectangle({ x: M, y: y - sh, width: CW, height: sh, color: white, borderColor: grey, borderWidth: 0.75 });
   cells.forEach(([l, v], i) => {
     const cx = M + i * cw5;
-    if (i > 0) page.drawLine({ start: { x: cx, y: y - 6 }, end: { x: cx, y: y - sh + 6 }, thickness: 0.6, color: line });
-    label(l, cx + 10, y - 15);
+    if (i > 0) page.drawLine({ start: { x: cx, y: y - 7 }, end: { x: cx, y: y - sh + 7 }, thickness: 0.75, color: grey });
+    label(l, cx + 10, y - 16);
     let t = clean(v);
-    while (t.length > 3 && bold.widthOfTextAtSize(t, 11.5) > cw5 - 16) t = t.slice(0, -1);
-    page.drawText(t, { x: cx + 10, y: y - 33, size: 11.5, font: bold, color: ink });
+    while (t.length > 3 && fonts.head.widthOfTextAtSize(t, 11.5) > cw5 - 16) t = t.slice(0, -1);
+    page.drawText(t, { x: cx + 10, y: y - 34, size: 11.5, font: fonts.head, color: deep });
   });
-  y -= sh;
+  y -= sh + 22;
 
   if (site.contactName || site.phone || site.email) {
-    banner("Site contact");
-    y -= 8;
+    heading("Site supervisor");
     const cw3 = CW / 3 - 8;
     let used = 0;
     [["Name", site.contactName], ["Phone", site.phone], ["Email", site.email]].forEach(([l, v], i) => {
       const x = M + (CW / 3) * i;
       label(l, x, y);
-      const lines = wrapTextLines(clean(v) || "-", font, 10.5, cw3);
-      lines.forEach((ln, k) => page.drawText(ln, { x, y: y - 14 - k * 13, size: 10.5, font, color: ink }));
+      const lines = wrapTextLines(clean(v) || "-", fonts.body, 10.5, cw3);
+      lines.forEach((ln, k) => page.drawText(ln, { x, y: y - 14 - k * 13, size: 10.5, font: fonts.body, color: body }));
       used = Math.max(used, 14 + lines.length * 13);
     });
-    y -= used;
+    y -= used + 22;
   }
 
-  const reqs = [["Induction", site.inductionDetails], ["Site access", site.siteAccess], ["PPE", site.ppeRequirements], ["Parking", site.parkingRequirements]].filter(([, v]) => v);
+  const reqs = [["OSHE App job", appJobText(site)], ["SSSP created", site.sssp], ["Induction", site.inductionDetails], ["Site access", site.siteAccess], ["PPE", site.ppeRequirements], ["Parking", site.parkingRequirements], ["Additional notes", site.notes]].filter(([, v]) => v);
   if (reqs.length) {
-    banner("Site requirements");
+    heading("Site information");
     reqs.forEach(([l, v]) => {
-      const lines = wrapTextLines(clean(v), font, 10.5, CW - 24);
-      if (y - (lines.length * 14 + 24) < 50) newPage();
-      const h = lines.length * 14 + 24;
-      page.drawRectangle({ x: M, y: y - h, width: CW, height: h, color: white, borderColor: line, borderWidth: 0.8 });
-      page.drawRectangle({ x: M, y: y - h, width: 4, height: h, color: green });
-      label(l, M + 14, y - 12);
-      lines.forEach((ln, k) => page.drawText(ln, { x: M + 14, y: y - 30 - k * 14, size: 10.5, font, color: ink }));
-      y -= h + 10;
+      const lines = wrapTextLines(clean(v), fonts.body, 10.5, CW - 28);
+      const h = lines.length * 14 + 26;
+      if (y - h < 50) newPage();
+      // Note box: white, 1pt teal border, 3pt teal bar on the left, no fill.
+      page.drawRectangle({ x: M, y: y - h, width: CW, height: h, color: white, borderColor: teal, borderWidth: 1 });
+      page.drawRectangle({ x: M, y: y - h, width: 3, height: h, color: teal });
+      label(l, M + 14, y - 13);
+      lines.forEach((ln, k) => page.drawText(ln, { x: M + 14, y: y - 29 - k * 14, size: 10.5, font: fonts.body, color: body }));
+      y -= h + 9;
     });
-    y += 10;
   }
 
   // ---- Page 2: schedule ----
   if (sortedAll.length > 0) {
-    headTitle = "REVIEW SCHEDULE";
     newPage();
-    const rh = 24;
+    page.drawText("Review schedule", { x: M, y, size: 15, font: fonts.head, color: headingGreen });
+    y -= 26;
+    const rh = 28;
     const head = () => {
-      page.drawRectangle({ x: M, y: y - rh, width: CW, height: rh, color: green });
-      page.drawText("Review", { x: M + 12, y: y - 16, size: 9, font: bold, color: white });
-      page.drawText("Status", { x: M + 400, y: y - 16, size: 9, font: bold, color: white });
+      page.drawRectangle({ x: M, y: y - rh, width: CW, height: rh, color: deep });
+      page.drawText("Review", { x: M + 12, y: y - 18, size: 9.5, font: fonts.head, color: white });
+      page.drawText("Status", { x: M + 360, y: y - 18, size: 9.5, font: fonts.head, color: white });
       y -= rh;
     };
     head();
-    sortedAll.forEach((r, i) => {
+    sortedAll.forEach((r) => {
       if (y - rh < 50) { newPage(); head(); }
-      page.drawRectangle({ x: M, y: y - rh, width: CW, height: rh, color: i % 2 ? zebra : white, borderColor: line, borderWidth: 0.5 });
+      page.drawLine({ start: { x: M, y: y - rh }, end: { x: M + CW, y: y - rh }, thickness: 0.75, color: grey });
       const wk = new Date(mondayOf(r.date) + "T00:00:00").toLocaleDateString("en-NZ", { day: "numeric", month: "long", year: "numeric" });
-      page.drawText(clean("Week of " + wk), { x: M + 12, y: y - 16, size: 10, font, color: ink });
-      const due = r.date.slice(0, 7) <= currentMonth();
-      const st = r.done ? "Completed" : r.sched ? "Scheduled" : due ? "Not scheduled" : "Pending";
-      page.drawText(st, { x: M + 400, y: y - 16, size: 10, font: bold, color: st === "Completed" || st === "Pending" ? slate : st === "Scheduled" ? green : rgb(0.76, 0.5, 0.15) });
+      page.drawText(clean("Week of " + wk), { x: M + 12, y: y - 18, size: 10.5, font: fonts.body, color: body });
+      const month = r.date.slice(0, 7);
+      const kind = r.done ? "completed" : r.sched ? "scheduled" : month < currentMonth() ? "overdue" : month === currentMonth() ? "action" : "pending";
+      drawStatusLabel({ page, rgb, fonts, x: M + 360, y: y - rh + 6, kind });
       y -= rh;
     });
   }
 
   pages.forEach((pg, i) => {
-    pg.drawText(clean(`Prepared by OSHE for ${client.name} - ${new Date().toLocaleDateString("en-NZ", { month: "long", year: "numeric" })}`), { x: M, y: 22, size: 8, font, color: slate });
-    const pn = `Page ${i + 1}`;
-    pg.drawText(pn, { x: W - M - font.widthOfTextAtSize(pn, 8), y: 22, size: 8, font, color: slate });
+    pg.drawLine({ start: { x: M, y: 38 }, end: { x: W - M, y: 38 }, thickness: 0.75, color: grey });
+    pg.drawText(clean(`Prepared by OSHE for ${client.name} - ${new Date().toLocaleDateString("en-NZ", { month: "long", year: "numeric" })}`), { x: M, y: 24, size: 8, font: fonts.body, color: muted });
+    const pn = `Page ${i + 1} of ${pages.length}`;
+    pg.drawText(pn, { x: W - M - fonts.body.widthOfTextAtSize(pn, 8), y: 24, size: 8, font: fonts.body, color: muted });
   });
 
   const bytes = await pdfDoc.save();
@@ -12202,13 +12237,16 @@ function SiteReviewsView({ clients, externalConsultants, goToClient }) {
               {open && (
                 <div className="px-4 pb-4 grid gap-x-8 gap-y-2.5 text-xs" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
                   {[
-                    ["Contact", [site.contactName, site.phone, site.email].filter(Boolean).join(" · ")],
-                    ["On the app", site.onApp],
+                    ["Site name", site.siteName],
+                    ["Site supervisor", [site.contactName, site.phone, site.email].filter(Boolean).join(" · ")],
+                    ["OSHE App job", appJobText(site)],
+                    ["SSSP created", site.sssp],
                     ["Site dates", [site.siteStart ? `Start ${fmtDate(site.siteStart)}` : null, site.siteEnd ? `Closing ${fmtDate(site.siteEnd)}` : null].filter(Boolean).join(" · ")],
                     ["Site access", site.siteAccess],
                     ["PPE", site.ppeRequirements],
                     ["Parking", site.parkingRequirements],
                     ["Induction", site.inductionDetails],
+                    ["Additional notes", site.notes],
                   ].filter(([, v]) => v).map(([label, v]) => (
                     <div key={label}>
                       <div className="font-semibold uppercase tracking-wide text-[10px]" style={{ color: T.slateLight }}>{label}</div>
@@ -12667,8 +12705,40 @@ async function syncTrainingBilling(clients, sessionId, s) {
   }
 }
 
+// A session with a client also becomes a task on that client and an entry on the master
+// Schedule, the same way a site review does. Billing is the fee above, so the task itself is
+// marked not billable to avoid logging hours as well.
+async function syncTrainingSchedule(clients, sessionId, s) {
+  const taskId = "training-" + sessionId;
+  const masterId = "mcal-training-" + sessionId;
+  const want = Boolean(s && s.clientId);
+  let hrs = s && s.durationMins ? Math.round((Number(s.durationMins) / 60) * 4) / 4 : 1;
+  if (!(hrs > 0)) hrs = 1;
+  for (const c of clients) {
+    const list = c.reminders || [];
+    const existing = list.find((r) => r.id === taskId);
+    const isTarget = want && c.id === s.clientId;
+    if (!existing && !isTarget) continue;
+    const rest = list.filter((r) => r.id !== taskId);
+    const next = isTarget
+      ? [...rest, { id: taskId, text: `Training: ${s.title}`, date: s.date, recurring: "none", assignee: s.assignee || SCHEDULE_ASSIGNEES[0], estHours: hrs, done: existing ? Boolean(existing.done) : false, onSchedule: true, masterEntryId: masterId, trainingId: sessionId, billable: false }]
+      : rest;
+    await updateDoc(doc(db, "clients", c.id), { reminders: next });
+  }
+  if (want) {
+    const target = clients.find((c) => c.id === s.clientId);
+    await setDoc(doc(db, "masterScheduleEntries", masterId), {
+      title: `Training: ${s.title}`, clientId: s.clientId, clientName: target ? target.name : "", assignee: s.assignee || SCHEDULE_ASSIGNEES[0], date: s.date, hours: hrs,
+      billable: false, billedHours: 0, workType: "Training", workTypeColor: TRAINING_COLOR,
+      targetId: null, linked: `task:${taskId}`, confirmed: false, confirmedHoursLogId: null, trainingId: sessionId,
+    }, { merge: true });
+  } else {
+    await deleteDoc(doc(db, "masterScheduleEntries", masterId)).catch(() => {});
+  }
+}
+
 function TrainingView({ clients }) {
-  const emptyDraft = { title: "", date: today(), time: "10:00", durationMins: "60", platform: "Zoom", link: "", venue: "", capacity: "", description: "", clientId: "", fee: "", notBillable: false };
+  const emptyDraft = { title: "", date: today(), time: "10:00", durationMins: "60", platform: "Zoom", link: "", venue: "", capacity: "", description: "", clientId: "", assignee: SCHEDULE_ASSIGNEES[0], fee: "", notBillable: false };
   const [sessions, setSessions] = useState([]);
   const [draft, setDraft] = useState(emptyDraft);
   const [editingId, setEditingId] = useState(null);
@@ -12689,7 +12759,7 @@ function TrainingView({ clients }) {
   const openNew = () => { setEditingId(null); setDraft(emptyDraft); setShowForm(true); };
   const openEdit = (s) => {
     setEditingId(s.id);
-    setDraft({ title: s.title || "", date: s.date, time: s.time, durationMins: s.durationMins ? String(s.durationMins) : "", platform: s.platform || "Zoom", link: s.link || "", venue: s.venue || "", capacity: s.capacity ? String(s.capacity) : "", description: s.description || "", clientId: s.clientId || "", fee: s.fee ? String(s.fee) : "", notBillable: Boolean(s.notBillable) });
+    setDraft({ title: s.title || "", date: s.date, time: s.time, durationMins: s.durationMins ? String(s.durationMins) : "", platform: s.platform || "Zoom", link: s.link || "", venue: s.venue || "", capacity: s.capacity ? String(s.capacity) : "", description: s.description || "", clientId: s.clientId || "", assignee: s.assignee || SCHEDULE_ASSIGNEES[0], fee: s.fee ? String(s.fee) : "", notBillable: Boolean(s.notBillable) });
     setShowForm(true);
   };
   const save = async () => {
@@ -12699,13 +12769,14 @@ function TrainingView({ clients }) {
       durationMins: draft.durationMins ? Number(draft.durationMins) : null, platform: draft.platform,
       link: draft.platform === "In person" ? "" : draft.link.trim(), venue: draft.platform === "In person" ? draft.venue.trim() : "",
       capacity: draft.capacity ? Number(draft.capacity) : null, description: draft.description.trim(),
-      clientId: draft.clientId || null, fee: draft.fee ? Number(draft.fee) : null, notBillable: Boolean(draft.notBillable),
+      clientId: draft.clientId || null, assignee: draft.assignee, fee: draft.fee ? Number(draft.fee) : null, notBillable: Boolean(draft.notBillable),
     };
     try {
       let sessionId = editingId;
       if (editingId) await updateDoc(doc(db, "trainingSessions", editingId), payload);
       else { sessionId = "tr" + Date.now(); await setDoc(doc(db, "trainingSessions", sessionId), { ...payload, attendees: [], createdDate: today() }); }
       await syncTrainingBilling(clients, sessionId, payload);
+      await syncTrainingSchedule(clients, sessionId, payload);
       setShowForm(false);
       setEditingId(null);
     } catch (err) {
@@ -12713,7 +12784,7 @@ function TrainingView({ clients }) {
       alert(`Couldn't save this session: ${err.message || err}`);
     }
   };
-  const removeSession = async (s) => { await deleteDoc(doc(db, "trainingSessions", s.id)); await syncTrainingBilling(clients, s.id, null); };
+  const removeSession = async (s) => { await deleteDoc(doc(db, "trainingSessions", s.id)); await syncTrainingBilling(clients, s.id, null); await syncTrainingSchedule(clients, s.id, null); };
   const removeAttendee = (s, attId) => updateDoc(doc(db, "trainingSessions", s.id), { attendees: (s.attendees || []).filter((a) => a.id !== attId) });
   const clientFor = (company) => clients.find((c) => !c.archived && ((c.name || "").toLowerCase() === (company || "").toLowerCase() || (c.legalName || "").toLowerCase() === (company || "").toLowerCase()));
 
@@ -12811,9 +12882,12 @@ function TrainingView({ clients }) {
             ) : (
               <input placeholder="Join link" value={draft.link} onChange={(e) => setField("link", e.target.value)} className="text-sm px-3 py-2 rounded-lg outline-none" style={{ ...inputStyle, gridColumn: "span 3" }} />
             )}
-            <select value={draft.clientId} onChange={(e) => setField("clientId", e.target.value)} className="text-sm px-3 py-2 rounded-lg outline-none" style={{ ...inputStyle, gridColumn: "span 2" }}>
+            <select value={draft.clientId} onChange={(e) => setField("clientId", e.target.value)} className="text-sm px-3 py-2 rounded-lg outline-none" style={inputStyle}>
               <option value="">Client (billing)</option>
               {clients.filter((c) => !c.archived).sort((a, b) => (a.name || "").localeCompare(b.name || "")).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            <select value={draft.assignee} onChange={(e) => setField("assignee", e.target.value)} className="text-sm px-3 py-2 rounded-lg outline-none" style={inputStyle}>
+              {SCHEDULE_ASSIGNEES.map((a) => <option key={a} value={a}>{a}</option>)}
             </select>
             <input type="number" min="0" step="0.01" placeholder="Fee per session ($)" value={draft.fee} onChange={(e) => setField("fee", e.target.value)} className="text-sm px-3 py-2 rounded-lg outline-none" style={inputStyle} />
             <label className="flex items-center gap-2 text-sm px-1" style={{ color: T.ink }}>
@@ -12913,118 +12987,102 @@ async function downloadWeeklyReportPdf({ client, tracker, monday }) {
   const { PDFDocument, StandardFonts, rgb } = await importWithReloadOnStaleChunk(() => import("pdf-lib"));
   const info = weekInfo(monday);
   const sites = sitesInWeek(tracker, monday);
-  const dark = rgb(0.114, 0.29, 0.30), band = rgb(0.18, 0.486, 0.494), ink = rgb(0.08, 0.14, 0.13), grey = rgb(0.45, 0.5, 0.5);
-  const white = rgb(1, 1, 1), line = rgb(0.86, 0.89, 0.89), zebra = rgb(0.96, 0.975, 0.975);
-  const green = rgb(0.573, 0.816, 0.314), red = rgb(0.9, 0.2, 0.2), amber = rgb(1, 0.753, 0);
-  const pageWidth = 842, pageHeight = 595, margin = 40;
+  const col = (hex) => hexColor(rgb, hex);
+  const deep = col(BRAND.deep), headingGreen = col(BRAND.heading), body = col(BRAND.body), muted = col(BRAND.muted), grey = col(BRAND.grey), white = rgb(1, 1, 1);
+  const pageWidth = 842, pageHeight = 595, margin = 40, BAND = 76;
   const pdfDoc = await PDFDocument.create();
-  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-  const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-  const italic = await pdfDoc.embedFont(StandardFonts.HelveticaOblique);
+  const fonts = await embedBrandFonts(pdfDoc, StandardFonts);
   const logoImage = await loadWeeklyLogo(client, pdfDoc);
+  let osheLogo = null;
+  try { const resp = await fetch("/logo.png"); if (resp.ok) osheLogo = await pdfDoc.embedPng(await resp.arrayBuffer()); } catch (err) { console.error("OSHE logo failed:", err); }
   const clean = (t) => sanitizeForPdf(t || "");
   const checks = tracker.checks;
   const tableW = pageWidth - margin * 2;
   const siteW = 200;
   const checkW = Math.min(78, Math.max(48, (tableW - siteW - 160) / Math.max(1, checks.length)));
   const notesW = tableW - siteW - checkW * checks.length;
-  const rowH = 24;
+  const rowH = 26;
   const center = (pg, text, f, size, x, w, yy, color) => pg.drawText(text, { x: x + (w - f.widthOfTextAtSize(text, size)) / 2, y: yy, size, font: f, color });
 
-  // Totals for the summary strip
+  // Totals for the summary row
   let done = 0, notDone = 0, partial = 0;
   sites.forEach((s) => { const e = (tracker.weeks[monday] || {})[s.id]; checks.forEach((c) => { const v = weeklyCell(s, e, c.id); if (v === "Y") done++; else if (v === "N") notDone++; else if (v === "P") partial++; }); });
 
-  let page, y, pageNo = 0;
+  let page, y;
   const pages = [];
   const newPage = (first) => {
-    page = pdfDoc.addPage([pageWidth, pageHeight]); pages.push(page); pageNo++;
-    page.drawRectangle({ x: 0, y: pageHeight - 10, width: pageWidth, height: 10, color: dark });
-    y = pageHeight - 10 - 30;
+    page = pdfDoc.addPage([pageWidth, pageHeight]); pages.push(page);
+    drawBrandBand({ page, rgb, fonts, W: pageWidth, H: pageHeight, bandH: BAND, M: margin, title: clean(tracker.title), clientName: clean(client.name), osheLogo, clientLogo: logoImage, centerTitle: true });
+    y = pageHeight - BAND - 3 - 28;
     if (first) {
-      let textX = margin;
-      if (logoImage) {
-        const scale = Math.min(54 / logoImage.height, 150 / logoImage.width);
-        const w = logoImage.width * scale, h = logoImage.height * scale;
-        page.drawImage(logoImage, { x: margin, y: y - h + 6, width: w, height: h });
-        textX = margin + w + 20;
-      }
-      const t = clean(tracker.title);
-      page.drawText(t, { x: textX, y: y - 14, size: 20, font: bold, color: dark });
-      page.drawText(clean(client.name), { x: textX, y: y - 32, size: 10.5, font, color: grey });
-      const wk = `Week ${info.num}`;
-      page.drawText(wk, { x: pageWidth - margin - bold.widthOfTextAtSize(wk, 16), y: y - 12, size: 16, font: bold, color: band });
+      page.drawText(`Week ${info.num}`, { x: margin, y, size: 15, font: fonts.head, color: headingGreen });
       const rg = clean(info.range);
-      page.drawText(rg, { x: pageWidth - margin - font.widthOfTextAtSize(rg, 9.5), y: y - 30, size: 9.5, font, color: grey });
-      y -= 58;
-      page.drawLine({ start: { x: margin, y }, end: { x: pageWidth - margin, y }, thickness: 1.5, color: dark });
-      y -= 22;
-      // summary chips
-      const chips = [["Sites", sites.length, dark], ["Completed", done, green], ["Partial", partial, amber], ["Not completed", notDone, red]];
-      let cx = margin;
-      chips.forEach(([label, n, col]) => {
-        const text = `${label}  ${n}`;
-        const w = bold.widthOfTextAtSize(text, 8.5) + 22;
-        page.drawRectangle({ x: cx, y: y - 4, width: w, height: 18, color: col, borderWidth: 0 });
-        page.drawText(text, { x: cx + 11, y: y + 2, size: 8.5, font: bold, color: col === amber ? ink : white });
-        cx += w + 8;
-      });
-      y -= 18;
+      page.drawText(rg, { x: margin + fonts.head.widthOfTextAtSize(`Week ${info.num}`, 15) + 14, y: y + 1, size: 10.5, font: fonts.body, color: muted });
+      y -= 17;
+      page.drawText(`${sites.length} ${sites.length === 1 ? "site" : "sites"}`, { x: margin, y, size: 10.5, font: fonts.body, color: muted });
+      y -= 20;
     } else {
       y -= 4;
     }
   };
   const header = () => {
     const h = 30, top = y;
-    page.drawRectangle({ x: margin, y: top - h, width: siteW, height: h, color: dark });
-    page.drawText("SITE", { x: margin + 12, y: top - 19, size: 8.5, font: bold, color: white });
-    page.drawRectangle({ x: margin + siteW, y: top - h, width: checkW * checks.length, height: h, color: band });
+    page.drawRectangle({ x: margin, y: top - h, width: tableW, height: h, color: deep });
+    page.drawText("Site", { x: margin + 12, y: top - 19, size: 9.5, font: fonts.head, color: white });
     checks.forEach((c, i) => {
-      const name = clean(c.name).toUpperCase();
-      center(page, name, bold, 7, margin + siteW + i * checkW, checkW, top - 19, white);
+      let name = clean(c.name);
+      while (name.length > 3 && fonts.head.widthOfTextAtSize(name, 8) > checkW - 6) name = name.slice(0, -1);
+      center(page, name, fonts.head, 8, margin + siteW + i * checkW, checkW, top - 19, white);
     });
-    page.drawRectangle({ x: margin + siteW + checkW * checks.length, y: top - h, width: notesW, height: h, color: dark });
-    page.drawText("NOTES", { x: margin + siteW + checkW * checks.length + 12, y: top - 19, size: 8.5, font: bold, color: white });
+    page.drawText("Notes", { x: margin + siteW + checkW * checks.length + 12, y: top - 19, size: 9.5, font: fonts.head, color: white });
     y = top - h;
   };
 
   newPage(true);
-  y -= 4;
   header();
-  sites.forEach((site, idx) => {
-    if (y - rowH < margin + 34) { newPage(false); header(); }
+  sites.forEach((site) => {
+    if (y - rowH < margin + 62) { newPage(false); header(); }
     const entry = (tracker.weeks[monday] || {})[site.id];
-    page.drawRectangle({ x: margin, y: y - rowH, width: tableW, height: rowH, color: idx % 2 ? zebra : white });
-    page.drawLine({ start: { x: margin, y: y - rowH }, end: { x: margin + tableW, y: y - rowH }, thickness: 0.5, color: line });
+    page.drawLine({ start: { x: margin, y: y - rowH }, end: { x: margin + tableW, y: y - rowH }, thickness: 0.75, color: grey });
     let nm = clean(site.name);
-    while (nm.length > 3 && bold.widthOfTextAtSize(nm, 8.5) > siteW - 20) nm = nm.slice(0, -1);
+    while (nm.length > 3 && fonts.label.widthOfTextAtSize(nm, 9.5) > siteW - 20) nm = nm.slice(0, -1);
     if (nm.length < clean(site.name).length) nm = nm.slice(0, -2) + "...";
-    page.drawText(nm, { x: margin + 12, y: y - 15, size: 8.5, font: bold, color: ink });
+    page.drawText(nm, { x: margin + 12, y: y - 17, size: 9.5, font: fonts.label, color: body });
     checks.forEach((c, i) => {
       const val = weeklyCell(site, entry, c.id);
       const cx = margin + siteW + i * checkW;
       if (!val) return;
-      if (val === "N/A") { center(page, "N/A", font, 7.5, cx, checkW, y - 15, grey); return; }
-      const col = val === "Y" ? green : val === "N" ? red : amber;
-      const bw = 34, bh = 15;
-      page.drawRectangle({ x: cx + (checkW - bw) / 2, y: y - rowH + (rowH - bh) / 2, width: bw, height: bh, color: col });
-      center(page, val, bold, 8, cx + (checkW - bw) / 2, bw, y - 15.5, val === "P" ? ink : white);
+      if (val === "N/A") { center(page, "N/A", fonts.body, 8, cx, checkW, y - 17, muted); return; }
+      const kind = val === "Y" ? "completed" : val === "N" ? "overdue" : "action";
+      const bw = 34, bh = 16;
+      drawStatusChip({ page, rgb, fonts, x: cx + (checkW - bw) / 2, y: y - rowH + (rowH - bh) / 2, w: bw, h: bh, kind, text: val, size: 8.5 });
     });
     const note = clean(weeklyNote(site, entry));
     let shown = note;
-    while (shown.length > 0 && italic.widthOfTextAtSize(shown, 7.5) > notesW - 22) shown = shown.slice(0, -1);
+    while (shown.length > 0 && fonts.body.widthOfTextAtSize(shown, 8.5) > notesW - 22) shown = shown.slice(0, -1);
     if (shown.length < note.length && shown.length > 3) shown = shown.slice(0, -3) + "...";
-    page.drawText(shown, { x: margin + siteW + checks.length * checkW + 12, y: y - 15, size: 7.5, font: italic, color: grey });
+    page.drawText(shown, { x: margin + siteW + checks.length * checkW + 12, y: y - 17, size: 8.5, font: fonts.body, color: muted });
     y -= rowH;
   });
 
-  // Legend and footer
+  // Legend at the bottom of the last page: the totals.
+  {
+    const pg = pages[pages.length - 1];
+    const ly = margin + 18;
+    let cx = margin;
+    [["Completed", done, "completed"], ["Partial", partial, "action"], ["Not completed", notDone, "overdue"]].forEach(([label, n, kind]) => {
+      const text = `${label}  ${n}`;
+      const w = fonts.label.widthOfTextAtSize(text, 8.5) + 24;
+      drawStatusChip({ page: pg, rgb, fonts, x: cx, y: ly, w, h: 18, kind, text, size: 8.5 });
+      cx += w + 8;
+    });
+  }
   const generated = new Date().toLocaleDateString("en-NZ", { day: "numeric", month: "long", year: "numeric" });
   pages.forEach((pg, i) => {
-    pg.drawLine({ start: { x: margin, y: margin + 6 }, end: { x: pageWidth - margin, y: margin + 6 }, thickness: 0.5, color: line });
-    pg.drawText(`${clean(client.name)}`, { x: margin, y: margin - 6, size: 7.5, font, color: grey });
+    pg.drawLine({ start: { x: margin, y: margin + 6 }, end: { x: pageWidth - margin, y: margin + 6 }, thickness: 0.75, color: grey });
+    pg.drawText(`${clean(client.name)}`, { x: margin, y: margin - 8, size: 8, font: fonts.body, color: muted });
     const right = `${generated}  |  Page ${i + 1} of ${pages.length}`;
-    pg.drawText(right, { x: pageWidth - margin - font.widthOfTextAtSize(right, 7.5), y: margin - 6, size: 7.5, font, color: grey });
+    pg.drawText(right, { x: pageWidth - margin - fonts.body.widthOfTextAtSize(right, 8), y: margin - 8, size: 8, font: fonts.body, color: muted });
   });
 
   const bytes = await pdfDoc.save();
@@ -13523,9 +13581,9 @@ function MasterScheduleCalendar({ clients, tasks, onboardings, entries, addEntry
             {enterpriseClients.flatMap((c) => {
               const visible = (c.scheduleTargets || []).filter((t) => t.repeat === "monthly" || t.monthYear === monthYear);
               return visible.map((t) => {
-                const booked = entries.filter((e) => e.targetId === t.id && e.clientId === c.id && e.date.slice(0, 7) === monthYear).length;
-                const complete = booked >= t.targetCount;
-                const color = complete ? T.tealDark : booked > 0 ? T.amber : T.coral;
+                const { done, booked } = targetCounts(c, t, monthYear, entries);
+                const complete = done >= t.targetCount;
+                const color = complete ? T.tealDark : booked >= t.targetCount ? T.amber : T.coral;
                 return (
                   <div key={c.id + t.id}
                     draggable
@@ -13535,7 +13593,7 @@ function MasterScheduleCalendar({ clients, tasks, onboardings, entries, addEntry
                     className="text-left cursor-move">
                     <div className="flex items-center justify-between text-xs px-3 py-2 rounded-lg" style={{ background: T.paperAlt, border: complete ? `1px solid ${T.tealDark}` : "1px solid transparent" }}>
                       <span style={{ color: T.ink }}>{c.name}: {t.title}</span>
-                      <span className="font-bold shrink-0 ml-2" style={{ color }}>{booked}/{t.targetCount}</span>
+                      <span className="font-bold shrink-0 ml-2" style={{ color }}>{booked > done ? <span className="font-normal text-[11px] mr-1.5" style={{ color: T.slate }}>{booked} booked</span> : null}{done}/{t.targetCount}</span>
                     </div>
                   </div>
                 );

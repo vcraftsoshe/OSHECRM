@@ -37,8 +37,8 @@ const inputClass = "w-full text-sm px-3 py-2.5 rounded-lg outline-none";
 
 export default function SiteReviewForm() {
   const [form, setForm] = useState({
-    company: "", address: "", region: "", contactName: "", email: "", phone: "",
-    frequency: "", inductionRequired: "", inductionDetails: "", siteAccess: "", ppeRequirements: "", parkingRequirements: "", onApp: "",
+    company: "", siteName: "", address: "", region: "", contactName: "", email: "", phone: "",
+    frequency: "", inductionDetails: "", siteAccess: "", ppeRequirements: "", parkingRequirements: "", onApp: "", appJobName: "", sssp: "", notes: "",
     siteStart: "", siteEnd: "", startMonth: "", website: "",
   });
   const [submitting, setSubmitting] = useState(false);
@@ -47,7 +47,7 @@ export default function SiteReviewForm() {
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
   const valid = form.company.trim() && form.address.trim() && form.region && form.contactName.trim() && form.email.trim() && form.phone.trim()
-    && form.frequency && form.onApp && form.startMonth;
+    && form.frequency && form.onApp && (form.onApp !== "Yes" || form.appJobName.trim()) && form.sssp && form.startMonth;
 
   const submit = async () => {
     if (!valid || submitting) return;
@@ -59,7 +59,7 @@ export default function SiteReviewForm() {
       setSubmitted(true);
     } catch (err) {
       console.error("Site review request failed:", err);
-      setError("Something went wrong sending this. Please try again, or contact OSHE directly if it keeps happening.");
+      setError(`Something went wrong sending this (${err?.code || err?.message || "unknown"}). Please try again, or contact OSHE directly if it keeps happening.`);
     } finally {
       setSubmitting(false);
     }
@@ -88,9 +88,14 @@ export default function SiteReviewForm() {
         </div>
 
         <div className="rounded-xl p-6 flex flex-col gap-4" style={{ background: T.card, border: `1px solid ${T.border}` }}>
-          <Field label="Client name" required>
-            <input className={inputClass} style={inputStyle} value={form.company} onChange={(e) => set("company", e.target.value)} />
-          </Field>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Field label="Company name" required>
+              <input className={inputClass} style={inputStyle} value={form.company} onChange={(e) => set("company", e.target.value)} />
+            </Field>
+            <Field label="Site name">
+              <input className={inputClass} style={inputStyle} value={form.siteName} onChange={(e) => set("siteName", e.target.value)} />
+            </Field>
+          </div>
           <Field label="Site address" required>
             <input className={inputClass} style={inputStyle} value={form.address} onChange={(e) => set("address", e.target.value)} />
           </Field>
@@ -101,14 +106,14 @@ export default function SiteReviewForm() {
             </select>
           </Field>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Field label="Contact name" required>
+            <Field label="Site supervisor name" required>
               <input className={inputClass} style={inputStyle} value={form.contactName} onChange={(e) => set("contactName", e.target.value)} />
             </Field>
-            <Field label="Phone" required>
+            <Field label="Site supervisor phone" required>
               <input type="tel" className={inputClass} style={inputStyle} value={form.phone} onChange={(e) => set("phone", e.target.value)} />
             </Field>
           </div>
-          <Field label="Email" required>
+          <Field label="Site supervisor email" required>
             <input type="email" className={inputClass} style={inputStyle} value={form.email} onChange={(e) => set("email", e.target.value)} />
           </Field>
         </div>
@@ -127,11 +132,26 @@ export default function SiteReviewForm() {
           <Field label="Requested start month" required>
             <input type="month" className={inputClass} style={inputStyle} value={form.startMonth} onChange={(e) => set("startMonth", e.target.value)} />
           </Field>
-          <Field label="Is the site on the OSHE app" required>
+          <Field label="Has a job been created in OSHE App" required>
             <div className="flex gap-2">
-              {["Yes", "No", "Not sure"].map((o) => (
+              {["Yes", "No"].map((o) => (
                 <button key={o} type="button" onClick={() => set("onApp", o)} className="text-sm font-semibold px-4 py-2 rounded-lg"
                   style={{ background: form.onApp === o ? T.tealDark : T.paperAlt, color: form.onApp === o ? "#fff" : T.slate }}>
+                  {o}
+                </button>
+              ))}
+            </div>
+          </Field>
+          {form.onApp === "Yes" && (
+            <Field label="Name the job is listed under" required>
+              <input className={inputClass} style={inputStyle} value={form.appJobName} onChange={(e) => set("appJobName", e.target.value)} />
+            </Field>
+          )}
+          <Field label="Has a SSSP been created" required>
+            <div className="flex gap-2">
+              {["Yes", "No"].map((o) => (
+                <button key={o} type="button" onClick={() => set("sssp", o)} className="text-sm font-semibold px-4 py-2 rounded-lg"
+                  style={{ background: form.sssp === o ? T.tealDark : T.paperAlt, color: form.sssp === o ? "#fff" : T.slate }}>
                   {o}
                 </button>
               ))}
@@ -157,6 +177,9 @@ export default function SiteReviewForm() {
               <input type="date" className={inputClass} style={inputStyle} value={form.siteEnd} onChange={(e) => set("siteEnd", e.target.value)} />
             </Field>
           </div>
+          <Field label="Anything else we need to know">
+            <textarea rows={3} className={inputClass + " resize-y"} style={inputStyle} value={form.notes} onChange={(e) => set("notes", e.target.value)} />
+          </Field>
           {/* Hidden from people, filled in by simple bots. */}
           <input tabIndex={-1} autoComplete="off" value={form.website} onChange={(e) => set("website", e.target.value)} style={{ position: "absolute", left: "-9999px", opacity: 0 }} aria-hidden="true" />
         </div>

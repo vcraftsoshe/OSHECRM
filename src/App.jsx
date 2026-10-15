@@ -11911,6 +11911,191 @@ function SiteReviewsView({ clients, externalConsultants, goToClient }) {
   );
 }
 
+/* ---------- Training tab ---------- */
+const TRAINING_PLATFORMS = ["Zoom", "Microsoft Teams", "Google Meet", "In person", "Other"];
+function fmtTrainingTime(hhmm) {
+  if (!hhmm) return "";
+  const [h, m] = hhmm.split(":").map(Number);
+  return `${h % 12 === 0 ? 12 : h % 12}:${String(m).padStart(2, "0")} ${h >= 12 ? "pm" : "am"}`;
+}
+function trainingIsPast(s) {
+  const now = new Date();
+  const nowDate = today();
+  const nowTime = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+  return s.date < nowDate || (s.date === nowDate && (s.time || "00:00") <= nowTime);
+}
+
+function TrainingView({ clients }) {
+  const emptyDraft = { title: "", date: today(), time: "10:00", durationMins: "60", platform: "Zoom", link: "", venue: "", capacity: "", description: "" };
+  const [sessions, setSessions] = useState([]);
+  const [draft, setDraft] = useState(emptyDraft);
+  const [editingId, setEditingId] = useState(null);
+  const [showForm, setShowForm] = useState(false);
+  const [openId, setOpenId] = useState(null);
+  const [showPast, setShowPast] = useState(false);
+
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "trainingSessions"), (snap) => setSessions(snap.docs.map((d) => ({ id: d.id, ...d.data() }))), (err) => console.error("Training sessions subscription failed:", err));
+    return unsub;
+  }, []);
+
+  const upcoming = sessions.filter((s) => !trainingIsPast(s)).sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+  const past = sessions.filter((s) => trainingIsPast(s)).sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
+  const setField = (k, v) => setDraft((d) => ({ ...d, [k]: v }));
+  const inputStyle = { border: `1px solid ${T.border}`, color: T.ink };
+
+  const openNew = () => { setEditingId(null); setDraft(emptyDraft); setShowForm(true); };
+  const openEdit = (s) => {
+    setEditingId(s.id);
+    setDraft({ title: s.title || "", date: s.date, time: s.time, durationMins: s.durationMins ? String(s.durationMins) : "", platform: s.platform || "Zoom", link: s.link || "", venue: s.venue || "", capacity: s.capacity ? String(s.capacity) : "", description: s.description || "" });
+    setShowForm(true);
+  };
+  const save = async () => {
+    if (!draft.title.trim() || !draft.date || !draft.time) return;
+    const payload = {
+      title: draft.title.trim(), date: draft.date, time: draft.time,
+      durationMins: draft.durationMins ? Number(draft.durationMins) : null, platform: draft.platform,
+      link: draft.platform === "In person" ? "" : draft.link.trim(), venue: draft.platform === "In person" ? draft.venue.trim() : "",
+      capacity: draft.capacity ? Number(draft.capacity) : null, description: draft.description.trim(),
+    };
+    try {
+      if (editingId) await updateDoc(doc(db, "trainingSessions", editingId), payload);
+      else await setDoc(doc(db, "trainingSessions", "tr" + Date.now()), { ...payload, attendees: [], createdDate: today() });
+      setShowForm(false);
+      setEditingId(null);
+    } catch (err) {
+      console.error("Saving training session failed:", err);
+      alert(`Couldn't save this session: ${err.message || err}`);
+    }
+  };
+  const removeSession = (s) => deleteDoc(doc(db, "trainingSessions", s.id));
+  const removeAttendee = (s, attId) => updateDoc(doc(db, "trainingSessions", s.id), { attendees: (s.attendees || []).filter((a) => a.id !== attId) });
+  const clientFor = (company) => clients.find((c) => !c.archived && ((c.name || "").toLowerCase() === (company || "").toLowerCase() || (c.legalName || "").toLowerCase() === (company || "").toLowerCase()));
+
+  const SessionRow = ({ s, muted }) => {
+    const open = openId === s.id;
+    const attendees = s.attendees || [];
+    const d = new Date(s.date + "T00:00:00");
+    return (
+      <div style={{ borderTop: `1px solid ${T.border}`, opacity: muted ? 0.7 : 1 }}>
+        <div className="flex items-center gap-4 px-4 py-3">
+          <div className="w-12 shrink-0 text-center rounded-lg py-1.5" style={{ background: T.paperAlt }}>
+            <div className="text-[10px] font-semibold uppercase" style={{ color: T.slate }}>{d.toLocaleDateString("en-NZ", { month: "short" })}</div>
+            <div className="text-lg font-bold leading-none" style={{ color: T.ink }}>{d.getDate()}</div>
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-semibold truncate" style={{ color: T.ink }}>{s.title}</div>
+            <div className="text-xs" style={{ color: T.slate }}>
+              {d.toLocaleDateString("en-NZ", { weekday: "long" })}, {fmtTrainingTime(s.time)}{s.durationMins ? ` · ${s.durationMins} min` : ""} · {s.platform}{s.platform === "In person" && s.venue ? `, ${s.venue}` : ""}
+            </div>
+          </div>
+          <div className="text-xs font-semibold px-2.5 py-1 rounded-md shrink-0" style={{ background: T.paperAlt, color: T.tealDark }}>
+            {attendees.length}{s.capacity ? ` / ${s.capacity}` : ""} signed up
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {!muted && <button onClick={() => openEdit(s)} className="text-xs font-semibold" style={{ color: T.tealDark }}>Edit</button>}
+            <ConfirmButton onConfirm={() => removeSession(s)} title="Delete session" iconSize={13} />
+            <button onClick={() => setOpenId(open ? null : s.id)}><ChevronDown size={15} color={T.slateLight} style={{ transform: open ? "rotate(180deg)" : "none" }} /></button>
+          </div>
+        </div>
+        {open && (
+          <div className="px-4 pb-4">
+            {attendees.length === 0 ? (
+              <div className="text-xs" style={{ color: T.slateLight }}>No one signed up yet.</div>
+            ) : (
+              <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${T.border}` }}>
+                {attendees.map((a, i) => {
+                  const match = clientFor(a.company);
+                  return (
+                    <div key={a.id} className="flex items-center gap-3 px-3 py-2 text-xs" style={{ borderTop: i === 0 ? "none" : `1px solid ${T.border}` }}>
+                      <div className="flex-1 min-w-0">
+                        <span className="font-semibold" style={{ color: T.ink }}>{a.name}</span>
+                        <span className="ml-2" style={{ color: T.slate }}>{a.company}</span>
+                        {match && <span className="ml-2"><Pill color={T.tealDark} bg={T.paperAlt}>Client</Pill></span>}
+                      </div>
+                      <a href={`mailto:${a.email}`} style={{ color: T.tealDark }}>{a.email}</a>
+                      <span style={{ color: T.slateLight }}>{fmtDate(a.signedUpDate)}</span>
+                      <ConfirmButton onConfirm={() => removeAttendee(s, a.id)} title="Remove attendee" iconSize={12} />
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {attendees.length > 0 && (
+              <a href={`mailto:?bcc=${attendees.map((a) => a.email).join(",")}&subject=${encodeURIComponent(s.title)}`} className="inline-block text-xs font-semibold mt-2" style={{ color: T.tealDark }}>Email everyone</a>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div className="flex flex-col gap-5 h-full min-h-0 overflow-y-auto pb-6">
+      <div className="flex items-center justify-between">
+        <div className="flex gap-3">
+          <div className="rounded-xl px-4 py-3" style={{ background: T.card, border: `1px solid ${T.border}`, minWidth: 130 }}>
+            <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: T.slate }}>Upcoming</div>
+            <div className="text-2xl font-bold" style={{ color: T.ink }}>{upcoming.length}</div>
+          </div>
+          <div className="rounded-xl px-4 py-3" style={{ background: T.card, border: `1px solid ${T.border}`, minWidth: 130 }}>
+            <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: T.slate }}>Signed up</div>
+            <div className="text-2xl font-bold" style={{ color: T.tealDark }}>{upcoming.reduce((t, s) => t + (s.attendees || []).length, 0)}</div>
+          </div>
+        </div>
+        <button onClick={openNew} className="flex items-center gap-1.5 text-sm font-semibold px-4 py-2 rounded-lg" style={{ background: T.tealDark, color: "#fff" }}>
+          <Plus size={14} /> New session
+        </button>
+      </div>
+
+      {showForm && (
+        <Card style={{ padding: 18 }}>
+          <div className="text-sm font-semibold mb-3" style={{ color: T.ink }}>{editingId ? "Edit session" : "New session"}</div>
+          <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}>
+            <input placeholder="Title" value={draft.title} onChange={(e) => setField("title", e.target.value)} className="text-sm px-3 py-2 rounded-lg outline-none" style={{ ...inputStyle, gridColumn: "span 4" }} />
+            <input type="date" value={draft.date} onChange={(e) => setField("date", e.target.value)} className="text-sm px-3 py-2 rounded-lg outline-none" style={inputStyle} />
+            <input type="time" value={draft.time} onChange={(e) => setField("time", e.target.value)} className="text-sm px-3 py-2 rounded-lg outline-none" style={inputStyle} />
+            <input type="number" min="0" step="15" placeholder="Minutes" value={draft.durationMins} onChange={(e) => setField("durationMins", e.target.value)} className="text-sm px-3 py-2 rounded-lg outline-none" style={inputStyle} />
+            <input type="number" min="0" placeholder="Max people" value={draft.capacity} onChange={(e) => setField("capacity", e.target.value)} className="text-sm px-3 py-2 rounded-lg outline-none" style={inputStyle} />
+            <select value={draft.platform} onChange={(e) => setField("platform", e.target.value)} className="text-sm px-3 py-2 rounded-lg outline-none" style={inputStyle}>
+              {TRAINING_PLATFORMS.map((p) => <option key={p} value={p}>{p}</option>)}
+            </select>
+            {draft.platform === "In person" ? (
+              <input placeholder="Venue and address" value={draft.venue} onChange={(e) => setField("venue", e.target.value)} className="text-sm px-3 py-2 rounded-lg outline-none" style={{ ...inputStyle, gridColumn: "span 3" }} />
+            ) : (
+              <input placeholder="Join link" value={draft.link} onChange={(e) => setField("link", e.target.value)} className="text-sm px-3 py-2 rounded-lg outline-none" style={{ ...inputStyle, gridColumn: "span 3" }} />
+            )}
+            <textarea rows={2} placeholder="Description" value={draft.description} onChange={(e) => setField("description", e.target.value)} className="text-sm px-3 py-2 rounded-lg outline-none resize-y" style={{ ...inputStyle, gridColumn: "span 4" }} />
+          </div>
+          <div className="flex justify-end gap-2 mt-3">
+            <button onClick={() => { setShowForm(false); setEditingId(null); }} className="text-xs font-semibold px-4 py-2 rounded-lg" style={{ background: T.paperAlt, color: T.slate }}>Cancel</button>
+            <button onClick={save} className="text-xs font-semibold px-4 py-2 rounded-lg" style={{ background: T.tealDark, color: "#fff" }}>{editingId ? "Save" : "Create session"}</button>
+          </div>
+        </Card>
+      )}
+
+      <div className="rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.border}` }}>
+        <div className="px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide" style={{ color: T.slate, background: T.paperAlt }}>Upcoming sessions</div>
+        {upcoming.length === 0 && <div className="px-4 py-8 text-sm text-center" style={{ color: T.slateLight }}>No upcoming sessions.</div>}
+        {upcoming.map((s) => <SessionRow key={s.id} s={s} />)}
+      </div>
+
+      {past.length > 0 && (
+        <div>
+          <button onClick={() => setShowPast((v) => !v)} className="flex items-center gap-1.5 text-xs font-semibold" style={{ color: T.slate }}>
+            <ChevronDown size={13} style={{ transform: showPast ? "none" : "rotate(-90deg)" }} /> Past sessions ({past.length})
+          </button>
+          {showPast && (
+            <div className="rounded-xl overflow-hidden mt-2" style={{ background: T.card, border: `1px solid ${T.border}` }}>
+              {past.map((s) => <SessionRow key={s.id} s={s} muted />)}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function gatherWorkloadItems(person, tasks, onboardings, clients, scheduleBlocks, start, end) {
   const items = [];
   tasks.filter((t) => t.assignee === person && !t.done && t.dueDate && t.dueDate >= start && t.dueDate < end).forEach((t) => {
@@ -13605,6 +13790,7 @@ export default function App() {
         <NavItem icon={FileText} label="Reports" active={module === "reports"} onClick={() => setModule("reports")} />
         <NavItem icon={CalendarClock} label="Schedule" active={module === "schedule"} onClick={() => setModule("schedule")} />
         <NavItem icon={ClipboardList} label="Site Reviews" active={module === "sitereviews"} onClick={() => setModule("sitereviews")} />
+        <NavItem icon={Calendar} label="Training" active={module === "training"} onClick={() => setModule("training")} />
         <div className="flex-1" />
         <div className="px-3 pb-2">
           <div className="text-[10px] uppercase tracking-wide mb-1.5" style={{ color: "#5C7274" }}>Logged in as</div>
@@ -13618,7 +13804,7 @@ export default function App() {
         <div className="flex items-center justify-between px-8 py-5" style={{ borderBottom: `1px solid ${T.border}` }}>
           <div>
             <div className="text-xl font-bold" style={{ color: T.ink }}>
-              {{ overview: "Overview", clients: "Clients", systems: "Systems", sales: "Sales", billing: "Billing", workflows: "Workflows", resellers: "Resellers", tasks: "My Tasks", dashboards: "Dashboards", reports: "Reports", schedule: "Schedule", sitereviews: "Site Reviews", hours: "Hours" }[module]}
+              {{ overview: "Overview", clients: "Clients", systems: "Systems", sales: "Sales", billing: "Billing", workflows: "Workflows", resellers: "Resellers", tasks: "My Tasks", dashboards: "Dashboards", reports: "Reports", schedule: "Schedule", sitereviews: "Site Reviews", training: "Training", hours: "Hours" }[module]}
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -13649,6 +13835,7 @@ export default function App() {
           {module === "resellers" && <ResellersView resellers={resellers} selectedId={selectedReseller} setSelectedId={setSelectedReseller} externalConsultants={externalConsultants} addExternalConsultant={addExternalConsultant} removeExternalConsultant={removeExternalConsultant} />}
           {module === "tasks" && <TasksView tasks={tasks} clients={clients} onboardings={onboardings} currentUser={currentUser} goToClient={goToClient} resellers={resellers} goToReseller={goToReseller} leads={leads} goToSales={() => setModule("sales")} />}
           {module === "reports" && <ReportsView clients={clients} reportTemplates={reportTemplates} addReportTemplate={addReportTemplate} renameReportTemplate={renameReportTemplate} deleteReportTemplate={deleteReportTemplate} addTemplateSection={addTemplateSection} removeTemplateSection={removeTemplateSection} />}
+          {module === "training" && <ErrorBoundary><TrainingView clients={clients} /></ErrorBoundary>}
           {module === "sitereviews" && <ErrorBoundary><SiteReviewsView clients={clients} externalConsultants={externalConsultants} goToClient={goToClient} /></ErrorBoundary>}
           {module === "schedule" && <ScheduleView tasks={tasks} clients={clients} onboardings={onboardings} scheduleBlocks={scheduleBlocks} addScheduleBlock={addScheduleBlock} removeScheduleBlock={removeScheduleBlock} goToClient={goToClient} masterScheduleEntries={masterScheduleEntries} addMasterScheduleEntry={addMasterScheduleEntry} updateMasterScheduleEntry={updateMasterScheduleEntry} removeMasterScheduleEntry={removeMasterScheduleEntry} confirmMasterScheduleEntry={confirmMasterScheduleEntry} externalConsultants={externalConsultants} />}
         </div>

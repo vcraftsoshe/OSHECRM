@@ -11571,7 +11571,8 @@ function SiteReviewInbox({ clients, externalConsultants }) {
       }
       const clientName = base.name;
       const site = {
-        id: r.id, address: r.address, frequency: v.frequency, onApp: r.onApp, inductionDetails: r.inductionDetails || "",
+        id: r.id, address: r.address, region: r.region || "", frequency: v.frequency, onApp: r.onApp, inductionDetails: r.inductionDetails || "",
+        siteAccess: r.siteAccess || "", ppeRequirements: r.ppeRequirements || "", parkingRequirements: r.parkingRequirements || "",
         siteStart: r.siteStart || null, siteEnd: r.siteEnd || null, requestedStartMonth: r.startMonth,
         contactName: r.contactName, email: r.email, phone: r.phone, assignee: v.assignee, hours: hrs, addedDate: today(),
       };
@@ -11599,7 +11600,11 @@ function SiteReviewInbox({ clients, externalConsultants }) {
         `Site review request accepted: ${r.address}`,
         `${SITE_REVIEW_FREQ_LABELS[v.frequency]}, ${dates.length} reviews from ${fmtDate(dates[0])}`,
         `On the app: ${r.onApp}`,
+        r.region ? `Region: ${r.region}` : null,
         r.inductionDetails ? `Induction: ${r.inductionDetails}` : null,
+        r.siteAccess ? `Site access: ${r.siteAccess}` : null,
+        r.ppeRequirements ? `PPE: ${r.ppeRequirements}` : null,
+        r.parkingRequirements ? `Parking: ${r.parkingRequirements}` : null,
         r.siteStart ? `Site start: ${fmtDate(r.siteStart)}` : null,
         r.siteEnd ? `Approximate closing: ${fmtDate(r.siteEnd)}` : null,
       ].filter(Boolean);
@@ -11643,7 +11648,7 @@ function SiteReviewInbox({ clients, externalConsultants }) {
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <div className="text-sm font-semibold" style={{ color: T.ink }}>{r.company}</div>
-                    <div className="text-xs" style={{ color: T.slate }}>{r.address}</div>
+                    <div className="text-xs" style={{ color: T.slate }}>{r.address}{r.region ? `, ${r.region}` : ""}</div>
                     <div className="text-xs mt-1" style={{ color: T.slate }}>{r.contactName} · {r.email} · {r.phone}</div>
                   </div>
                   <div className="text-xs shrink-0" style={{ color: T.slateLight }}>{fmtDate(r.submittedDate)}</div>
@@ -11655,7 +11660,9 @@ function SiteReviewInbox({ clients, externalConsultants }) {
                   {r.siteStart && <span>Site start {fmtDate(r.siteStart)}</span>}
                   {r.siteEnd && <span>Closing about {fmtDate(r.siteEnd)}</span>}
                 </div>
-                {r.inductionDetails && <div className="text-xs" style={{ color: T.ink }}>Induction: {r.inductionDetails}</div>}
+                {[["Induction", r.inductionDetails], ["Site access", r.siteAccess], ["PPE", r.ppeRequirements], ["Parking", r.parkingRequirements]].filter(([, v]) => v).map(([label, v]) => (
+                  <div key={label} className="text-xs" style={{ color: T.ink }}><span className="font-semibold" style={{ color: T.slate }}>{label}: </span>{v}</div>
+                ))}
                 <div className="flex items-center gap-2 flex-wrap pt-1">
                   <select value={v.clientId} onChange={(e) => setEdit(r.id, "clientId", e.target.value)} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ ...inputStyle, maxWidth: 200 }}>
                     <option value="">Choose client</option>
@@ -11709,6 +11716,198 @@ function ClientSiteReviews({ client }) {
         })}
       </div>
     </Card>
+  );
+}
+
+/* ---------- Site Reviews tab ---------- */
+const SITE_REVIEW_STEP_MONTHS = { weekly: 1, fortnightly: 1, monthly: 1, bimonthly: 2, quarterly: 3 };
+function monthIndex(ym) { const [y, m] = ym.split("-").map(Number); return y * 12 + (m - 1); }
+function shiftMonth(ym, n) {
+  const idx = monthIndex(ym) + n;
+  return `${Math.floor(idx / 12)}-${String((idx % 12) + 1).padStart(2, "0")}`;
+}
+function fmtDayShort(iso) { return new Date(iso + "T00:00:00").toLocaleDateString("en-NZ", { weekday: "short", day: "numeric" }); }
+
+// Where one site stands for one month, worked out from the review tasks that already exist
+// for it on the client (the same tasks that sit on the client's Tasks tab and the master calendar).
+function siteMonthStatus(client, site, month) {
+  const tasks = (client.reminders || []).filter((r) => r.siteReviewId === site.id);
+  const inMonth = tasks.filter((r) => (r.date || "").slice(0, 7) === month).sort((a, b) => a.date.localeCompare(b.date));
+  if (inMonth.length > 0) return { kind: inMonth.every((r) => r.done) ? "done" : "scheduled", tasks: inMonth };
+  if (site.siteEnd && month > site.siteEnd.slice(0, 7)) return { kind: "closed", tasks: [] };
+  if (site.requestedStartMonth && month < site.requestedStartMonth) return { kind: "notstarted", tasks: [] };
+  const earlier = tasks.filter((r) => (r.date || "").slice(0, 7) < month).sort((a, b) => b.date.localeCompare(a.date))[0];
+  const step = SITE_REVIEW_STEP_MONTHS[site.frequency] || 1;
+  if (!earlier || monthIndex(month) - monthIndex(earlier.date.slice(0, 7)) >= step) return { kind: "unscheduled", tasks: [] };
+  return { kind: "notdue", tasks: [] };
+}
+
+function SiteReviewsView({ clients, externalConsultants, goToClient }) {
+  const [month, setMonth] = useState(currentMonth());
+  const [filter, setFilter] = useState("all");
+  const [openId, setOpenId] = useState(null);
+  const [booking, setBooking] = useState(null); // { siteId, date, hours, person }
+  const people = [...TEAM, ...externalConsultants.map((c) => c.name)];
+
+  const rows = clients.filter((c) => !c.archived).flatMap((c) => (c.siteReviews || []).map((site) => ({ client: c, site, status: siteMonthStatus(c, site, month) })))
+    .sort((a, b) => a.client.name.localeCompare(b.client.name) || a.site.address.localeCompare(b.site.address));
+  const active = rows.filter((r) => !["closed", "notstarted"].includes(r.status.kind));
+  const counts = {
+    sites: active.length,
+    scheduled: active.filter((r) => r.status.kind === "scheduled").length,
+    done: active.filter((r) => r.status.kind === "done").length,
+    needs: active.filter((r) => r.status.kind === "unscheduled").length,
+  };
+  const shown = rows.filter((r) => (filter === "needs" ? r.status.kind === "unscheduled" : filter === "scheduled" ? ["scheduled", "done"].includes(r.status.kind) : true));
+
+  const startBooking = (row) => {
+    const first = month === currentMonth() ? today() : `${month}-01`;
+    setBooking({ siteId: row.site.id, date: nextWeekdayISO(first), hours: String(row.site.hours || 1), person: row.site.assignee || "Jo" });
+  };
+  const bookReview = async (row) => {
+    const b = booking;
+    if (!b || !b.date) return;
+    const hrs = Number(b.hours) || 0;
+    const taskId = `sitereview-${row.site.id}-m${Date.now()}`;
+    const masterId = `mcal${Date.now()}`;
+    const task = { id: taskId, text: `Site review: ${row.site.address}`, date: b.date, recurring: "none", assignee: b.person, estHours: hrs, done: false, onSchedule: true, masterEntryId: masterId, siteReviewId: row.site.id };
+    try {
+      await updateDoc(doc(db, "clients", row.client.id), { reminders: [...(row.client.reminders || []), task] });
+      await setDoc(doc(db, "masterScheduleEntries", masterId), {
+        title: `Site review: ${row.site.address}`, clientId: row.client.id, clientName: row.client.name, assignee: b.person, date: b.date, hours: hrs,
+        billable: true, billedHours: hrs, workType: "Site review", workTypeColor: "#13DCCC",
+        targetId: null, linked: `task:${taskId}`, confirmed: false, confirmedHoursLogId: null, siteReviewId: row.site.id,
+      });
+      setBooking(null);
+    } catch (err) {
+      console.error("Booking site review failed:", err);
+      alert(`Couldn't schedule this review: ${err.message || err}`);
+    }
+  };
+  // Changing who looks after a site moves its site record and every review still to do, along
+  // with the matching master calendar entries.
+  const reassign = async (row, person) => {
+    const open = (row.client.reminders || []).filter((r) => r.siteReviewId === row.site.id && !r.done);
+    try {
+      await updateDoc(doc(db, "clients", row.client.id), {
+        siteReviews: (row.client.siteReviews || []).map((s) => (s.id === row.site.id ? { ...s, assignee: person } : s)),
+        reminders: (row.client.reminders || []).map((r) => (r.siteReviewId === row.site.id && !r.done ? { ...r, assignee: person } : r)),
+      });
+      await Promise.all(open.filter((r) => r.masterEntryId).map((r) => updateDoc(doc(db, "masterScheduleEntries", r.masterEntryId), { assignee: person }).catch(() => {})));
+    } catch (err) {
+      console.error("Reassign failed:", err);
+      alert(`Couldn't reassign this site: ${err.message || err}`);
+    }
+  };
+
+  const Stat = ({ label, value, color }) => (
+    <div className="flex-1 rounded-xl px-4 py-3" style={{ background: T.card, border: `1px solid ${T.border}` }}>
+      <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: T.slate }}>{label}</div>
+      <div className="text-2xl font-bold mt-0.5" style={{ color: color || T.ink }}>{value}</div>
+    </div>
+  );
+  const inputStyle = { border: `1px solid ${T.border}`, color: T.ink };
+  const cols = "minmax(0, 2.2fr) 110px 120px minmax(0, 2fr) 28px";
+
+  return (
+    <div className="flex flex-col gap-5 h-full min-h-0 overflow-y-auto pb-6">
+      <ErrorBoundary>
+        <SiteReviewInbox clients={clients} externalConsultants={externalConsultants} />
+      </ErrorBoundary>
+
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <button onClick={() => setMonth(shiftMonth(month, -1))} className="p-1.5 rounded-lg" style={{ background: T.paperAlt }}><ChevronLeft size={15} color={T.slate} /></button>
+          <div className="text-base font-bold px-2" style={{ color: T.ink, minWidth: 150, textAlign: "center" }}>{month === currentMonth() ? "This month" : monthLabel(month)}</div>
+          <button onClick={() => setMonth(shiftMonth(month, 1))} className="p-1.5 rounded-lg" style={{ background: T.paperAlt }}><ChevronRight size={15} color={T.slate} /></button>
+        </div>
+        <div className="flex rounded-lg p-1" style={{ background: T.paperAlt }}>
+          {[["all", "All"], ["needs", "Needs scheduling"], ["scheduled", "Scheduled"]].map(([k, label]) => (
+            <button key={k} onClick={() => setFilter(k)} className="text-xs font-semibold px-3 py-1.5 rounded-md"
+              style={{ background: filter === k ? T.card : "transparent", color: filter === k ? T.tealDark : T.slate }}>{label}</button>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex gap-3">
+        <Stat label="Active sites" value={counts.sites} />
+        <Stat label="Scheduled" value={counts.scheduled} color={T.tealDark} />
+        <Stat label="Done" value={counts.done} color={T.tealDark} />
+        <Stat label="Needs scheduling" value={counts.needs} color={counts.needs > 0 ? T.amber : T.ink} />
+      </div>
+
+      <div className="rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.border}` }}>
+        <div className="grid items-center px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide" style={{ gridTemplateColumns: cols, gap: 12, color: T.slate, background: T.paperAlt }}>
+          <div>Site</div><div>Frequency</div><div>Assigned</div><div>{month === currentMonth() ? "This month" : monthLabel(month)}</div><div />
+        </div>
+        {shown.length === 0 && <div className="px-4 py-8 text-sm text-center" style={{ color: T.slateLight }}>No sites to show.</div>}
+        {shown.map((row) => {
+          const { client, site, status } = row;
+          const open = openId === site.id;
+          const isBooking = booking && booking.siteId === site.id;
+          return (
+            <div key={site.id} style={{ borderTop: `1px solid ${T.border}` }}>
+              <div className="grid items-center px-4 py-3" style={{ gridTemplateColumns: cols, gap: 12 }}>
+                <div className="min-w-0">
+                  <button onClick={() => goToClient(client.id, "reminders")} className="text-sm font-semibold truncate block max-w-full text-left" style={{ color: T.ink }}>{client.name}</button>
+                  <div className="text-xs truncate" style={{ color: T.slate }}>{site.address}{site.region ? `, ${site.region}` : ""}</div>
+                </div>
+                <div className="text-xs font-semibold" style={{ color: T.slate }}>{SITE_REVIEW_FREQ_LABELS[site.frequency]}</div>
+                <select value={site.assignee || ""} onChange={(e) => reassign(row, e.target.value)} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle}>
+                  {[...new Set([...people, site.assignee].filter(Boolean))].map((m) => <option key={m} value={m}>{m}</option>)}
+                </select>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {(status.kind === "scheduled" || status.kind === "done") && status.tasks.map((t) => (
+                    <span key={t.id} className="text-xs font-semibold px-2 py-1 rounded-md" style={{ background: t.done ? T.paperAlt : T.tealDark, color: t.done ? T.slate : "#fff", textDecoration: t.done ? "line-through" : "none" }}>{fmtDayShort(t.date)}</span>
+                  ))}
+                  {status.kind === "unscheduled" && (
+                    <button onClick={() => (isBooking ? setBooking(null) : startBooking(row))} className="text-xs font-semibold px-2.5 py-1 rounded-md" style={{ background: "#FBF1E3", color: T.amber }}>Needs scheduling</button>
+                  )}
+                  {status.kind === "notdue" && <span className="text-xs" style={{ color: T.slateLight }}>Not due</span>}
+                  {status.kind === "closed" && <span className="text-xs" style={{ color: T.slateLight }}>Site closed</span>}
+                  {status.kind === "notstarted" && <span className="text-xs" style={{ color: T.slateLight }}>Not started</span>}
+                  {(status.kind === "scheduled" || status.kind === "done" || status.kind === "notdue") && !isBooking && (
+                    <button onClick={() => startBooking(row)} className="text-xs" style={{ color: T.slateLight }} title="Add a review this month"><Plus size={13} /></button>
+                  )}
+                </div>
+                <button onClick={() => setOpenId(open ? null : site.id)} className="justify-self-end"><ChevronDown size={15} color={T.slateLight} style={{ transform: open ? "rotate(180deg)" : "none" }} /></button>
+              </div>
+
+              {isBooking && (
+                <div className="flex items-center gap-2 flex-wrap px-4 pb-3">
+                  <input type="date" value={booking.date} onChange={(e) => setBooking({ ...booking, date: e.target.value })} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle} />
+                  <select value={booking.person} onChange={(e) => setBooking({ ...booking, person: e.target.value })} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle}>
+                    {[...new Set([...people, booking.person])].map((m) => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                  <input type="number" min="0" step="0.25" value={booking.hours} onChange={(e) => setBooking({ ...booking, hours: e.target.value })} className="w-20 text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle} placeholder="hrs" />
+                  <button onClick={() => bookReview(row)} className="text-xs font-semibold px-3 py-1.5 rounded-lg" style={{ background: T.tealDark, color: "#fff" }}>Schedule</button>
+                  <button onClick={() => setBooking(null)} className="text-xs font-semibold px-3 py-1.5 rounded-lg" style={{ background: T.paperAlt, color: T.slate }}>Cancel</button>
+                </div>
+              )}
+
+              {open && (
+                <div className="px-4 pb-4 grid gap-x-8 gap-y-2.5 text-xs" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
+                  {[
+                    ["Contact", [site.contactName, site.phone, site.email].filter(Boolean).join(" · ")],
+                    ["On the app", site.onApp],
+                    ["Site dates", [site.siteStart ? `Start ${fmtDate(site.siteStart)}` : null, site.siteEnd ? `Closing ${fmtDate(site.siteEnd)}` : null].filter(Boolean).join(" · ")],
+                    ["Site access", site.siteAccess],
+                    ["PPE", site.ppeRequirements],
+                    ["Parking", site.parkingRequirements],
+                    ["Induction", site.inductionDetails],
+                  ].filter(([, v]) => v).map(([label, v]) => (
+                    <div key={label}>
+                      <div className="font-semibold uppercase tracking-wide text-[10px]" style={{ color: T.slateLight }}>{label}</div>
+                      <div style={{ color: T.ink }}>{v}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -12259,9 +12458,6 @@ function ScheduleView({ tasks, clients, onboardings, scheduleBlocks, addSchedule
 
   return (
     <div className="flex flex-col gap-4 h-full min-h-0 overflow-y-auto">
-      <ErrorBoundary>
-        <SiteReviewInbox clients={clients} externalConsultants={externalConsultants} />
-      </ErrorBoundary>
       <ErrorBoundary>
         <MasterScheduleCalendar
           clients={clients} tasks={tasks} onboardings={onboardings}
@@ -13408,6 +13604,7 @@ export default function App() {
         <NavItem icon={ListTodo} label="My Tasks" active={module === "tasks"} onClick={() => setModule("tasks")} />
         <NavItem icon={FileText} label="Reports" active={module === "reports"} onClick={() => setModule("reports")} />
         <NavItem icon={CalendarClock} label="Schedule" active={module === "schedule"} onClick={() => setModule("schedule")} />
+        <NavItem icon={ClipboardList} label="Site Reviews" active={module === "sitereviews"} onClick={() => setModule("sitereviews")} />
         <div className="flex-1" />
         <div className="px-3 pb-2">
           <div className="text-[10px] uppercase tracking-wide mb-1.5" style={{ color: "#5C7274" }}>Logged in as</div>
@@ -13421,7 +13618,7 @@ export default function App() {
         <div className="flex items-center justify-between px-8 py-5" style={{ borderBottom: `1px solid ${T.border}` }}>
           <div>
             <div className="text-xl font-bold" style={{ color: T.ink }}>
-              {{ overview: "Overview", clients: "Clients", systems: "Systems", sales: "Sales", billing: "Billing", workflows: "Workflows", resellers: "Resellers", tasks: "My Tasks", dashboards: "Dashboards", reports: "Reports", schedule: "Schedule", hours: "Hours" }[module]}
+              {{ overview: "Overview", clients: "Clients", systems: "Systems", sales: "Sales", billing: "Billing", workflows: "Workflows", resellers: "Resellers", tasks: "My Tasks", dashboards: "Dashboards", reports: "Reports", schedule: "Schedule", sitereviews: "Site Reviews", hours: "Hours" }[module]}
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -13452,6 +13649,7 @@ export default function App() {
           {module === "resellers" && <ResellersView resellers={resellers} selectedId={selectedReseller} setSelectedId={setSelectedReseller} externalConsultants={externalConsultants} addExternalConsultant={addExternalConsultant} removeExternalConsultant={removeExternalConsultant} />}
           {module === "tasks" && <TasksView tasks={tasks} clients={clients} onboardings={onboardings} currentUser={currentUser} goToClient={goToClient} resellers={resellers} goToReseller={goToReseller} leads={leads} goToSales={() => setModule("sales")} />}
           {module === "reports" && <ReportsView clients={clients} reportTemplates={reportTemplates} addReportTemplate={addReportTemplate} renameReportTemplate={renameReportTemplate} deleteReportTemplate={deleteReportTemplate} addTemplateSection={addTemplateSection} removeTemplateSection={removeTemplateSection} />}
+          {module === "sitereviews" && <ErrorBoundary><SiteReviewsView clients={clients} externalConsultants={externalConsultants} goToClient={goToClient} /></ErrorBoundary>}
           {module === "schedule" && <ScheduleView tasks={tasks} clients={clients} onboardings={onboardings} scheduleBlocks={scheduleBlocks} addScheduleBlock={addScheduleBlock} removeScheduleBlock={removeScheduleBlock} goToClient={goToClient} masterScheduleEntries={masterScheduleEntries} addMasterScheduleEntry={addMasterScheduleEntry} updateMasterScheduleEntry={updateMasterScheduleEntry} removeMasterScheduleEntry={removeMasterScheduleEntry} confirmMasterScheduleEntry={confirmMasterScheduleEntry} externalConsultants={externalConsultants} />}
         </div>
       </div>

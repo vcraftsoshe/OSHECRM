@@ -10,6 +10,11 @@ const T = {
   coral: "#C25B4E",
 };
 
+const REGIONS = [
+  "Northland", "Auckland", "Waikato", "Bay of Plenty", "Gisborne", "Hawke's Bay", "Taranaki",
+  "Manawatu-Whanganui", "Wellington", "Tasman", "Nelson", "Marlborough", "West Coast", "Canterbury", "Otago", "Southland",
+];
+
 const FREQUENCIES = [
   { value: "weekly", label: "Weekly" },
   { value: "fortnightly", label: "Fortnightly" },
@@ -32,8 +37,8 @@ const inputClass = "w-full text-sm px-3 py-2.5 rounded-lg outline-none";
 
 export default function SiteReviewForm() {
   const [form, setForm] = useState({
-    company: "", address: "", contactName: "", email: "", phone: "",
-    frequency: "", inductionRequired: "", inductionDetails: "", onApp: "",
+    company: "", address: "", region: "", contactName: "", email: "", phone: "",
+    frequency: "", inductionRequired: "", inductionDetails: "", siteAccess: "", ppeRequirements: "", parkingRequirements: "", onApp: "",
     siteStart: "", siteEnd: "", startMonth: "", website: "",
   });
   const [submitting, setSubmitting] = useState(false);
@@ -41,7 +46,7 @@ export default function SiteReviewForm() {
   const [error, setError] = useState(null);
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
-  const valid = form.company.trim() && form.address.trim() && form.contactName.trim() && form.email.trim() && form.phone.trim()
+  const valid = form.company.trim() && form.address.trim() && form.region && form.contactName.trim() && form.email.trim() && form.phone.trim()
     && form.frequency && form.onApp && form.startMonth;
 
   const submit = async () => {
@@ -78,7 +83,7 @@ export default function SiteReviewForm() {
     <div className="min-h-screen" style={{ background: T.paper, fontFamily: "'Inter', system-ui, sans-serif" }}>
       <div className="max-w-2xl mx-auto px-6 py-10 flex flex-col gap-6">
         <div>
-          <img src="/logo-full.png" alt="OSHE" style={{ height: 40, width: "auto" }} />
+          <img src="/logo-full.png" alt="OSHE" style={{ height: 80, width: "auto" }} />
           <div className="text-2xl font-bold mt-4" style={{ color: T.ink }}>Site Review Request</div>
         </div>
 
@@ -88,6 +93,12 @@ export default function SiteReviewForm() {
           </Field>
           <Field label="Site address" required>
             <input className={inputClass} style={inputStyle} value={form.address} onChange={(e) => set("address", e.target.value)} />
+          </Field>
+          <Field label="Region" required>
+            <select className={inputClass} style={inputStyle} value={form.region} onChange={(e) => set("region", e.target.value)}>
+              <option value="">Select a region</option>
+              {REGIONS.map((r) => <option key={r} value={r}>{r}</option>)}
+            </select>
           </Field>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Field label="Contact name" required>
@@ -128,6 +139,15 @@ export default function SiteReviewForm() {
           </Field>
           <Field label="Induction requirements">
             <textarea rows={3} className={inputClass + " resize-y"} style={inputStyle} value={form.inductionDetails} onChange={(e) => set("inductionDetails", e.target.value)} />
+          </Field>
+          <Field label="Site access">
+            <textarea rows={3} className={inputClass + " resize-y"} style={inputStyle} value={form.siteAccess} onChange={(e) => set("siteAccess", e.target.value)} />
+          </Field>
+          <Field label="PPE requirements">
+            <textarea rows={3} className={inputClass + " resize-y"} style={inputStyle} value={form.ppeRequirements} onChange={(e) => set("ppeRequirements", e.target.value)} />
+          </Field>
+          <Field label="Parking requirements">
+            <textarea rows={3} className={inputClass + " resize-y"} style={inputStyle} value={form.parkingRequirements} onChange={(e) => set("parkingRequirements", e.target.value)} />
           </Field>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Field label="Site start date">

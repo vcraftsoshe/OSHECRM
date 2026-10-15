@@ -557,6 +557,78 @@ exports.submitSiteReview = onCall({ cors: true }, async (request) => {
   return { ok: true };
 });
 
+/* ---------- Training sessions (public page at training.*) ----------
+   Sessions are created in the CRM's Training tab and stored in "trainingSessions", with
+   sign-ups held on the session itself in an "attendees" array. The public page can't read or
+   write Firestore directly, so it goes through these two functions. The join link for online
+   sessions is never sent to the page, only in the confirmation email. */
+function nzNow() {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Pacific/Auckland", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date());
+  const get = (t) => parts.find((p) => p.type === t).value;
+  return { date: `${get("year")}-${get("month")}-${get("day")}`, time: `${get("hour")}:${get("minute")}` };
+}
+function isUpcoming(s) {
+  const now = nzNow();
+  return s.date > now.date || (s.date === now.date && (s.time || "00:00") > now.time);
+}
+function escapeHtml(v) {
+  return String(v == null ? "" : v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+exports.getTrainingSessions = onCall({ cors: true }, async () => {
+  const snap = await db.collection("trainingSessions").get();
+  const sessions = snap.docs
+    .map((d) => ({ id: d.id, ...d.data() }))
+    .filter((s) => s.date && s.time && isUpcoming(s))
+    .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time))
+    .map((s) => {
+      const taken = (s.attendees || []).length;
+      return {
+        id: s.id, title: s.title || "Training session", date: s.date, time: s.time, durationMins: s.durationMins || null,
+        platform: s.platform || "", venue: s.platform === "In person" ? (s.venue || "") : "", description: s.description || "",
+        spotsLeft: s.capacity ? Math.max(0, Number(s.capacity) - taken) : null,
+      };
+    });
+  return { sessions };
+});
+exports.signupForTraining = onCall({ cors: true }, async (request) => {
+  const d = request.data || {};
+  if (d.website) return { ok: true };
+  const sessionId = clip(d.sessionId, 80);
+  const company = clip(d.company, 200);
+  const name = clip(d.name, 120);
+  const email = clip(d.email, 200).toLowerCase();
+  if (!sessionId || !company || !name || !/^\S+@\S+\.\S+$/.test(email)) {
+    throw new HttpsError("invalid-argument", "Please fill in your company, name and a valid email.");
+  }
+  const ref = db.collection("trainingSessions").doc(sessionId);
+  const session = await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) throw new HttpsError("not-found", "That session is no longer available.");
+    const s = snap.data();
+    if (!isUpcoming(s)) throw new HttpsError("failed-precondition", "That session has already started.");
+    const attendees = s.attendees || [];
+    if (s.capacity && attendees.length >= Number(s.capacity)) throw new HttpsError("resource-exhausted", "Sorry, that session is full.");
+    if (attendees.some((a) => (a.email || "").toLowerCase() === email)) throw new HttpsError("already-exists", "That email is already signed up for this session.");
+    tx.update(ref, { attendees: [...attendees, { id: "a" + Date.now(), company, name, email, signedUpDate: today() }] });
+    return s;
+  });
+
+  const when = new Date(session.date + "T00:00:00").toLocaleDateString("en-NZ", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  const [h, m] = String(session.time).split(":").map(Number);
+  const timeText = `${h % 12 === 0 ? 12 : h % 12}:${String(m).padStart(2, "0")} ${h >= 12 ? "pm" : "am"} (NZ time)`;
+  const where = session.platform === "In person"
+    ? `In person${session.venue ? `: ${escapeHtml(session.venue)}` : ""}`
+    : `${escapeHtml(session.platform || "Online")}${session.link ? `: <a href="${escapeHtml(session.link)}">${escapeHtml(session.link)}</a>` : ""}`;
+  await db.collection("mail").add({
+    to: [email],
+    message: {
+      subject: `You're booked: ${session.title || "OSHE training"}`,
+      html: `<p>Hi ${escapeHtml(name.split(" ")[0])},</p><p>You're signed up for <strong>${escapeHtml(session.title || "OSHE training")}</strong>.</p><p>${when}, ${timeText}<br>${where}</p><p>If you can't make it, just reply to this email.</p><p>Thanks,<br>The OSHE Team</p>`,
+    },
+  });
+  return { ok: true };
+});
+
 /* ---------- Email sending (Resend) ----------
    App.jsx writes a doc to the "mail" collection whenever it needs to send something,
    either { to: [...], message: { subject, html } } for raw content, or

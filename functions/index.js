@@ -517,6 +517,8 @@ exports.submitSiteReview = onCall({ cors: true }, async (request) => {
   const frequency = clip(d.frequency, 20);
   const startMonth = clip(d.startMonth, 7);
   const onApp = clip(d.onApp, 20);
+  const appJobName = clip(d.appJobName, 200);
+  const sssp = clip(d.sssp, 10);
   if (!company || !address || !region || !contactName || !email || !phone) {
     throw new HttpsError("invalid-argument", "Missing required details.");
   }
@@ -526,8 +528,14 @@ exports.submitSiteReview = onCall({ cors: true }, async (request) => {
   if (!/^\d{4}-\d{2}$/.test(startMonth)) {
     throw new HttpsError("invalid-argument", "Please choose a start month.");
   }
-  if (!["Yes", "No", "Not sure"].includes(onApp)) {
-    throw new HttpsError("invalid-argument", "Please say whether the site is on the app.");
+  if (!["Yes", "No"].includes(onApp)) {
+    throw new HttpsError("invalid-argument", "Please say whether a job has been created in the OSHE App.");
+  }
+  if (onApp === "Yes" && !appJobName) {
+    throw new HttpsError("invalid-argument", "Please enter the name the job is listed under.");
+  }
+  if (!["Yes", "No"].includes(sssp)) {
+    throw new HttpsError("invalid-argument", "Please say whether a SSSP has been created.");
   }
   const isoDate = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || "")) ? String(v) : null);
 
@@ -545,7 +553,9 @@ exports.submitSiteReview = onCall({ cors: true }, async (request) => {
   await db.collection("siteReviewRequests").doc(id).set({
     status: "new",
     submittedDate: today(),
-    company, address, region, contactName, email, phone, frequency, startMonth, onApp,
+    company, address, region, contactName, email, phone, frequency, startMonth, onApp, appJobName, sssp,
+    siteName: clip(d.siteName, 200),
+    notes: clip(d.notes, 3000),
     inductionDetails: clip(d.inductionDetails, 2000),
     siteAccess: clip(d.siteAccess, 2000),
     ppeRequirements: clip(d.ppeRequirements, 2000),
@@ -806,6 +816,8 @@ exports.sendQueuedEmail = onDocumentCreated(
         // before oshe.co.nz is verified there). See the setup notes for this part.
         from: "OSHE Limited <hello@oshe.co.nz>",
         to: data.to,
+        // Replies go to the shared inbox rather than the no-reply style sending address.
+        replyTo: data.replyTo || "info@oshe.co.nz",
       };
       if (data.template && data.template.id) {
         payload.template = { id: data.template.id, variables: data.template.variables || {} };

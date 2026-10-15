@@ -4710,7 +4710,7 @@ function expandScheduleEntriesInRange(entries, start, end) {
   return out.sort((a, b) => a.occurrenceDate.localeCompare(b.occurrenceDate));
 }
 
-function ClientScheduling({ client, updateClient, toggleReminderDone }) {
+function ClientScheduling({ client, updateClient, toggleReminderDone, openTab }) {
   const [monthYear, setMonthYear] = useState(currentMonth());
   const [draft, setDraft] = useState({ title: "", assignee: TEAM[0], date: today(), hours: "", repeat: "none", targetId: "", nth: 1, weekday: 4 });
   const [targetDraft, setTargetDraft] = useState({ title: "", count: "", repeat: "monthly" });
@@ -4873,9 +4873,17 @@ function ClientScheduling({ client, updateClient, toggleReminderDone }) {
   const [gy, gm] = monthYear.split("-").map(Number);
   const daysInMonth = new Date(gy, gm, 0).getDate();
   const startWeekday = (new Date(gy, gm - 1, 1).getDay() + 6) % 7;
+  const wdOf = (date) => (new Date(date + "T00:00:00").getDay() + 6) % 7;
+  const showWeekend = occurrences.some((o) => wdOf(o.occurrenceDate) >= 5);
+  const dayCols = showWeekend ? 7 : 5;
   const cells = [];
-  for (let i = 0; i < startWeekday; i++) cells.push(null);
-  for (let d = 1; d <= daysInMonth; d++) cells.push(`${monthYear}-${String(d).padStart(2, "0")}`);
+  for (let d = 1; d <= daysInMonth; d++) {
+    const date = `${monthYear}-${String(d).padStart(2, "0")}`;
+    const wd = wdOf(date);
+    if (!showWeekend && wd >= 5) continue;
+    if (cells.length === 0) for (let i = 0; i < wd; i++) cells.push(null);
+    cells.push(date);
+  }
   const assigneeColor = (a) => (a === "External Consultant" ? T.amber : T.tealDark);
 
   // "What's left to do this month" / "Coming up" — reads the real linked tasks (not just
@@ -4934,18 +4942,24 @@ function ClientScheduling({ client, updateClient, toggleReminderDone }) {
       </Card>
 
       <Card style={{ padding: 16 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 6 }}>
-          {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d) => (
-            <div key={d} className="text-[10px] font-semibold text-center" style={{ color: T.slateLight }}>{d}</div>
+        <div style={{ display: "grid", gridTemplateColumns: `repeat(${dayCols}, 1fr)`, gap: 8 }}>
+          {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].slice(0, dayCols).map((d) => (
+            <div key={d} className="text-xs font-semibold text-center" style={{ color: T.slateLight }}>{d}</div>
           ))}
           {cells.map((date, i) => (
-            <div key={i} style={{ minHeight: 74, background: date ? T.paperAlt : "transparent", borderRadius: 8, padding: 4 }}>
-              {date && <div className="text-[10px]" style={{ color: T.slateLight }}>{Number(date.slice(8))}</div>}
-              {date && occurrences.filter((o) => o.occurrenceDate === date).map((o) => (
-                <div key={o.id + o.occurrenceDate} className="text-[9px] rounded px-1 py-0.5 mt-0.5 truncate" style={{ background: T.card, color: assigneeColor(o.assignee) }} title={`${o.title} — ${o.assignee} — ${o.hours}h`}>
-                  {o.title} · {o.hours}h
-                </div>
-              ))}
+            <div key={i} style={{ minHeight: 120, background: date ? T.paperAlt : "transparent", borderRadius: 10, padding: 8 }}>
+              {date && <div className="text-sm font-bold mb-1" style={{ color: date === today() ? T.tealDark : T.slate }}>{Number(date.slice(8))}</div>}
+              <div className="flex flex-col gap-1">
+                {date && occurrences.filter((o) => o.occurrenceDate === date).map((o) => {
+                  const col = assigneeColor(o.assignee);
+                  return (
+                    <button key={o.id + o.occurrenceDate} onClick={() => openTab && openTab("reminders")} className="text-[13px] leading-snug rounded-md px-2 py-1.5 text-left font-semibold flex items-start gap-2" style={{ background: `${col}22`, color: T.ink, borderLeft: `4px solid ${col}` }} title={`${o.title} - ${o.assignee} - ${o.hours}h`}>
+                      <span className="flex-1 min-w-0" style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{o.title} · {o.hours}h</span>
+                      <span className="shrink-0 text-[10px] font-bold rounded-full px-1.5 py-0.5 mt-0.5" style={{ background: col, color: "#fff" }}>{(o.assignee || "?").split(" ")[0]}</span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           ))}
         </div>
@@ -6804,7 +6818,7 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
           )}
           {tab === "scheduling" && client.profile === "Enterprise Client" && (
             <ErrorBoundary>
-              <ClientScheduling client={client} updateClient={updateClient} toggleReminderDone={toggleReminderDone} />
+              <ClientScheduling client={client} updateClient={updateClient} toggleReminderDone={toggleReminderDone} openTab={setTab} />
             </ErrorBoundary>
           )}
         </div>
@@ -12924,9 +12938,18 @@ function MasterScheduleCalendar({ clients, tasks, onboardings, entries, addEntry
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tasks, onboardings, clients, monthYear, clientFilterId, q]);
 
+  // Weekends only appear when something is actually booked on one, so weekdays get the room.
+  const wdOf = (date) => (new Date(date + "T00:00:00").getDay() + 6) % 7;
+  const showWeekend = monthEntries.some((e) => wdOf(e.date) >= 5) || readOnlyItems.some((i) => wdOf(i.date) >= 5);
+  const dayCols = showWeekend ? 7 : 5;
   const cells = [];
-  for (let i = 0; i < startWeekday; i++) cells.push(null);
-  for (let d = 1; d <= daysInMonth; d++) cells.push(`${monthYear}-${String(d).padStart(2, "0")}`);
+  for (let d = 1; d <= daysInMonth; d++) {
+    const date = `${monthYear}-${String(d).padStart(2, "0")}`;
+    const wd = wdOf(date);
+    if (!showWeekend && wd >= 5) continue;
+    if (cells.length === 0) for (let i = 0; i < wd; i++) cells.push(null);
+    cells.push(date);
+  }
 
   const entriesForDate = (date) => monthEntries.filter((e) => e.date === date);
   const readOnlyForDate = (date) => readOnlyItems.filter((i) => i.date === date);
@@ -13115,7 +13138,12 @@ function MasterScheduleCalendar({ clients, tasks, onboardings, entries, addEntry
 
       {showForm && (
         <Card style={{ padding: 16 }}>
-          <div className="text-sm font-semibold mb-3" style={{ color: T.ink }}>{editingId ? "Edit scheduled work" : "Add scheduled work"}</div>
+          <div className="flex items-center justify-between mb-3">
+            <div className="text-sm font-semibold" style={{ color: T.ink }}>{editingId ? "Edit scheduled work" : "Add scheduled work"}</div>
+            {editingId && draft.clientId && (
+              <button onClick={() => goToClient(draft.clientId, String(draft.linked || "").startsWith("step:") ? "onboarding" : "reminders")} className="text-xs font-semibold px-3 py-1.5 rounded-lg" style={{ background: T.paperAlt, color: T.tealDark }}>Open in client</button>
+            )}
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: T.slate }}>Client</div>
@@ -13217,8 +13245,8 @@ function MasterScheduleCalendar({ clients, tasks, onboardings, entries, addEntry
       )}
 
       <Card style={{ padding: 16 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 6 }}>
-          {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d) => (
+        <div style={{ display: "grid", gridTemplateColumns: `repeat(${dayCols}, 1fr)`, gap: 8 }}>
+          {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].slice(0, dayCols).map((d) => (
             <div key={d} className="text-xs font-semibold text-center" style={{ color: T.slateLight }}>{d}</div>
           ))}
           {cells.map((date, i) => {
@@ -13228,11 +13256,11 @@ function MasterScheduleCalendar({ clients, tasks, onboardings, entries, addEntry
               <div key={i}
                 onDragOver={(e) => { if (date) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; } }}
                 onDrop={(e) => { if (date) handleDayDrop(e, date); }}
-                style={{ minHeight: 110, background: date ? T.paperAlt : "transparent", borderRadius: 8, padding: 5, cursor: date ? "pointer" : "default" }}
+                style={{ minHeight: 140, background: date ? T.paperAlt : "transparent", borderRadius: 10, padding: 8, cursor: date ? "pointer" : "default" }}
                 onClick={() => date && dayEntries.length === 0 && dayReadOnly.length === 0 && openAddForm(date)}>
                 {date && (
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold" style={{ color: T.slateLight }}>{Number(date.slice(8))}</span>
+                    <span className="text-sm font-bold" style={{ color: date === today() ? T.tealDark : T.slate }}>{Number(date.slice(8))}</span>
                     <button onClick={(e) => { e.stopPropagation(); openAddForm(date); }} title="Add scheduled work on this day">
                       <Plus size={13} color={T.slateLight} />
                     </button>
@@ -13241,26 +13269,15 @@ function MasterScheduleCalendar({ clients, tasks, onboardings, entries, addEntry
                 <div className="flex flex-col gap-1 mt-1">
                   {dayEntries.map((e) => {
                     const chipColor = colorBy === "assignee" ? colorForAssignee(e.assignee) : (e.siteReviewId ? SITE_REVIEW_COLOR : (e.workTypeColor || T.slateLight));
-                    if (e.siteReviewId) {
-                      const who = colorForAssignee(e.assignee);
-                      return (
-                        <div key={e.id} draggable onDragStart={(ev) => startDragEntry(ev, e)}
-                          onClick={(ev) => { ev.stopPropagation(); openEditForm(e); }}
-                          className="text-[12px] leading-snug rounded px-1.5 py-1 cursor-move font-semibold flex items-center gap-1.5" title={`${e.title || "Site review"}${e.clientName ? " - " + e.clientName : ""} · ${e.assignee} · ${e.hours}h`}
-                          style={{ background: e.confirmed ? SITE_REVIEW_COLOR : SITE_REVIEW_BG, color: e.confirmed ? "#fff" : T.ink, borderLeft: `4px solid ${SITE_REVIEW_COLOR}` }}>
-                          <span className="truncate flex-1 min-w-0">{e.confirmed ? "✓ " : ""}{String(e.title || "Site review").replace(/^site review:\s*/i, "")}{e.clientName ? ` · ${e.clientName}` : ""}</span>
-                          <span className="shrink-0 text-[10px] font-bold rounded-full px-1.5 py-0.5" style={{ background: who, color: "#fff" }}>{(e.assignee || "?").split(" ")[0]}</span>
-                        </div>
-                      );
-                    }
+                    const barColor = e.siteReviewId ? SITE_REVIEW_COLOR : chipColor;
+                    const who = colorForAssignee(e.assignee);
                     return (
                       <div key={e.id} draggable onDragStart={(ev) => startDragEntry(ev, e)}
                         onClick={(ev) => { ev.stopPropagation(); openEditForm(e); }}
-                        className="text-[12px] leading-snug rounded px-1.5 py-1 truncate cursor-move font-semibold" title={`${e.title || e.workType}${e.clientName ? " — " + e.clientName : ""} · ${e.assignee} · ${e.hours}h`}
-                        style={e.confirmed
-                          ? { background: chipColor, color: "#fff", border: "1px solid transparent" }
-                          : { background: T.card, color: chipColor, border: `2px solid ${chipColor}` }}>
-                        {e.confirmed ? "✓ " : ""}{e.title || e.workType}{e.clientName ? ` · ${e.clientName}` : ""}
+                        className="text-[13px] leading-snug rounded-md px-2 py-1.5 cursor-pointer font-semibold flex items-start gap-2" title={`${e.title || e.workType}${e.clientName ? " - " + e.clientName : ""} · ${e.assignee} · ${e.hours}h`}
+                        style={{ background: e.confirmed ? barColor : (e.siteReviewId ? SITE_REVIEW_BG : `${barColor}22`), color: e.confirmed ? "#fff" : T.ink, borderLeft: `4px solid ${barColor}` }}>
+                        <span className="flex-1 min-w-0" style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{e.confirmed ? "✓ " : ""}{String(e.title || e.workType || "").replace(/^site review:\s*/i, "")}{e.clientName ? ` · ${e.clientName}` : ""}</span>
+                        <span className="shrink-0 text-[10px] font-bold rounded-full px-1.5 py-0.5 mt-0.5" style={{ background: who, color: "#fff" }}>{(e.assignee || "?").split(" ")[0]}</span>
                       </div>
                     );
                   })}
@@ -13268,9 +13285,10 @@ function MasterScheduleCalendar({ clients, tasks, onboardings, entries, addEntry
                     const roColor = colorForAssignee(i.assignee);
                     return (
                       <button key={i.id} onClick={(ev) => { ev.stopPropagation(); i.clientId && goToClient(i.clientId, i.type === "workflow" ? "onboarding" : "reminders"); }}
-                        className="text-[12px] leading-snug rounded px-1.5 py-1 truncate text-left font-semibold" title={`${i.title}${i.clientName ? " — " + i.clientName : ""} · ${i.assignee}`}
-                        style={{ background: T.card, border: `1.5px dashed ${roColor}`, color: roColor }}>
-                        {i.type === "task" ? "Task: " : "WF: "}{i.title}
+                        className="text-[13px] leading-snug rounded-md px-2 py-1.5 text-left font-semibold flex items-start gap-2" title={`${i.title}${i.clientName ? " - " + i.clientName : ""} · ${i.assignee}`}
+                        style={{ background: T.card, border: `1px solid ${T.border}`, borderLeft: `4px solid ${roColor}`, color: T.ink }}>
+                        <span className="flex-1 min-w-0" style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{i.type === "task" ? "Task: " : "Workflow: "}{i.title}{i.clientName ? ` · ${i.clientName}` : ""}</span>
+                        <span className="shrink-0 text-[10px] font-bold rounded-full px-1.5 py-0.5 mt-0.5" style={{ background: roColor, color: "#fff" }}>{(i.assignee || "?").split(" ")[0]}</span>
                       </button>
                     );
                   })}

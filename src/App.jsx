@@ -5759,7 +5759,7 @@ function ClientTaskCard({ client, r, updateClient, toggleReminderDone, removeRem
               <select value={draft.frequency} onChange={(e) => setDraft({ ...draft, frequency: e.target.value })} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle}>
                 {Object.entries(SITE_REVIEW_FREQ_LABELS).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
               </select>
-              <input type="date" title="Last review on or before" value={draft.last} onChange={(e) => setDraft({ ...draft, last: e.target.value })} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle} />
+              <input type="date" value={draft.last} onChange={(e) => setDraft({ ...draft, last: e.target.value })} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle} />
               <input placeholder="Contact name" value={draft.contactName} onChange={(e) => setDraft({ ...draft, contactName: e.target.value })} className="w-36 text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle} />
               <input placeholder="Phone" value={draft.phone} onChange={(e) => setDraft({ ...draft, phone: e.target.value })} className="w-32 text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle} />
               <input placeholder="Email" value={draft.email} onChange={(e) => setDraft({ ...draft, email: e.target.value })} className="w-44 text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle} />
@@ -12599,8 +12599,8 @@ async function downloadWeeklyReportPdf({ client, tracker, monday }) {
   const generated = new Date().toLocaleDateString("en-NZ", { day: "numeric", month: "long", year: "numeric" });
   pages.forEach((pg, i) => {
     pg.drawLine({ start: { x: margin, y: margin + 6 }, end: { x: pageWidth - margin, y: margin + 6 }, thickness: 0.5, color: line });
-    pg.drawText("Enter Y (completed), N (not completed), P (partially completed), or N/A as applicable", { x: margin, y: margin - 6, size: 7.5, font: italic, color: grey });
-    const right = `${clean(client.name)}  |  ${generated}  |  Page ${i + 1} of ${pages.length}`;
+    pg.drawText(`${clean(client.name)}`, { x: margin, y: margin - 6, size: 7.5, font, color: grey });
+    const right = `${generated}  |  Page ${i + 1} of ${pages.length}`;
     pg.drawText(right, { x: pageWidth - margin - font.widthOfTextAtSize(right, 7.5), y: margin - 6, size: 7.5, font, color: grey });
   });
 

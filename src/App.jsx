@@ -9645,7 +9645,7 @@ function BillingOverview({ clients, resellers, tasks }) {
   })();
   const newClients = clients.filter((c) => c.billingSetupDone === false);
   const setUpClients = clients.filter((c) => c.billingSetupDone !== false);
-  const hasHoursThisMonth = (c) => c.hours.log.some((h) => h.date.slice(0, 7) === viewMonth);
+  const hasHoursThisMonth = (c) => c.hours.log.some((h) => h.date.slice(0, 7) === viewMonth) || (c.billableExpenses || []).some((x) => x.date && x.date.slice(0, 7) === viewMonth);
 
   const needsAttention = setUpClients.filter((c) => (c.billingType || "FlatFee") !== "FlatFee" || hasHoursThisMonth(c)).map((c) => ({
     id: c.id, name: c.name, type: c.billingType || "FlatFee", adHoc: (c.billingType || "FlatFee") === "FlatFee",
@@ -12650,8 +12650,25 @@ function trainingIsPast(s) {
   return s.date < nowDate || (s.date === nowDate && (s.time || "00:00") <= nowTime);
 }
 
+// Training is billed per session to one client as a billable expense dated on the session,
+// so it lands in that month's Billing. Ticking "Not billable" (or clearing the client or fee)
+// removes it again.
+async function syncTrainingBilling(clients, sessionId, s) {
+  const entryId = "training-" + sessionId;
+  const want = Boolean(s && s.clientId && !s.notBillable && Number(s.fee) > 0);
+  for (const c of clients) {
+    const list = c.billableExpenses || [];
+    const has = list.some((x) => x.id === entryId);
+    const isTarget = want && c.id === s.clientId;
+    if (!has && !isTarget) continue;
+    const rest = list.filter((x) => x.id !== entryId);
+    const next = isTarget ? [...rest, { id: entryId, date: s.date, member: "Team", amount: Number(s.fee), description: `Training: ${s.title}` }] : rest;
+    await updateDoc(doc(db, "clients", c.id), { billableExpenses: next });
+  }
+}
+
 function TrainingView({ clients }) {
-  const emptyDraft = { title: "", date: today(), time: "10:00", durationMins: "60", platform: "Zoom", link: "", venue: "", capacity: "", description: "" };
+  const emptyDraft = { title: "", date: today(), time: "10:00", durationMins: "60", platform: "Zoom", link: "", venue: "", capacity: "", description: "", clientId: "", fee: "", notBillable: false };
   const [sessions, setSessions] = useState([]);
   const [draft, setDraft] = useState(emptyDraft);
   const [editingId, setEditingId] = useState(null);
@@ -12672,7 +12689,7 @@ function TrainingView({ clients }) {
   const openNew = () => { setEditingId(null); setDraft(emptyDraft); setShowForm(true); };
   const openEdit = (s) => {
     setEditingId(s.id);
-    setDraft({ title: s.title || "", date: s.date, time: s.time, durationMins: s.durationMins ? String(s.durationMins) : "", platform: s.platform || "Zoom", link: s.link || "", venue: s.venue || "", capacity: s.capacity ? String(s.capacity) : "", description: s.description || "" });
+    setDraft({ title: s.title || "", date: s.date, time: s.time, durationMins: s.durationMins ? String(s.durationMins) : "", platform: s.platform || "Zoom", link: s.link || "", venue: s.venue || "", capacity: s.capacity ? String(s.capacity) : "", description: s.description || "", clientId: s.clientId || "", fee: s.fee ? String(s.fee) : "", notBillable: Boolean(s.notBillable) });
     setShowForm(true);
   };
   const save = async () => {
@@ -12682,10 +12699,13 @@ function TrainingView({ clients }) {
       durationMins: draft.durationMins ? Number(draft.durationMins) : null, platform: draft.platform,
       link: draft.platform === "In person" ? "" : draft.link.trim(), venue: draft.platform === "In person" ? draft.venue.trim() : "",
       capacity: draft.capacity ? Number(draft.capacity) : null, description: draft.description.trim(),
+      clientId: draft.clientId || null, fee: draft.fee ? Number(draft.fee) : null, notBillable: Boolean(draft.notBillable),
     };
     try {
+      let sessionId = editingId;
       if (editingId) await updateDoc(doc(db, "trainingSessions", editingId), payload);
-      else await setDoc(doc(db, "trainingSessions", "tr" + Date.now()), { ...payload, attendees: [], createdDate: today() });
+      else { sessionId = "tr" + Date.now(); await setDoc(doc(db, "trainingSessions", sessionId), { ...payload, attendees: [], createdDate: today() }); }
+      await syncTrainingBilling(clients, sessionId, payload);
       setShowForm(false);
       setEditingId(null);
     } catch (err) {
@@ -12693,7 +12713,7 @@ function TrainingView({ clients }) {
       alert(`Couldn't save this session: ${err.message || err}`);
     }
   };
-  const removeSession = (s) => deleteDoc(doc(db, "trainingSessions", s.id));
+  const removeSession = async (s) => { await deleteDoc(doc(db, "trainingSessions", s.id)); await syncTrainingBilling(clients, s.id, null); };
   const removeAttendee = (s, attId) => updateDoc(doc(db, "trainingSessions", s.id), { attendees: (s.attendees || []).filter((a) => a.id !== attId) });
   const clientFor = (company) => clients.find((c) => !c.archived && ((c.name || "").toLowerCase() === (company || "").toLowerCase() || (c.legalName || "").toLowerCase() === (company || "").toLowerCase()));
 
@@ -12714,6 +12734,7 @@ function TrainingView({ clients }) {
               {d.toLocaleDateString("en-NZ", { weekday: "long" })}, {fmtTrainingTime(s.time)}{s.durationMins ? ` · ${s.durationMins} min` : ""} · {s.platform}{s.platform === "In person" && s.venue ? `, ${s.venue}` : ""}
             </div>
           </div>
+          {s.notBillable ? <Pill color={T.slate} bg={T.paperAlt}>Not billable</Pill> : (s.clientId && s.fee ? <Pill color={T.tealDark} bg={T.paperAlt}>{`$${Number(s.fee).toLocaleString("en-NZ")} billed to ${(clients.find((c) => c.id === s.clientId) || {}).name || "client"}`}</Pill> : null)}
           <div className="text-xs font-semibold px-2.5 py-1 rounded-md shrink-0" style={{ background: T.paperAlt, color: T.tealDark }}>
             {attendees.length}{s.capacity ? ` / ${s.capacity}` : ""} signed up
           </div>
@@ -12790,6 +12811,14 @@ function TrainingView({ clients }) {
             ) : (
               <input placeholder="Join link" value={draft.link} onChange={(e) => setField("link", e.target.value)} className="text-sm px-3 py-2 rounded-lg outline-none" style={{ ...inputStyle, gridColumn: "span 3" }} />
             )}
+            <select value={draft.clientId} onChange={(e) => setField("clientId", e.target.value)} className="text-sm px-3 py-2 rounded-lg outline-none" style={{ ...inputStyle, gridColumn: "span 2" }}>
+              <option value="">Client (billing)</option>
+              {clients.filter((c) => !c.archived).sort((a, b) => (a.name || "").localeCompare(b.name || "")).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            <input type="number" min="0" step="0.01" placeholder="Fee per session ($)" value={draft.fee} onChange={(e) => setField("fee", e.target.value)} className="text-sm px-3 py-2 rounded-lg outline-none" style={inputStyle} />
+            <label className="flex items-center gap-2 text-sm px-1" style={{ color: T.ink }}>
+              <input type="checkbox" checked={draft.notBillable} onChange={(e) => setField("notBillable", e.target.checked)} /> Not billable
+            </label>
             <textarea rows={2} placeholder="Description" value={draft.description} onChange={(e) => setField("description", e.target.value)} className="text-sm px-3 py-2 rounded-lg outline-none resize-y" style={{ ...inputStyle, gridColumn: "span 4" }} />
           </div>
           <div className="flex justify-end gap-2 mt-3">

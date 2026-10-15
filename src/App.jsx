@@ -3,7 +3,7 @@ import {
   Users, TrendingUp, Bell, Building2, CreditCard, StickyNote,
   ChevronRight, ChevronLeft, Plus, Check, Upload, Calendar, X, Search, Clock, PieChart,
   ClipboardList, Layers, Circle, CheckCircle2, Image as ImageIcon,
-  Repeat, Trash2, ListChecks, ListTodo, Mail, ArrowUpRight, Store, LayoutDashboard, ChevronDown, Smartphone, FileText, CalendarClock, MessageCircle, Archive
+  Repeat, Trash2, ListChecks, ListTodo, Mail, ArrowUpRight, Store, LayoutDashboard, ChevronDown, Smartphone, FileText, CalendarClock, MessageCircle, Archive, ShieldCheck
 } from "lucide-react";
 import { collection, doc, onSnapshot, updateDoc, setDoc, getDocs, getDoc, deleteDoc, arrayUnion } from "firebase/firestore";
 import { signOut } from "firebase/auth";
@@ -5734,6 +5734,7 @@ function ClientTaskCard({ client, r, updateClient, toggleReminderDone, removeRem
               {r.recurring !== "none" && <span className="flex items-center gap-1"><Repeat size={11} /> {r.recurring}</span>}
               <Pill color={T.tealDark} bg={T.paperAlt}>{r.assignee || "Unassigned"}</Pill>
               {r.siteReviewId && <Pill color={SITE_REVIEW_COLOR} bg={SITE_REVIEW_BG}>Site review</Pill>}
+              {r.prequalId && <Pill color={T.blue} bg={T.paperAlt}>Pre-qual</Pill>}
               {r.onSchedule && <Pill color={T.blue} bg={T.paperAlt}>On schedule</Pill>}
               {r.linkedStep && <Pill color={T.amber} bg={T.paperAlt}>Linked to workflow</Pill>}
             </div>
@@ -12256,6 +12257,385 @@ function SiteReviewsView({ clients, externalConsultants, goToClient }) {
   );
 }
 
+/* ---------- Pre-Qual tab ---------- */
+const PREQUAL_DEFAULT_SCHEMES = [
+  { id: "impac", name: "Impac" },
+  { id: "totika", name: "Totika" },
+  { id: "sitewise", name: "SiteWise" },
+];
+const PREQUAL_KINDS = { text: "Short answer", longtext: "Long answer", yesno: "Yes / No" };
+const PREQUAL_REMIND_DAYS = [90, 60, 30];
+function pqId(prefix) { return prefix + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+function plusOneYear(iso) {
+  const d = new Date(iso + "T00:00:00");
+  d.setFullYear(d.getFullYear() + 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+// Replaces a record's outstanding reminders with the 90, 60 and 30 day ones for its current due
+// date. Reminders already ticked off are kept, and any date already in the past is skipped.
+function prequalReminders(existing, rec) {
+  const kept = (existing || []).filter((r) => !(r.prequalId === rec.id && !r.done));
+  if (!rec.dueDate) return kept;
+  const fresh = PREQUAL_REMIND_DAYS.map((n) => ({ n, date: addDays(rec.dueDate, -n) })).filter((x) => x.date >= today()).map((x) => ({
+    id: `prequal-${rec.id}-${x.n}-${rec.dueDate}`,
+    text: `Pre-qual renewal due in ${x.n} days: ${rec.schemeName} (${fmtDate(rec.dueDate)})`,
+    date: x.date, recurring: "none", assignee: rec.owner || "Sophie", estHours: 0, done: false, prequalId: rec.id,
+  }));
+  return [...kept, ...fresh];
+}
+
+function PrequalView({ clients, goToClient }) {
+  const [view, setView] = useState("clients");
+  const [templates, setTemplates] = useState(null);
+  const [submissions, setSubmissions] = useState([]);
+
+  useEffect(() => {
+    const u1 = onSnapshot(collection(db, "prequalTemplates"), (snap) => setTemplates(snap.docs.map((d) => ({ id: d.id, ...d.data() }))), (err) => { console.error("Pre-qual templates subscription failed:", err); setTemplates([]); });
+    const u2 = onSnapshot(collection(db, "prequalSubmissions"), (snap) => setSubmissions(snap.docs.map((d) => ({ id: d.id, ...d.data() }))), (err) => console.error("Pre-qual submissions subscription failed:", err));
+    return () => { u1(); u2(); };
+  }, []);
+
+  // The three schemes you work with are created the first time the tab opens, so there is
+  // somewhere to type their questions straight away.
+  useEffect(() => {
+    if (templates === null) return;
+    PREQUAL_DEFAULT_SCHEMES.filter((s) => !templates.some((t) => t.id === s.id)).forEach((s) => {
+      setDoc(doc(db, "prequalTemplates", s.id), { name: s.name, description: "", questions: [], uploads: [], steps: [] }).catch((err) => console.error("Seeding pre-qual template failed:", err));
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [templates === null]);
+
+  const unreviewed = submissions.filter((s) => s.status === "submitted" && !s.reviewed).length;
+  const tpls = (templates || []).slice().sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+
+  return (
+    <div className="flex flex-col gap-5 h-full min-h-0 overflow-y-auto pb-6">
+      <div className="flex rounded-lg p-1 self-start" style={{ background: T.paperAlt }}>
+        {[["clients", "Clients"], ["templates", "Questions"], ["submissions", unreviewed ? `Submissions (${unreviewed})` : "Submissions"]].map(([k, label]) => (
+          <button key={k} onClick={() => setView(k)} className="text-xs font-semibold px-5 py-1.5 rounded-md" style={{ background: view === k ? T.card : "transparent", color: view === k ? T.tealDark : T.slate }}>{label}</button>
+        ))}
+      </div>
+      {view === "clients" && <PrequalClients clients={clients} templates={tpls} submissions={submissions} goToClient={goToClient} />}
+      {view === "templates" && <PrequalTemplates templates={tpls} />}
+      {view === "submissions" && <PrequalSubmissions clients={clients} submissions={submissions} />}
+    </div>
+  );
+}
+
+function PrequalClients({ clients, templates, submissions, goToClient }) {
+  const [openId, setOpenId] = useState(null);
+  const [adding, setAdding] = useState(null);
+  const [newStep, setNewStep] = useState("");
+  const inputStyle = { border: `1px solid ${T.border}`, color: T.ink };
+  const people = TEAM;
+
+  const rows = clients.filter((c) => !c.archived).flatMap((c) => (c.prequals || []).map((rec) => ({ client: c, rec })))
+    .sort((a, b) => (a.rec.dueDate || "9999").localeCompare(b.rec.dueDate || "9999"));
+
+  const save = (client, rec, nextRec, extra) => {
+    const prequals = (client.prequals || []).map((x) => (x.id === rec.id ? nextRec : x));
+    return updateDoc(doc(db, "clients", client.id), { prequals, reminders: prequalReminders(client.reminders, nextRec), ...(extra || {}) });
+  };
+  const addRecord = async () => {
+    const a = adding;
+    const client = clients.find((c) => c.id === a.clientId);
+    const tpl = templates.find((t) => t.id === a.schemeId);
+    if (!client || !tpl || !a.dueDate) { alert("Choose a client, a pre-qual and a due date."); return; }
+    const rec = { id: pqId("pq"), schemeId: tpl.id, schemeName: tpl.name, dueDate: a.dueDate, owner: a.owner, steps: (tpl.steps || []).map((s) => ({ id: pqId("st"), title: s.title, done: false })), addedDate: today() };
+    try {
+      await updateDoc(doc(db, "clients", client.id), { prequals: [...(client.prequals || []), rec], reminders: prequalReminders(client.reminders, rec) });
+      setAdding(null);
+      setOpenId(rec.id);
+    } catch (err) { console.error("Add pre-qual failed:", err); alert(`Couldn't add this: ${err.message || err}`); }
+  };
+  const removeRecord = (client, rec) => {
+    updateDoc(doc(db, "clients", client.id), { prequals: (client.prequals || []).filter((x) => x.id !== rec.id), reminders: (client.reminders || []).filter((r) => !(r.prequalId === rec.id && !r.done)) }).catch((err) => console.error("Remove pre-qual failed:", err));
+  };
+  const renew = (client, rec) => {
+    const tpl = templates.find((t) => t.id === rec.schemeId);
+    const next = { ...rec, dueDate: plusOneYear(rec.dueDate), steps: (tpl ? tpl.steps || [] : rec.steps || []).map((s) => ({ id: pqId("st"), title: s.title, done: false })), lastRenewed: today() };
+    save(client, rec, next).catch((err) => console.error("Renew failed:", err));
+  };
+
+  const pill = (d) => {
+    const n = daysUntil(d);
+    const color = n < 0 ? T.coral : n <= 30 ? T.coral : n <= 60 ? T.amber : T.tealDark;
+    const bg = n <= 30 ? "#F8EBE9" : n <= 60 ? "#FBF1E3" : "#E4F8F5";
+    return { label: n < 0 ? `${-n}d overdue` : `${n}d`, color, bg };
+  };
+  const cols = "minmax(0, 2fr) 140px 150px 110px 150px 28px";
+
+  return (
+    <>
+      <div className="flex items-center justify-between">
+        <div className="text-sm font-bold" style={{ color: T.ink }}>Renewals</div>
+        <button onClick={() => setAdding(adding ? null : { clientId: "", schemeId: templates[0]?.id || "", dueDate: addDays(today(), 365), owner: "Sophie" })} className="text-xs font-semibold px-3 py-2 rounded-lg flex items-center gap-1.5" style={{ background: T.tealDark, color: "#fff" }}><Plus size={13} /> Add pre-qual</button>
+      </div>
+
+      {adding && (
+        <Card style={{ padding: 16 }}>
+          <div className="flex items-center gap-2 flex-wrap">
+            <select value={adding.clientId} onChange={(e) => setAdding({ ...adding, clientId: e.target.value })} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ ...inputStyle, maxWidth: 220 }}>
+              <option value="">Choose client</option>
+              {clients.filter((c) => !c.archived).sort((a, b) => a.name.localeCompare(b.name)).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            <select value={adding.schemeId} onChange={(e) => setAdding({ ...adding, schemeId: e.target.value })} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle}>
+              {templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+            <input type="date" value={adding.dueDate} onChange={(e) => setAdding({ ...adding, dueDate: e.target.value })} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle} />
+            <select value={adding.owner} onChange={(e) => setAdding({ ...adding, owner: e.target.value })} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle}>
+              {people.map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>
+            <div className="flex-1" />
+            <button onClick={() => setAdding(null)} className="text-xs font-semibold px-3 py-1.5 rounded-lg" style={{ background: T.paperAlt, color: T.slate }}>Cancel</button>
+            <button onClick={addRecord} className="text-xs font-semibold px-3 py-1.5 rounded-lg" style={{ background: T.tealDark, color: "#fff" }}>Add</button>
+          </div>
+        </Card>
+      )}
+
+      <div className="rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.border}` }}>
+        <div className="grid items-center px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide" style={{ gridTemplateColumns: cols, gap: 12, color: T.slate, background: T.paperAlt }}>
+          <div>Client</div><div>Pre-qual</div><div>Due</div><div>Steps</div><div>Questionnaire</div><div />
+        </div>
+        {rows.length === 0 && <div className="px-4 py-8 text-sm text-center" style={{ color: T.slateLight }}>No pre-quals set up yet.</div>}
+        {rows.map(({ client, rec }) => {
+          const open = openId === rec.id;
+          const p = rec.dueDate ? pill(rec.dueDate) : null;
+          const steps = rec.steps || [];
+          const doneSteps = steps.filter((s) => s.done).length;
+          const subs = submissions.filter((s) => (s.clientId === client.id || (!s.clientId && s.suggestedClientId === client.id)) && s.schemeId === rec.schemeId).sort((a, b) => (b.updatedDate || "").localeCompare(a.updatedDate || ""));
+          const sub = subs[0];
+          return (
+            <div key={rec.id} style={{ borderTop: `1px solid ${T.border}` }}>
+              <div className="grid items-center px-4 py-3" style={{ gridTemplateColumns: cols, gap: 12 }}>
+                <button onClick={() => goToClient(client.id, "reminders")} className="text-sm font-semibold truncate text-left" style={{ color: T.ink }}>{client.name}</button>
+                <div className="text-xs font-semibold" style={{ color: T.slate }}>{rec.schemeName}</div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs" style={{ color: T.ink }}>{rec.dueDate ? fmtDate(rec.dueDate) : "No date"}</span>
+                  {p && <span className="text-[11px] font-bold px-1.5 py-0.5 rounded-md" style={{ background: p.bg, color: p.color }}>{p.label}</span>}
+                </div>
+                <div className="text-xs font-semibold" style={{ color: steps.length && doneSteps === steps.length ? T.tealDark : T.slate }}>{steps.length ? `${doneSteps}/${steps.length}` : "None"}</div>
+                <div className="text-xs font-semibold" style={{ color: !sub ? T.slateLight : sub.status === "submitted" ? T.tealDark : T.amber }}>{!sub ? "Not started" : sub.status === "submitted" ? "Submitted" : "In progress"}</div>
+                <button onClick={() => setOpenId(open ? null : rec.id)} className="justify-self-end"><ChevronDown size={15} color={T.slateLight} style={{ transform: open ? "rotate(180deg)" : "none" }} /></button>
+              </div>
+              {open && (
+                <div className="px-4 pb-4 flex flex-col gap-4">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <input type="date" defaultValue={rec.dueDate} key={rec.id + rec.dueDate} onBlur={(e) => e.target.value && e.target.value !== rec.dueDate && save(client, rec, { ...rec, dueDate: e.target.value })} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle} />
+                    <select value={rec.owner || "Sophie"} onChange={(e) => save(client, rec, { ...rec, owner: e.target.value })} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle}>
+                      {people.map((m) => <option key={m} value={m}>{m}</option>)}
+                    </select>
+                    <div className="flex-1" />
+                    <button onClick={() => renew(client, rec)} className="text-xs font-semibold px-3 py-1.5 rounded-lg" style={{ background: T.paperAlt, color: T.tealDark }}>Mark renewed</button>
+                    <ConfirmButton onConfirm={() => removeRecord(client, rec)} title="Delete this pre-qual" iconSize={13} />
+                  </div>
+                  <div className="flex flex-col rounded-lg overflow-hidden" style={{ border: `1px solid ${T.border}` }}>
+                    {steps.map((st, idx) => (
+                      <div key={st.id} className="flex items-center gap-3 px-3 py-2" style={{ borderTop: idx ? `1px solid ${T.border}` : "none", background: T.card }}>
+                        <button onClick={() => save(client, rec, { ...rec, steps: steps.map((x) => (x.id === st.id ? { ...x, done: !x.done } : x)) })}>
+                          {st.done ? <CheckCircle2 size={16} color={T.tealDark} /> : <Circle size={16} color={T.slate} />}
+                        </button>
+                        <span className="flex-1 text-sm" style={{ color: st.done ? T.slateLight : T.ink, textDecoration: st.done ? "line-through" : "none" }}>{st.title}</span>
+                        <ConfirmButton onConfirm={() => save(client, rec, { ...rec, steps: steps.filter((x) => x.id !== st.id) })} title="Remove step" iconSize={12} />
+                      </div>
+                    ))}
+                    <div className="flex items-center gap-2 px-3 py-2" style={{ borderTop: steps.length ? `1px solid ${T.border}` : "none", background: T.card }}>
+                      <input placeholder="New step" value={newStep} onChange={(e) => setNewStep(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && newStep.trim()) { save(client, rec, { ...rec, steps: [...steps, { id: pqId("st"), title: newStep.trim(), done: false }] }); setNewStep(""); } }} className="flex-1 text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle} />
+                      <button onClick={() => { if (newStep.trim()) { save(client, rec, { ...rec, steps: [...steps, { id: pqId("st"), title: newStep.trim(), done: false }] }); setNewStep(""); } }} className="text-xs font-semibold px-3 py-1.5 rounded-lg" style={{ background: T.tealDark, color: "#fff" }}>Add</button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+function PrequalSection({ title, children, action }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center justify-between">
+        <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: T.slateLight }}>{title}</div>
+        {action}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function PrequalTemplates({ templates }) {
+  const [openId, setOpenId] = useState(null);
+  const [newName, setNewName] = useState("");
+  const [bulk, setBulk] = useState(null); // { id, text }
+  const inputStyle = { border: `1px solid ${T.border}`, color: T.ink };
+  const patch = (t, changes) => updateDoc(doc(db, "prequalTemplates", t.id), changes).catch((err) => { console.error("Template save failed:", err); alert(`Couldn't save: ${err.message || err}`); });
+
+  const addTemplate = () => {
+    const name = newName.trim();
+    if (!name) return;
+    const id = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || pqId("t");
+    setDoc(doc(db, "prequalTemplates", id), { name, description: "", questions: [], uploads: [], steps: [] }).then(() => { setNewName(""); setOpenId(id); }).catch((err) => alert(`Couldn't add: ${err.message || err}`));
+  };
+
+
+  return (
+    <>
+      <div className="flex items-center gap-2">
+        <input placeholder="New pre-qual name" value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addTemplate(); }} className="text-xs px-3 py-2 rounded-lg outline-none" style={{ ...inputStyle, width: 240 }} />
+        <button onClick={addTemplate} className="text-xs font-semibold px-3 py-2 rounded-lg" style={{ background: T.tealDark, color: "#fff" }}>Add</button>
+      </div>
+      <div className="flex flex-col gap-3">
+        {templates.map((t) => {
+          const open = openId === t.id;
+          const qs = t.questions || [], ups = t.uploads || [], sts = t.steps || [];
+          return (
+            <Card key={t.id} style={{ padding: 0 }}>
+              <button onClick={() => setOpenId(open ? null : t.id)} className="w-full flex items-center justify-between px-4 py-3 text-left">
+                <div>
+                  <div className="text-sm font-bold" style={{ color: T.ink }}>{t.name}</div>
+                  <div className="text-xs" style={{ color: T.slate }}>{qs.length} question{qs.length === 1 ? "" : "s"} · {ups.length} upload{ups.length === 1 ? "" : "s"} · {sts.length} step{sts.length === 1 ? "" : "s"}</div>
+                </div>
+                <ChevronDown size={15} color={T.slateLight} style={{ transform: open ? "rotate(180deg)" : "none" }} />
+              </button>
+              {open && (
+                <div className="px-4 pb-4 flex flex-col gap-5" style={{ borderTop: `1px solid ${T.border}` }}>
+                  <div className="flex items-center gap-2 pt-4">
+                    <input defaultValue={t.name} key={t.id + t.name} onBlur={(e) => e.target.value.trim() && e.target.value.trim() !== t.name && patch(t, { name: e.target.value.trim() })} className="text-sm font-semibold px-2 py-1.5 rounded-lg outline-none" style={{ ...inputStyle, width: 220 }} />
+                    <input placeholder="Short description shown on the page" defaultValue={t.description || ""} key={t.id + "d" + (t.description || "")} onBlur={(e) => e.target.value !== (t.description || "") && patch(t, { description: e.target.value })} className="flex-1 text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle} />
+                    <ConfirmButton onConfirm={() => deleteDoc(doc(db, "prequalTemplates", t.id))} title="Delete this pre-qual" iconSize={13} />
+                  </div>
+
+                  <PrequalSection title="Questions" action={<button onClick={() => setBulk(bulk && bulk.id === t.id ? null : { id: t.id, text: "" })} className="text-[11px] font-semibold" style={{ color: T.tealDark }}>Add several</button>}>
+                    {qs.map((q) => (
+                      <div key={q.id} className="flex items-center gap-2">
+                        <input defaultValue={q.text} key={q.id + q.text} onBlur={(e) => e.target.value.trim() !== q.text && patch(t, { questions: qs.map((x) => (x.id === q.id ? { ...x, text: e.target.value.trim() } : x)) })} className="flex-1 text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle} />
+                        <select value={q.kind || "text"} onChange={(e) => patch(t, { questions: qs.map((x) => (x.id === q.id ? { ...x, kind: e.target.value } : x)) })} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle}>
+                          {Object.entries(PREQUAL_KINDS).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+                        </select>
+                        <ConfirmButton onConfirm={() => patch(t, { questions: qs.filter((x) => x.id !== q.id) })} title="Remove question" iconSize={12} />
+                      </div>
+                    ))}
+                    {bulk && bulk.id === t.id && (
+                      <div className="flex flex-col gap-2">
+                        <textarea rows={6} value={bulk.text} onChange={(e) => setBulk({ ...bulk, text: e.target.value })} placeholder="One question per line" className="text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle} />
+                        <button onClick={() => { const lines = bulk.text.split("\n").map((l) => l.trim()).filter(Boolean); if (lines.length) patch(t, { questions: [...qs, ...lines.map((text) => ({ id: pqId("q"), text, kind: "text" }))] }); setBulk(null); }} className="text-xs font-semibold px-3 py-1.5 rounded-lg self-start" style={{ background: T.tealDark, color: "#fff" }}>Add questions</button>
+                      </div>
+                    )}
+                    <button onClick={() => patch(t, { questions: [...qs, { id: pqId("q"), text: "New question", kind: "text" }] })} className="text-xs font-semibold self-start flex items-center gap-1" style={{ color: T.tealDark }}><Plus size={12} /> Question</button>
+                  </PrequalSection>
+
+                  <PrequalSection title="Uploads">
+                    {ups.map((u) => (
+                      <div key={u.id} className="flex items-center gap-2">
+                        <input defaultValue={u.label} key={u.id + u.label} onBlur={(e) => e.target.value.trim() !== u.label && patch(t, { uploads: ups.map((x) => (x.id === u.id ? { ...x, label: e.target.value.trim() } : x)) })} className="flex-1 text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle} />
+                        <label className="flex items-center gap-1 text-[11px] font-semibold" style={{ color: T.slate }}>
+                          <input type="checkbox" checked={u.required !== false} onChange={(e) => patch(t, { uploads: ups.map((x) => (x.id === u.id ? { ...x, required: e.target.checked } : x)) })} /> Required
+                        </label>
+                        <ConfirmButton onConfirm={() => patch(t, { uploads: ups.filter((x) => x.id !== u.id) })} title="Remove upload" iconSize={12} />
+                      </div>
+                    ))}
+                    <button onClick={() => patch(t, { uploads: [...ups, { id: pqId("u"), label: "New document", required: true }] })} className="text-xs font-semibold self-start flex items-center gap-1" style={{ color: T.tealDark }}><Plus size={12} /> Upload</button>
+                  </PrequalSection>
+
+                  <PrequalSection title="Steps for us">
+                    {sts.map((st) => (
+                      <div key={st.id} className="flex items-center gap-2">
+                        <input defaultValue={st.title} key={st.id + st.title} onBlur={(e) => e.target.value.trim() !== st.title && patch(t, { steps: sts.map((x) => (x.id === st.id ? { ...x, title: e.target.value.trim() } : x)) })} className="flex-1 text-xs px-2 py-1.5 rounded-lg outline-none" style={inputStyle} />
+                        <ConfirmButton onConfirm={() => patch(t, { steps: sts.filter((x) => x.id !== st.id) })} title="Remove step" iconSize={12} />
+                      </div>
+                    ))}
+                    <button onClick={() => patch(t, { steps: [...sts, { id: pqId("st"), title: "New step" }] })} className="text-xs font-semibold self-start flex items-center gap-1" style={{ color: T.tealDark }}><Plus size={12} /> Step</button>
+                  </PrequalSection>
+                </div>
+              )}
+            </Card>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+function PrequalSubmissions({ clients, submissions }) {
+  const [openId, setOpenId] = useState(null);
+  const inputStyle = { border: `1px solid ${T.border}`, color: T.ink };
+  const list = submissions.slice().sort((a, b) => (b.updatedDate || "").localeCompare(a.updatedDate || ""));
+  const progress = (s) => {
+    const total = (s.questions || []).length + (s.uploads || []).filter((u) => u.required).length;
+    const done = (s.questions || []).filter((q) => (s.answers || {})[q.id]?.inApp || String((s.answers || {})[q.id]?.value || "").trim()).length
+      + (s.uploads || []).filter((u) => u.required && ((s.files || {})[u.id]?.inApp || ((s.files || {})[u.id]?.items || []).length)).length;
+    return { total, done };
+  };
+  const patch = (s, changes) => updateDoc(doc(db, "prequalSubmissions", s.id), changes).catch((err) => console.error("Submission update failed:", err));
+
+  return (
+    <div className="rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.border}` }}>
+      {list.length === 0 && <div className="px-4 py-8 text-sm text-center" style={{ color: T.slateLight }}>Nothing submitted yet.</div>}
+      {list.map((s, idx) => {
+        const open = openId === s.id;
+        const p = progress(s);
+        const submitted = s.status === "submitted";
+        return (
+          <div key={s.id} style={{ borderTop: idx ? `1px solid ${T.border}` : "none" }}>
+            <div className="flex items-center gap-4 px-4 py-3">
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-semibold truncate" style={{ color: T.ink }}>{s.company}<span className="ml-2 text-xs font-normal" style={{ color: T.slate }}>{s.schemeName}</span></div>
+                <div className="text-xs truncate" style={{ color: T.slate }}>{s.contactName} · {s.email}</div>
+              </div>
+              <span className="text-xs font-semibold" style={{ color: T.slate }}>{p.done}/{p.total}</span>
+              <span className="text-[11px] font-bold px-2 py-1 rounded-md" style={{ background: submitted ? "#E4F8F5" : "#FBF1E3", color: submitted ? T.tealDark : T.amber }}>{submitted ? (s.reviewed ? "Reviewed" : "Submitted") : "In progress"}</span>
+              <span className="text-xs" style={{ color: T.slateLight }}>{s.updatedDate ? fmtDate(s.updatedDate) : ""}</span>
+              <button onClick={() => setOpenId(open ? null : s.id)}><ChevronDown size={15} color={T.slateLight} style={{ transform: open ? "rotate(180deg)" : "none" }} /></button>
+            </div>
+            {open && (
+              <div className="px-4 pb-4 flex flex-col gap-4">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <select value={s.clientId || s.suggestedClientId || ""} onChange={(e) => patch(s, { clientId: e.target.value || null })} className="text-xs px-2 py-1.5 rounded-lg outline-none" style={{ ...inputStyle, maxWidth: 220 }}>
+                    <option value="">Link to client</option>
+                    {clients.filter((c) => !c.archived).sort((a, b) => a.name.localeCompare(b.name)).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                  <div className="flex-1" />
+                  {submitted && !s.reviewed && <button onClick={() => patch(s, { reviewed: true })} className="text-xs font-semibold px-3 py-1.5 rounded-lg" style={{ background: T.tealDark, color: "#fff" }}>Mark reviewed</button>}
+                  <ConfirmButton onConfirm={() => deleteDoc(doc(db, "prequalSubmissions", s.id))} title="Delete submission" iconSize={13} />
+                </div>
+                <div className="flex flex-col gap-2">
+                  {(s.questions || []).map((q, i) => {
+                    const a = (s.answers || {})[q.id] || {};
+                    return (
+                      <div key={q.id} className="rounded-lg px-3 py-2" style={{ background: T.paperAlt }}>
+                        <div className="text-xs font-semibold" style={{ color: T.slate }}>{i + 1}. {q.text}</div>
+                        <div className="text-sm mt-0.5" style={{ color: T.ink, whiteSpace: "pre-wrap" }}>{a.inApp ? "Completed in the app" : a.value || "No answer yet"}</div>
+                      </div>
+                    );
+                  })}
+                  {(s.uploads || []).map((u) => {
+                    const f = (s.files || {})[u.id] || {};
+                    return (
+                      <div key={u.id} className="rounded-lg px-3 py-2" style={{ background: T.paperAlt }}>
+                        <div className="text-xs font-semibold" style={{ color: T.slate }}>{u.label}{u.required ? " (required)" : ""}</div>
+                        <div className="flex flex-wrap gap-2 mt-1">
+                          {f.inApp && <span className="text-xs" style={{ color: T.ink }}>Completed in the app</span>}
+                          {(f.items || []).map((file) => (
+                            <button key={file.id} onClick={() => openStoragePath(file.path)} className="text-xs font-semibold flex items-center gap-1" style={{ color: T.tealDark }}><FileText size={12} /> {file.name}</button>
+                          ))}
+                          {!f.inApp && !(f.items || []).length && <span className="text-xs" style={{ color: T.slateLight }}>Nothing uploaded yet</span>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 /* ---------- Training tab ---------- */
 const TRAINING_PLATFORMS = ["Zoom", "Microsoft Teams", "Google Meet", "In person", "Other"];
 function fmtTrainingTime(hhmm) {
@@ -14516,6 +14896,7 @@ export default function App() {
         <NavItem icon={FileText} label="Reports" active={module === "reports"} onClick={() => setModule("reports")} />
         <NavItem icon={CalendarClock} label="Schedule" active={module === "schedule"} onClick={() => setModule("schedule")} />
         <NavItem icon={ClipboardList} label="Site Reviews" active={module === "sitereviews"} onClick={() => setModule("sitereviews")} />
+        <NavItem icon={ShieldCheck} label="Pre-Qual" active={module === "prequal"} onClick={() => setModule("prequal")} />
         <NavItem icon={Calendar} label="Training" active={module === "training"} onClick={() => setModule("training")} />
         <div className="flex-1" />
         <div className="px-3 pb-2">
@@ -14530,7 +14911,7 @@ export default function App() {
         <div className="flex items-center justify-between px-8 py-5" style={{ borderBottom: `1px solid ${T.border}` }}>
           <div>
             <div className="text-xl font-bold" style={{ color: T.ink }}>
-              {{ overview: "Overview", clients: "Clients", systems: "Systems", sales: "Sales", billing: "Billing", workflows: "Workflows", resellers: "Resellers", tasks: "My Tasks", dashboards: "Dashboards", reports: "Reports", schedule: "Schedule", sitereviews: "Site Reviews", training: "Training", hours: "Hours" }[module]}
+              {{ overview: "Overview", clients: "Clients", systems: "Systems", sales: "Sales", billing: "Billing", workflows: "Workflows", resellers: "Resellers", tasks: "My Tasks", dashboards: "Dashboards", reports: "Reports", schedule: "Schedule", sitereviews: "Site Reviews", prequal: "Pre-Qual", training: "Training", hours: "Hours" }[module]}
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -14562,6 +14943,7 @@ export default function App() {
           {module === "tasks" && <TasksView tasks={tasks} clients={clients} onboardings={onboardings} currentUser={currentUser} goToClient={goToClient} resellers={resellers} goToReseller={goToReseller} leads={leads} goToSales={() => setModule("sales")} />}
           {module === "reports" && <ReportsHub clients={clients} reportTemplates={reportTemplates} addReportTemplate={addReportTemplate} renameReportTemplate={renameReportTemplate} deleteReportTemplate={deleteReportTemplate} addTemplateSection={addTemplateSection} removeTemplateSection={removeTemplateSection} />}
           {module === "training" && <ErrorBoundary><TrainingView clients={clients} /></ErrorBoundary>}
+          {module === "prequal" && <ErrorBoundary><PrequalView clients={clients} goToClient={goToClient} /></ErrorBoundary>}
           {module === "sitereviews" && <ErrorBoundary><SiteReviewsView clients={clients} externalConsultants={externalConsultants} goToClient={goToClient} /></ErrorBoundary>}
           {module === "schedule" && <ScheduleView tasks={tasks} clients={clients} onboardings={onboardings} scheduleBlocks={scheduleBlocks} addScheduleBlock={addScheduleBlock} removeScheduleBlock={removeScheduleBlock} goToClient={goToClient} masterScheduleEntries={masterScheduleEntries} addMasterScheduleEntry={addMasterScheduleEntry} updateMasterScheduleEntry={updateMasterScheduleEntry} removeMasterScheduleEntry={removeMasterScheduleEntry} confirmMasterScheduleEntry={confirmMasterScheduleEntry} externalConsultants={externalConsultants} />}
         </div>

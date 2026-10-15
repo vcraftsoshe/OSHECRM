@@ -11819,84 +11819,58 @@ function siteMonthStatus(client, site, month) {
 
 async function downloadSiteBriefPdf({ client, site, reviews }) {
   const { PDFDocument, StandardFonts, rgb } = await importWithReloadOnStaleChunk(() => import("pdf-lib"));
-  const charcoal = rgb(0.102, 0.173, 0.18), teal = rgb(0.075, 0.863, 0.8), tealDark = rgb(0.039, 0.678, 0.627);
-  const ink = rgb(0.082, 0.141, 0.137), slate = rgb(0.36, 0.447, 0.455), paperAlt = rgb(0.922, 0.949, 0.941), line = rgb(0.863, 0.902, 0.894), white = rgb(1, 1, 1);
-  const W = 595, H = 842, M = 44, CW = W - M * 2;
+  const green = rgb(0.043, 0.235, 0.205);
+  const ink = rgb(0.082, 0.141, 0.137), slate = rgb(0.4, 0.45, 0.45), line = rgb(0.82, 0.85, 0.85), zebra = rgb(0.965, 0.975, 0.972), white = rgb(1, 1, 1);
+  const W = 595, H = 842, M = 40, CW = W - M * 2;
   const pdfDoc = await PDFDocument.create();
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
   const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
   const clean = (t) => sanitizeForPdf(t || "");
-  let oshe = null;
-  try { const resp = await fetch("/logo.png"); if (resp.ok) oshe = await pdfDoc.embedPng(await resp.arrayBuffer()); } catch (err) { console.error("OSHE logo failed:", err); }
+  let osheLogo = null;
+  try { const resp = await fetch("/logo.png"); if (resp.ok) osheLogo = await pdfDoc.embedPng(await resp.arrayBuffer()); } catch (err) { console.error("OSHE logo failed:", err); }
   const clientLogo = await loadWeeklyLogo(client, pdfDoc);
 
   const pages = [];
   let page, y;
-  const newPage = (first) => {
+  const drawLogo = (img, x, rightAlign) => {
+    const sc = Math.min(52 / img.height, 120 / img.width);
+    const w = img.width * sc, h = img.height * sc;
+    page.drawImage(img, { x: rightAlign ? x - w : x, y: H - 92 + (92 - h) / 2, width: w, height: h });
+  };
+  let headTitle = "SITE REVIEW BRIEF";
+  const newPage = () => {
     page = pdfDoc.addPage([W, H]); pages.push(page);
-    page.drawRectangle({ x: 0, y: H - 96, width: W, height: 96, color: charcoal });
-    page.drawRectangle({ x: 0, y: H - 100, width: W, height: 4, color: teal });
-    if (oshe) {
-      const sc = Math.min(40 / oshe.height, 120 / oshe.width);
-      page.drawImage(oshe, { x: M, y: H - 96 + (96 - oshe.height * sc) / 2, width: oshe.width * sc, height: oshe.height * sc });
-    } else {
-      page.drawText("OSHE", { x: M, y: H - 58, size: 24, font: bold, color: white });
-    }
-    const label = first ? "SITE REVIEW BRIEF" : "SITE REVIEW BRIEF (continued)";
-    page.drawText(label, { x: W - M - bold.widthOfTextAtSize(label, 10), y: H - 44, size: 10, font: bold, color: teal });
-    const cn = clean(client.name);
-    page.drawText(cn, { x: W - M - bold.widthOfTextAtSize(cn, 15), y: H - 66, size: 15, font: bold, color: white });
-    y = H - 100 - 34;
+    page.drawRectangle({ x: 0, y: H - 92, width: W, height: 92, color: green });
+    if (osheLogo) drawLogo(osheLogo, M, false);
+    else page.drawText("OSHE", { x: M, y: H - 52, size: 22, font: bold, color: white });
+    if (clientLogo) drawLogo(clientLogo, W - M, true);
+    else page.drawText(clean(client.name), { x: W - M - bold.widthOfTextAtSize(clean(client.name), 12), y: H - 50, size: 12, font: bold, color: white });
+    const ttl = headTitle;
+    page.drawText(ttl, { x: (W - bold.widthOfTextAtSize(ttl, 12)) / 2, y: H - 51, size: 12, font: bold, color: white });
+    y = H - 92 - 28;
   };
-  const ensure = (h) => { if (y - h < M + 30) newPage(false); };
-  const sectionTitle = (t) => {
-    ensure(40);
-    page.drawRectangle({ x: M, y: y - 3, width: 4, height: 15, color: tealDark });
-    page.drawText(t.toUpperCase(), { x: M + 12, y, size: 9.5, font: bold, color: charcoal });
-    y -= 22;
+  const banner = (title) => {
+    if (y - 80 < 50) newPage();
+    y -= 20 + 16;
+    page.drawRectangle({ x: 0, y: y - 6, width: W, height: 22, color: green });
+    page.drawText(title.toUpperCase(), { x: M, y: y + 0.5, size: 9.5, font: bold, color: white });
+    y -= 6 + 20;
   };
-  const field = (label, value, x, w) => {
-    page.drawText(label.toUpperCase(), { x, y, size: 7, font: bold, color: slate });
-    const lines = wrapTextLines(clean(value) || "-", font, 10, w);
-    lines.forEach((ln, i) => page.drawText(ln, { x, y: y - 13 - i * 13, size: 10, font, color: ink }));
-    return 13 + lines.length * 13 + 8;
-  };
-  const textBlock = (title, value) => {
-    if (!value) return;
-    const lines = wrapTextLines(clean(value), font, 10, CW - 24);
-    ensure(30 + lines.length * 13);
-    page.drawText(title.toUpperCase(), { x: M, y, size: 7.5, font: bold, color: slate });
-    y -= 6;
-    const h = lines.length * 13 + 14;
-    page.drawRectangle({ x: M, y: y - h, width: CW, height: h, color: paperAlt });
-    page.drawRectangle({ x: M, y: y - h, width: 3, height: h, color: tealDark });
-    lines.forEach((ln, i) => page.drawText(ln, { x: M + 14, y: y - 15 - i * 13, size: 10, font, color: ink }));
-    y -= h + 14;
-  };
+  const label = (t, x, yy) => page.drawText(t, { x, y: yy, size: 7.5, font, color: slate });
 
-  newPage(true);
-  // Title block
-  const addr = clean(site.address);
-  const titleLines = wrapTextLines(addr, bold, 19, CW - (clientLogo ? 110 : 0));
-  titleLines.forEach((ln, i) => page.drawText(ln, { x: M, y: y - i * 24, size: 19, font: bold, color: charcoal }));
-  if (clientLogo) {
-    const sc = Math.min(48 / clientLogo.height, 100 / clientLogo.width);
-    page.drawImage(clientLogo, { x: W - M - clientLogo.width * sc, y: y - clientLogo.height * sc + 14, width: clientLogo.width * sc, height: clientLogo.height * sc });
-  }
-  y -= titleLines.length * 24;
-  if (site.region) { page.drawText(clean(site.region), { x: M, y, size: 11, font, color: slate }); y -= 18; }
+  // ---- Page 1: site details ----
+  newPage();
+  const titleLines = wrapTextLines(clean(site.address), bold, 17, CW);
+  titleLines.forEach((ln, i) => page.drawText(ln, { x: M, y: y - i * 21, size: 17, font: bold, color: ink }));
+  y -= titleLines.length * 21;
+  if (site.region) { page.drawText(clean(site.region), { x: M, y: y + 2, size: 10, font, color: slate }); y -= 14; }
   y -= 10;
 
-  // Summary card
-  const green = rgb(0.09, 0.30, 0.29);
   const sortedAll = reviews.filter((r) => r.date).sort((a, b) => a.date.localeCompare(b.date));
   const startDate = site.siteStart || (sortedAll[0] && sortedAll[0].date) || null;
   const endDate = site.siteEnd || (sortedAll.length ? sortedAll[sortedAll.length - 1].date : null);
   const BOOK_IN = { weekly: "Every week", fortnightly: "Every 2 weeks", monthly: "Once a month", bimonthly: "Every 2 months", quarterly: "Every 3 months" };
-  const cardH = 100;
-  page.drawRectangle({ x: M, y: y - cardH, width: CW, height: cardH, color: green });
-  page.drawRectangle({ x: M, y: y - cardH, width: 4, height: cardH, color: teal });
-  const col = CW / 3;
+  banner("Site details");
   const cells = [
     ["Frequency", SITE_REVIEW_FREQ_LABELS[site.frequency] || site.frequency],
     ["Book in", BOOK_IN[site.frequency] || "-"],
@@ -11904,57 +11878,77 @@ async function downloadSiteBriefPdf({ client, site, reviews }) {
     ["Start date", startDate ? fmtDate(startDate) : "-"],
     ["End date", endDate ? fmtDate(endDate) : "-"],
   ];
+  const sh = 42, cw5 = CW / 5;
+  page.drawRectangle({ x: M, y: y - sh, width: CW, height: sh, color: white, borderColor: line, borderWidth: 0.8 });
   cells.forEach(([l, v], i) => {
-    const cx = M + 20 + (i % 3) * col, cy = y - 24 - Math.floor(i / 3) * 44;
-    page.drawText(l.toUpperCase(), { x: cx, y: cy, size: 7, font: bold, color: teal });
+    const cx = M + i * cw5;
+    if (i > 0) page.drawLine({ start: { x: cx, y: y - 6 }, end: { x: cx, y: y - sh + 6 }, thickness: 0.6, color: line });
+    label(l, cx + 10, y - 15);
     let t = clean(v);
-    while (t.length > 3 && bold.widthOfTextAtSize(t, 13) > col - 24) t = t.slice(0, -1);
-    page.drawText(t, { x: cx, y: cy - 17, size: 13, font: bold, color: white });
+    while (t.length > 3 && bold.widthOfTextAtSize(t, 11.5) > cw5 - 16) t = t.slice(0, -1);
+    page.drawText(t, { x: cx + 10, y: y - 33, size: 11.5, font: bold, color: ink });
   });
-  y -= cardH + 24;
+  y -= sh;
 
-  // Contact
   if (site.contactName || site.phone || site.email) {
-    sectionTitle("Site contact");
-    const cw = CW / 3 - 8;
-    const hs = [field("Name", site.contactName, M, cw), field("Phone", site.phone, M + CW / 3, cw), field("Email", site.email, M + (CW / 3) * 2, cw)];
-    y -= Math.max(...hs) + 8;
+    banner("Site contact");
+    y -= 8;
+    const cw3 = CW / 3 - 8;
+    let used = 0;
+    [["Name", site.contactName], ["Phone", site.phone], ["Email", site.email]].forEach(([l, v], i) => {
+      const x = M + (CW / 3) * i;
+      label(l, x, y);
+      const lines = wrapTextLines(clean(v) || "-", font, 10.5, cw3);
+      lines.forEach((ln, k) => page.drawText(ln, { x, y: y - 14 - k * 13, size: 10.5, font, color: ink }));
+      used = Math.max(used, 14 + lines.length * 13);
+    });
+    y -= used;
   }
 
-  // Details
-  if (site.siteAccess || site.ppeRequirements || site.parkingRequirements || site.inductionDetails) {
-    sectionTitle("Site requirements");
-    textBlock("Induction", site.inductionDetails);
-    textBlock("Site access", site.siteAccess);
-    textBlock("PPE", site.ppeRequirements);
-    textBlock("Parking", site.parkingRequirements);
+  const reqs = [["Induction", site.inductionDetails], ["Site access", site.siteAccess], ["PPE", site.ppeRequirements], ["Parking", site.parkingRequirements]].filter(([, v]) => v);
+  if (reqs.length) {
+    banner("Site requirements");
+    reqs.forEach(([l, v]) => {
+      const lines = wrapTextLines(clean(v), font, 10.5, CW - 24);
+      if (y - (lines.length * 14 + 24) < 50) newPage();
+      const h = lines.length * 14 + 24;
+      page.drawRectangle({ x: M, y: y - h, width: CW, height: h, color: white, borderColor: line, borderWidth: 0.8 });
+      page.drawRectangle({ x: M, y: y - h, width: 4, height: h, color: green });
+      label(l, M + 14, y - 12);
+      lines.forEach((ln, k) => page.drawText(ln, { x: M + 14, y: y - 30 - k * 14, size: 10.5, font, color: ink }));
+      y -= h + 10;
+    });
+    y += 10;
   }
 
-  // Schedule
-  const sorted = [...reviews].sort((a, b) => (a.date || "").localeCompare(b.date || ""));
-  if (sorted.length > 0) {
-    sectionTitle("Review schedule");
-    const rh = 22;
-    ensure(rh * 2);
-    page.drawRectangle({ x: M, y: y - rh + 6, width: CW, height: rh, color: green });
-    page.drawText("DATE", { x: M + 12, y: y - 8, size: 8, font: bold, color: white });
-    page.drawText("STATUS", { x: M + 400, y: y - 8, size: 8, font: bold, color: white });
-    y -= rh;
-    sorted.forEach((r, i) => {
-      if (y - rh < M + 30) { newPage(false); }
-      if (i % 2) page.drawRectangle({ x: M, y: y - rh + 6, width: CW, height: rh, color: paperAlt });
-      page.drawText(clean("Week of " + new Date(mondayOf(r.date) + "T00:00:00").toLocaleDateString("en-NZ", { day: "numeric", month: "long", year: "numeric" })), { x: M + 12, y: y - 8, size: 9.5, font, color: ink });
-      page.drawText(r.done ? "Completed" : "Scheduled", { x: M + 400, y: y - 8, size: 9.5, font: bold, color: r.done ? slate : tealDark });
+  // ---- Page 2: schedule ----
+  if (sortedAll.length > 0) {
+    headTitle = "REVIEW SCHEDULE";
+    newPage();
+    const rh = 24;
+    const head = () => {
+      page.drawRectangle({ x: M, y: y - rh, width: CW, height: rh, color: green });
+      page.drawText("Review", { x: M + 12, y: y - 16, size: 9, font: bold, color: white });
+      page.drawText("Status", { x: M + 400, y: y - 16, size: 9, font: bold, color: white });
+      y -= rh;
+    };
+    head();
+    sortedAll.forEach((r, i) => {
+      if (y - rh < 50) { newPage(); head(); }
+      page.drawRectangle({ x: M, y: y - rh, width: CW, height: rh, color: i % 2 ? zebra : white, borderColor: line, borderWidth: 0.5 });
+      const wk = new Date(mondayOf(r.date) + "T00:00:00").toLocaleDateString("en-NZ", { day: "numeric", month: "long", year: "numeric" });
+      page.drawText(clean("Week of " + wk), { x: M + 12, y: y - 16, size: 10, font, color: ink });
+      const due = r.date.slice(0, 7) <= currentMonth();
+      const st = r.done ? "Completed" : r.sched ? "Scheduled" : due ? "Not scheduled" : "Pending";
+      page.drawText(st, { x: M + 400, y: y - 16, size: 10, font: bold, color: st === "Completed" || st === "Pending" ? slate : st === "Scheduled" ? green : rgb(0.76, 0.5, 0.15) });
       y -= rh;
     });
   }
 
-  const generated = new Date().toLocaleDateString("en-NZ", { day: "numeric", month: "long", year: "numeric" });
   pages.forEach((pg, i) => {
-    pg.drawLine({ start: { x: M, y: M }, end: { x: W - M, y: M }, thickness: 0.5, color: line });
-    pg.drawText(`OSHE Limited  |  ${generated}`, { x: M, y: M - 14, size: 8, font, color: slate });
-    const pn = `Page ${i + 1} of ${pages.length}`;
-    pg.drawText(pn, { x: W - M - font.widthOfTextAtSize(pn, 8), y: M - 14, size: 8, font, color: slate });
+    pg.drawText(clean(`Prepared by OSHE for ${client.name} - ${new Date().toLocaleDateString("en-NZ", { month: "long", year: "numeric" })}`), { x: M, y: 22, size: 8, font, color: slate });
+    const pn = `Page ${i + 1}`;
+    pg.drawText(pn, { x: W - M - font.widthOfTextAtSize(pn, 8), y: 22, size: 8, font, color: slate });
   });
 
   const bytes = await pdfDoc.save();
@@ -12220,13 +12214,19 @@ function SiteReviewsView({ clients, externalConsultants, goToClient }) {
                     </div>
                     <div className="flex flex-col rounded-lg overflow-hidden" style={{ border: `1px solid ${T.border}`, background: T.card }}>
                       {(client.reminders || []).filter((r) => r.siteReviewId === site.id).sort((a, b) => (a.date || "").localeCompare(b.date || "")).map((t, idx) => (
-                        <div key={t.id} className="grid items-center px-3 py-2" style={{ gridTemplateColumns: "150px minmax(0, 1fr) 70px 70px 24px", gap: 10, borderTop: idx ? `1px solid ${T.border}` : "none", opacity: t.done ? 0.6 : 1 }}>
+                        <div key={t.id} className="grid items-center px-3 py-2" style={{ gridTemplateColumns: "150px minmax(0, 1fr) 70px 120px 24px", gap: 10, borderTop: idx ? `1px solid ${T.border}` : "none", opacity: t.done ? 0.6 : 1 }}>
                           <input type="date" defaultValue={t.date} key={t.id + t.date} onBlur={(e) => e.target.value && e.target.value !== t.date && editReview(row, t, { date: e.target.value })} className="text-xs px-2 py-1 rounded-lg outline-none" style={inputStyle} />
                           <select value={t.assignee || ""} onChange={(e) => editReview(row, t, { assignee: e.target.value })} className="text-xs px-2 py-1 rounded-lg outline-none" style={inputStyle}>
                             {[...new Set([...people, t.assignee].filter(Boolean))].map((m) => <option key={m} value={m}>{m}</option>)}
                           </select>
                           <input type="number" min="0" step="0.25" defaultValue={t.estHours || ""} key={t.id + "h" + t.estHours} onBlur={(e) => Number(e.target.value) !== Number(t.estHours || 0) && editReview(row, t, { estHours: Number(e.target.value) || 0 })} placeholder="hrs" className="text-xs px-2 py-1 rounded-lg outline-none text-center" style={inputStyle} />
-                          <span className="text-[11px] font-semibold text-center rounded-md py-1" style={{ background: t.done ? T.paperAlt : SITE_REVIEW_BG, color: t.done ? T.slate : SITE_REVIEW_COLOR }}>{t.done ? "Done" : "To do"}</span>
+                          {t.done ? (
+                            <span className="text-[11px] font-semibold text-center rounded-md py-1" style={{ background: T.paperAlt, color: T.slate }}>Done</span>
+                          ) : (
+                            <select value={t.sched ? "1" : ""} onChange={(e) => editReview(row, t, { sched: e.target.value === "1" })} className="text-[11px] font-semibold px-1 py-1 rounded-md outline-none" style={{ background: t.sched ? SITE_REVIEW_BG : "#FBF1E3", color: t.sched ? SITE_REVIEW_COLOR : T.amber, border: "none" }}>
+                              <option value="">Not scheduled</option><option value="1">Scheduled</option>
+                            </select>
+                          )}
                           <ConfirmButton onConfirm={() => removeReviews(row, [t], false)} title="Delete this review" iconSize={12} />
                         </div>
                       ))}

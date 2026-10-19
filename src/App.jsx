@@ -12196,7 +12196,7 @@ function SiteReviewsView({ clients, externalConsultants, goToClient }) {
         <Stat label="Needs scheduling" value={counts.needs} color={counts.needs > 0 ? T.amber : T.ink} />
       </div>
 
-      <div className="rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.border}` }}>
+      <div className="shrink-0 rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.border}` }}>
         <div className="grid items-center px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide" style={{ gridTemplateColumns: cols, gap: 12, color: T.slate, background: T.paperAlt }}>
           <div>Site</div><div>Frequency</div><div>Assigned</div><div>{month === currentMonth() ? "This month" : monthLabel(month)}</div><div />
         </div>
@@ -12442,7 +12442,7 @@ function PrequalClients({ clients, templates, submissions, goToClient }) {
         </Card>
       )}
 
-      <div className="rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.border}` }}>
+      <div className="shrink-0 rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.border}` }}>
         <div className="grid items-center px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide" style={{ gridTemplateColumns: cols, gap: 12, color: T.slate, background: T.paperAlt }}>
           <div>Client</div><div>Pre-qual</div><div>Due</div><div>Steps</div><div>Questionnaire</div><div />
         </div>
@@ -12621,7 +12621,7 @@ function PrequalSubmissions({ clients, submissions }) {
   const patch = (s, changes) => updateDoc(doc(db, "prequalSubmissions", s.id), changes).catch((err) => console.error("Submission update failed:", err));
 
   return (
-    <div className="rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.border}` }}>
+    <div className="shrink-0 rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.border}` }}>
       {list.length === 0 && <div className="px-4 py-8 text-sm text-center" style={{ color: T.slateLight }}>Nothing submitted yet.</div>}
       {list.map((s, idx) => {
         const open = openId === s.id;
@@ -12913,7 +12913,7 @@ function TrainingView({ clients }) {
         </Card>
       )}
 
-      <div className="rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.border}` }}>
+      <div className="shrink-0 rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.border}` }}>
         <div className="px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide" style={{ color: T.slate, background: T.paperAlt }}>Upcoming sessions</div>
         {upcoming.length === 0 && <div className="px-4 py-8 text-sm text-center" style={{ color: T.slateLight }}>No upcoming sessions.</div>}
         {upcoming.map((s) => <SessionRow key={s.id} s={s} />)}
@@ -12925,7 +12925,7 @@ function TrainingView({ clients }) {
             <ChevronDown size={13} style={{ transform: showPast ? "none" : "rotate(-90deg)" }} /> Past sessions ({past.length})
           </button>
           {showPast && (
-            <div className="rounded-xl overflow-hidden mt-2" style={{ background: T.card, border: `1px solid ${T.border}` }}>
+            <div className="shrink-0 rounded-xl overflow-hidden mt-2" style={{ background: T.card, border: `1px solid ${T.border}` }}>
               {past.map((s) => <SessionRow key={s.id} s={s} muted />)}
             </div>
           )}
@@ -13238,7 +13238,7 @@ function WeeklyReportView({ clients }) {
       )}
 
       {tracker.sites.length > 0 && (
-        <div className="rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.border}` }}>
+        <div className="shrink-0 rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.border}` }}>
           <div className="grid items-center px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide" style={{ gridTemplateColumns: cols, gap: 10, color: T.slate, background: T.paperAlt }}>
             <div>Site</div>
             {tracker.checks.map((c) => <div key={c.id} className="text-center">{c.name}</div>)}

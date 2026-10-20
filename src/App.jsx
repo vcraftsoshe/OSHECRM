@@ -4555,7 +4555,7 @@ function monthsWithActivity(log) {
 /* ---------- Shared bits ---------- */
 function NavItem({ icon: Icon, label, active, onClick }) {
   return (
-    <button onClick={onClick} className="flex items-center gap-3 w-full px-4 py-3 rounded-lg text-sm transition-colors"
+    <button onClick={onClick} className="shrink-0 flex items-center gap-3 w-full px-4 py-3 rounded-lg text-sm transition-colors"
       style={{ background: active ? T.charcoalSoft : "transparent", color: active ? T.teal : "#B9C7C6" }}>
       <Icon size={18} /><span style={{ fontWeight: active ? 600 : 500 }}>{label}</span>
     </button>
@@ -14991,7 +14991,7 @@ export default function App() {
 
   return (
     <div className="flex h-screen w-full" style={{ background: T.paper, fontFamily: "'Inter', system-ui, sans-serif" }}>
-      <div className="w-56 shrink-0 flex flex-col p-4 gap-1" style={{ background: T.charcoal }}>
+      <div className="w-56 shrink-0 flex flex-col p-4 gap-1 overflow-y-auto min-h-0" style={{ background: T.charcoal }}>
         <div className="px-3 py-3 mb-3">
           <img src="/logo.png" alt="OSHE" style={{ height: 36, width: "auto" }} />
         </div>

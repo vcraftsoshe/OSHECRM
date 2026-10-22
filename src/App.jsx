@@ -5943,6 +5943,7 @@ function ClientsView({ clients, selectedId, setSelectedId, onboardings, updateOn
     const updated = fn(client);
     const { id, ...fields } = updated;
     updateDoc(doc(db, "clients", client.id), fields);
+    logClientDiff(currentUser, client, updated);
   };
 
   const [uploadingClientFile, setUploadingClientFile] = useState(false);
@@ -9605,6 +9606,149 @@ function OverviewView({ clients, tasks, onboardings, goToClient }) {
   );
 }
 
+// Usage log: who (by login) entered or changed what, written as people work. This is separate
+// from who a task is assigned to.
+function logActivity(user, entry) {
+  if (!user) return;
+  const ts = Date.now();
+  setDoc(doc(db, "activityLog", `al${ts}${Math.random().toString(36).slice(2, 7)}`), { user, ts, date: today(), ...entry }).catch((err) => console.error("Activity log failed:", err));
+}
+const AUTO_HOURS_ID = /^(wf-|sched-hours-|task-hours-|mastercal-)/;
+function logClientDiff(user, before, after) {
+  if (!user || !before || !after) return;
+  try {
+    const ctx = { clientId: before.id, clientName: before.name };
+    const log = (action, text) => logActivity(user, { ...ctx, action, text: String(text || "").slice(0, 200) });
+    const idsOf = (arr) => new Set((arr || []).map((x) => String(x.id)));
+    const addedOf = (key) => { const old = idsOf(before[key]); return (after[key] || []).filter((x) => !old.has(String(x.id))); };
+    const removedOf = (key) => { const now = idsOf(after[key]); return (before[key] || []).filter((x) => !now.has(String(x.id))); };
+    addedOf("notes").forEach((n) => {
+      const m = /^Completed reminder: "(.*)"$/s.exec(n.text || "");
+      if (m) log("Task completed", m[1]); else log("Note added", n.text);
+    });
+    addedOf("reminders").forEach((r) => log("Task added", r.text));
+    removedOf("reminders").forEach((r) => log("Task removed", r.text));
+    const oldR = new Map((before.reminders || []).map((r) => [String(r.id), r]));
+    (after.reminders || []).forEach((r) => { const o = oldR.get(String(r.id)); if (o && o.done && !r.done && !(r.recurring && r.recurring !== "none")) log("Task reopened", r.text); });
+    const oldH = new Set(((before.hours || {}).log || []).map((h) => String(h.id)));
+    ((after.hours || {}).log || []).filter((h) => !oldH.has(String(h.id)) && !h.src && !AUTO_HOURS_ID.test(String(h.id))).forEach((h) => log("Hours logged", `${h.description || "Hours"} (${h.hours}h)`));
+    addedOf("billableExpenses").forEach((x) => log("Billable item added", `${x.description || "Item"} ($${x.amount})`));
+    addedOf("files").forEach((f) => log("File uploaded", f.name));
+    addedOf("contacts").forEach((c) => log("Contact added", c.name));
+    addedOf("extras").forEach((e) => log("Extra added", e.description || e.title));
+    addedOf("scheduleEntries").forEach((e) => log("Schedule item added", e.title));
+    addedOf("siteReviews").forEach((s) => log("Site added", s.address));
+    addedOf("prequals").forEach((p) => log("Pre-qual added", p.schemeName || p.name));
+  } catch (err) { console.error("Activity diff failed:", err); }
+}
+
+const USAGE_COLUMNS = [["Notes", ["Note added"]], ["Tasks added", ["Task added"]], ["Completed", ["Task completed", "Workflow step completed", "Schedule entry confirmed"]], ["Hours", ["Hours logged", "Billable item added", "Training fee"]]];
+function usageBucket(action) {
+  const i = USAGE_COLUMNS.findIndex(([, list]) => list.includes(action));
+  return i === -1 ? USAGE_COLUMNS.length : i;
+}
+
+async function downloadUsageReportPdf({ entries, person, rangeLabel }) {
+  const { PDFDocument, StandardFonts, rgb } = await importWithReloadOnStaleChunk(() => import("pdf-lib"));
+  const col = (hex) => hexColor(rgb, hex);
+  const deep = col(BRAND.deep), headingGreen = col(BRAND.heading), body = col(BRAND.body), muted = col(BRAND.muted), grey = col(BRAND.grey), white = rgb(1, 1, 1);
+  const W = 595, H = 842, M = 40, CW = W - M * 2, BAND = 84;
+  const pdfDoc = await PDFDocument.create();
+  const fonts = await embedBrandFonts(pdfDoc, StandardFonts);
+  const clean = (t) => sanitizeForPdf(t || "");
+  let osheLogo = null;
+  try { const resp = await fetch("/logo.png"); if (resp.ok) osheLogo = await pdfDoc.embedPng(await resp.arrayBuffer()); } catch (err) { console.error("OSHE logo failed:", err); }
+  const fit = (text, font, size, maxW) => {
+    let t = clean(text).replace(/\s+/g, " ");
+    if (font.widthOfTextAtSize(t, size) <= maxW) return t;
+    while (t.length > 1 && font.widthOfTextAtSize(t + "...", size) > maxW) t = t.slice(0, -1);
+    return t + "...";
+  };
+
+  const pages = [];
+  let page, y;
+  const newPage = () => {
+    page = pdfDoc.addPage([W, H]); pages.push(page);
+    drawBrandBand({ page, rgb, fonts, W, H, bandH: BAND, M, title: "CRM Usage Report", clientName: clean(`${person === "Everyone" ? "All team members" : person} | ${rangeLabel}`), osheLogo, clientLogo: null });
+    y = H - BAND - 3 - 30;
+  };
+  const heading = (text) => {
+    if (y - 90 < 50) newPage();
+    page.drawText(clean(text), { x: M, y, size: 12.5, font: fonts.head, color: headingGreen });
+    y -= 20;
+  };
+  const rh = 22;
+  const tableHead = (cols) => {
+    page.drawRectangle({ x: M, y: y - rh, width: CW, height: rh, color: deep });
+    cols.forEach(([label, x, align, w]) => {
+      const tx = align === "right" ? M + x + w - fonts.head.widthOfTextAtSize(label, 9) : M + x;
+      page.drawText(label, { x: tx, y: y - 15, size: 9, font: fonts.head, color: white });
+    });
+    y -= rh;
+  };
+
+  const people = [...new Set(entries.map((e) => e.user))].sort();
+  newPage();
+  page.drawText(clean(`${entries.length} ${entries.length === 1 ? "entry" : "entries"} recorded`), { x: M, y, size: 10.5, font: fonts.body, color: muted });
+  y -= 26;
+
+  // Summary: one row per person, counts by kind of work.
+  heading("Summary");
+  const nameW = 120, numW = (CW - nameW) / (USAGE_COLUMNS.length + 2);
+  const sumCols = [["Person", 12, "left", nameW], ...USAGE_COLUMNS.map(([label], i) => [label, nameW + i * numW, "right", numW - 10]), ["Other", nameW + USAGE_COLUMNS.length * numW, "right", numW - 10], ["Total", nameW + (USAGE_COLUMNS.length + 1) * numW, "right", numW - 10]];
+  tableHead(sumCols);
+  people.forEach((u) => {
+    if (y - rh < 50) { newPage(); tableHead(sumCols); }
+    const counts = new Array(USAGE_COLUMNS.length + 1).fill(0);
+    entries.filter((e) => e.user === u).forEach((e) => { counts[usageBucket(e.action)]++; });
+    page.drawLine({ start: { x: M, y: y - rh }, end: { x: M + CW, y: y - rh }, thickness: 0.75, color: grey });
+    page.drawText(fit(u, fonts.label, 10, nameW - 16), { x: M + 12, y: y - 15, size: 10, font: fonts.label, color: body });
+    const vals = [...counts, entries.filter((e) => e.user === u).length];
+    vals.forEach((v, i) => {
+      const t = String(v);
+      const x = M + nameW + i * numW + numW - 10 - fonts.body.widthOfTextAtSize(t, 10);
+      page.drawText(t, { x, y: y - 15, size: 10, font: i === vals.length - 1 ? fonts.label : fonts.body, color: body });
+    });
+    y -= rh;
+  });
+  if (people.length === 0) { page.drawText("Nothing recorded in this period.", { x: M + 12, y: y - 15, size: 10, font: fonts.body, color: muted }); y -= rh; }
+  y -= 22;
+
+  // Detail: each person's entries, newest first.
+  const detCols = [["Date", 12, "left", 70], ["Client", 86, "left", 112], ["Action", 204, "left", 128], ["Detail", 338, "left", CW - 338]];
+  people.forEach((u) => {
+    if (y - 90 < 50) newPage();
+    heading(u);
+    tableHead(detCols);
+    entries.filter((e) => e.user === u).sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.ts || 0) - (a.ts || 0)).forEach((e) => {
+      if (y - rh < 50) { newPage(); tableHead(detCols); }
+      page.drawLine({ start: { x: M, y: y - rh }, end: { x: M + CW, y: y - rh }, thickness: 0.75, color: grey });
+      page.drawText(clean(fmtDate(e.date)), { x: M + 12, y: y - 15, size: 9, font: fonts.body, color: muted });
+      page.drawText(fit(e.clientName || "-", fonts.body, 9, 110), { x: M + 86, y: y - 15, size: 9, font: fonts.body, color: body });
+      page.drawText(fit(e.action, fonts.label, 9, 126), { x: M + 204, y: y - 15, size: 9, font: fonts.label, color: body });
+      page.drawText(fit(e.text || "", fonts.body, 9, CW - 338 - 8), { x: M + 338, y: y - 15, size: 9, font: fonts.body, color: body });
+      y -= rh;
+    });
+    y -= 22;
+  });
+
+  const generated = new Date().toLocaleDateString("en-NZ", { day: "numeric", month: "long", year: "numeric" });
+  pages.forEach((pg, i) => {
+    pg.drawLine({ start: { x: M, y: 38 }, end: { x: W - M, y: 38 }, thickness: 0.75, color: grey });
+    pg.drawText(clean(`Prepared by OSHE | ${generated}`), { x: M, y: 24, size: 8, font: fonts.body, color: muted });
+    const pn = `Page ${i + 1} of ${pages.length}`;
+    pg.drawText(pn, { x: W - M - fonts.body.widthOfTextAtSize(pn, 8), y: 24, size: 8, font: fonts.body, color: muted });
+  });
+
+  const bytes = await pdfDoc.save();
+  const filename = `CRM Usage Report ${today()}.pdf`;
+  const blob = new Blob([bytes], { type: "application/pdf" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
+
 function BillingOverview({ clients, resellers, tasks }) {
   const [showFlatFee, setShowFlatFee] = useState(false);
   const [expandedBilling, setExpandedBilling] = useState({});
@@ -9614,42 +9758,52 @@ function BillingOverview({ clients, resellers, tasks }) {
     if (!c) return;
     updateDoc(doc(db, "clients", clientId), { hours: { ...c.hours, log: c.hours.log.filter((h) => h.id !== hourId) } });
   };
-  // Team Activity Log — everything a chosen person has logged into the CRM (notes they
-  // wrote, hours they logged, tasks/reminders they've marked done), pulled together across
-  // every client into one sorted list. Only surfaced here, on the Billing tab, since that's
-  // the one part of the app already restricted to Sophie/Vanessa (see canSeeBilling in the
-  // main App component) — Jo and Judith never see this tab at all, so this log is
-  // automatically private to the same two people without needing any separate access check.
-  const [logPerson, setLogPerson] = useState(TEAM[0]);
+  // CRM usage: who entered or changed what, by login (not by who a task is assigned to).
+  // Entries are written as people work. Notes written before that began are included from
+  // their author so the history isn't empty.
+  const [logPerson, setLogPerson] = useState("Everyone");
   const [logRange, setLogRange] = useState("30");
+  const [activityLog, setActivityLog] = useState([]);
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "activityLog"), (snap) => setActivityLog(snap.docs.map((d) => ({ id: d.id, ...d.data() }))), (err) => console.error("Activity log subscription failed:", err));
+    return unsub;
+  }, []);
+  const rangeCutoff = logRange === "all" ? null : addDays(today(), -Number(logRange));
+  const rangeLabel = logRange === "all" ? "All time" : `Last ${logRange} days (${fmtDate(rangeCutoff)} to ${fmtDate(today())})`;
   const activityEntries = useMemo(() => {
-    const cutoff = logRange === "all" ? null : addDays(today(), -Number(logRange));
-    const inRange = (d) => Boolean(d) && (!cutoff || d >= cutoff);
-    const entries = [];
+    const inRange = (d) => Boolean(d) && (!rangeCutoff || d >= rangeCutoff);
+    const logStart = activityLog.reduce((min, e) => (e.date && e.date < min ? e.date : min), today());
+    const entries = activityLog.filter((e) => inRange(e.date)).map((e) => ({ user: e.user, date: e.date, ts: e.ts, clientName: e.clientName, action: e.action, text: e.text }));
     clients.forEach((c) => {
       (c.notes || []).forEach((n) => {
-        if (n.author === logPerson && inRange(n.date)) {
-          entries.push({ type: "Note", date: n.date, clientName: c.name, text: n.text });
-        }
+        if (!TEAM.includes(n.author) || !n.date || n.date >= logStart || !inRange(n.date)) return;
+        const m = /^Completed reminder: "(.*)"$/s.exec(n.text || "");
+        entries.push({ user: n.author, date: n.date, ts: 0, clientName: c.name, action: m ? "Task completed" : "Note added", text: m ? m[1] : n.text });
       });
       (c.hours?.log || []).forEach((h) => {
-        if (h.member === logPerson && inRange(h.date)) {
-          entries.push({ type: "Hours", date: h.date, clientName: c.name, text: `${h.description || "—"} (${h.hours}h)` });
-        }
+        if (!TEAM.includes(h.member) || !h.date || h.date >= logStart || !inRange(h.date)) return;
+        entries.push({ user: h.member, date: h.date, ts: 0, clientName: c.name, action: "Hours logged", text: `${h.description || "-"} (${h.hours}h)` });
       });
       (c.reminders || []).forEach((r) => {
-        if (r.assignee === logPerson && r.done && inRange(r.date)) {
-          entries.push({ type: "Task done", date: r.date, clientName: c.name, text: r.text });
-        }
+        if (!r.done || !TEAM.includes(r.assignee) || !r.date || r.date >= logStart || !inRange(r.date)) return;
+        const already = (c.notes || []).some((n) => n.author === r.assignee && n.text === `Completed reminder: "${r.text}"`);
+        if (already) return;
+        entries.push({ user: r.assignee, date: r.date, ts: 0, clientName: c.name, action: "Task completed", text: r.text });
       });
     });
     (tasks || []).forEach((t) => {
-      if (t.assignee === logPerson && t.done && inRange(t.completedDate)) {
-        entries.push({ type: "Task done", date: t.completedDate, clientName: t.clientName || null, text: t.title });
-      }
+      if (!t.done || !TEAM.includes(t.assignee) || !t.completedDate || t.completedDate >= logStart || !inRange(t.completedDate)) return;
+      entries.push({ user: t.assignee, date: t.completedDate, ts: 0, clientName: t.clientName || "", action: "Task completed", text: t.title });
     });
-    return entries.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-  }, [clients, tasks, logPerson, logRange]);
+    return entries.filter((e) => logPerson === "Everyone" || e.user === logPerson).sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.ts || 0) - (a.ts || 0));
+  }, [clients, tasks, activityLog, logPerson, logRange]);
+  const [creatingUsage, setCreatingUsage] = useState(false);
+  const downloadUsage = async () => {
+    setCreatingUsage(true);
+    try { await downloadUsageReportPdf({ entries: activityEntries, person: logPerson, rangeLabel }); }
+    catch (err) { console.error("Usage report failed:", err); alert(`Couldn't create the report: ${err.message || err}`); }
+    finally { setCreatingUsage(false); }
+  };
   const [viewMonth, setViewMonth] = useState(currentMonth());
   // Just a manual "I've invoiced this one" checkbox for Vanessa to track as she works
   // through invoicing, kept separate from client.billing.status (which is the account's
@@ -9973,13 +10127,11 @@ function BillingOverview({ clients, resellers, tasks }) {
       </Card>
 
       <div style={{ borderTop: `1px solid ${T.border}`, paddingTop: 20, marginTop: 8 }}>
-        <div className="text-sm font-bold mb-1" style={{ color: T.ink }}>Team Activity Log</div>
-        <div className="text-xs mb-3" style={{ color: T.slateLight }}>
-          Everything a chosen team member has put into the CRM — notes they wrote, hours they logged, and tasks or reminders they've marked done — across every client, newest first. Visible only here, since this whole tab is already Sophie/Vanessa only.
-        </div>
+        <div className="text-sm font-bold mb-3" style={{ color: T.ink }}>CRM Usage</div>
         <div className="flex items-center gap-2 mb-3">
           <select value={logPerson} onChange={(e) => setLogPerson(e.target.value)}
             className="text-sm px-3 py-2 rounded-lg outline-none" style={{ background: T.card, border: `1px solid ${T.border}`, color: T.ink }}>
+            <option value="Everyone">Everyone</option>
             {TEAM.map((m) => <option key={m} value={m}>{m}</option>)}
           </select>
           <select value={logRange} onChange={(e) => setLogRange(e.target.value)}
@@ -9989,20 +10141,24 @@ function BillingOverview({ clients, resellers, tasks }) {
             <option value="90">Last 90 days</option>
             <option value="all">All time</option>
           </select>
+          <button onClick={downloadUsage} disabled={creatingUsage} className="text-xs font-semibold px-4 py-2 rounded-lg flex items-center gap-1.5" style={{ background: T.tealDark, color: "#fff" }}>
+            <FileText size={13} /> {creatingUsage ? "Creating…" : "Download CRM Usage Report"}
+          </button>
         </div>
         <Card style={{ padding: 0 }}>
-          <div className="grid text-xs font-semibold uppercase tracking-wide px-4 py-3" style={{ gridTemplateColumns: "100px 1fr 2fr 100px", color: T.slate, borderBottom: `1px solid ${T.border}` }}>
-            <div>Date</div><div>Client</div><div>What</div><div>Type</div>
+          <div className="grid text-xs font-semibold uppercase tracking-wide px-4 py-3" style={{ gridTemplateColumns: "100px 90px 1fr 140px 2fr", color: T.slate, borderBottom: `1px solid ${T.border}` }}>
+            <div>Date</div><div>Person</div><div>Client</div><div>Action</div><div>What</div>
           </div>
-          {activityEntries.map((e, i) => (
-            <div key={i} className="grid items-center px-4 py-2.5 text-sm" style={{ gridTemplateColumns: "100px 1fr 2fr 100px", borderBottom: `1px solid ${T.border}` }}>
+          {activityEntries.slice(0, 300).map((e, i) => (
+            <div key={i} className="grid items-center px-4 py-2.5 text-sm" style={{ gridTemplateColumns: "100px 90px 1fr 140px 2fr", borderBottom: `1px solid ${T.border}` }}>
               <div style={{ color: T.slate }}>{fmtDate(e.date)}</div>
+              <div style={{ color: T.ink }} className="font-semibold truncate">{e.user}</div>
               <div style={{ color: T.ink }} className="truncate">{e.clientName || "—"}</div>
+              <div style={{ color: T.tealDark }} className="font-semibold truncate">{e.action}</div>
               <div style={{ color: T.ink }} className="truncate">{e.text}</div>
-              <div><Pill color={e.type === "Note" ? T.blue : e.type === "Hours" ? T.tealDark : "#8B6BA8"} bg={T.paperAlt}>{e.type}</Pill></div>
             </div>
           ))}
-          {activityEntries.length === 0 && <div className="text-xs px-4 py-3" style={{ color: T.slateLight }}>Nothing logged by {logPerson} in this window.</div>}
+          {activityEntries.length === 0 && <div className="text-xs px-4 py-3" style={{ color: T.slateLight }}>Nothing recorded in this window.</div>}
         </Card>
       </div>
 
@@ -10075,6 +10231,7 @@ function TasksView({ tasks, clients, onboardings, currentUser, goToClient, resel
     if (!draft.title.trim()) return;
     const clientName = clients.find((c) => c.id === draft.clientId)?.name || null;
     const id = "task" + Date.now();
+    logActivity(currentUser, { action: "Task added", clientId: draft.clientId || null, clientName, text: draft.title });
     setDoc(doc(db, "tasks", id), { title: draft.title, assignee: person, priority: draft.priority, done: false, clientId: draft.clientId || null, clientName, dueDate: draft.dueDate || null, estHours: draft.estHours ? Number(draft.estHours) : 0 });
     setDraft({ title: "", priority: "Medium", clientId: "", dueDate: "", estHours: "" });
   };
@@ -10085,6 +10242,7 @@ function TasksView({ tasks, clients, onboardings, currentUser, goToClient, resel
     // Crossing a task off is what counts as its completion date now — no separate
     // "mark complete" step, so stamp it here and clear it again if someone unticks it.
     updateDoc(doc(db, "tasks", id), { done: nowDone, completedDate: nowDone ? today() : null });
+    logActivity(currentUser, { action: nowDone ? "Task completed" : "Task reopened", clientId: t.clientId || null, clientName: t.clientName || null, text: t.title });
     if (nowDone) playCompletionChime();
   };
   const deleteTaskPermanently = (id) => deleteDoc(doc(db, "tasks", id));
@@ -10593,6 +10751,7 @@ function MobileQuickView({ clients, currentUser, goToFullApp }) {
     const updated = fn(client);
     const { id, ...fields } = updated;
     updateDoc(doc(db, "clients", client.id), fields);
+    logClientDiff(currentUser, client, updated);
   };
 
   const flash = () => { setSavedFlash(true); setTimeout(() => setSavedFlash(false), 1600); };
@@ -14384,7 +14543,10 @@ export default function App() {
     const unsub = onSnapshot(collection(db, "masterScheduleEntries"), (snap) => setMasterScheduleEntries(snap.docs.map((d) => ({ id: d.id, ...d.data() }))), (err) => console.error("Master schedule subscription failed:", err));
     return unsub;
   }, []);
-  const addMasterScheduleEntry = (entry) => setDoc(doc(db, "masterScheduleEntries", "mcal" + Date.now()), entry);
+  const addMasterScheduleEntry = (entry) => {
+    logActivity(currentUser, { action: "Schedule entry added", clientId: entry.clientId || null, clientName: entry.clientName || null, text: entry.title });
+    return setDoc(doc(db, "masterScheduleEntries", "mcal" + Date.now()), entry);
+  };
   const updateMasterScheduleEntry = async (id, patch) => {
     await updateDoc(doc(db, "masterScheduleEntries", id), patch);
     // Setting or moving a site review on the Schedule tab marks it Scheduled on the Site Reviews
@@ -14476,6 +14638,7 @@ export default function App() {
       if (Object.keys(patch).length > 0) await updateDoc(doc(db, "clients", entry.clientId), patch);
     }
     await updateMasterScheduleEntry(entry.id, { confirmed: true, confirmedHoursLogId, closedReminderId });
+    logActivity(currentUser, { action: "Schedule entry confirmed", clientId: entry.clientId || null, clientName: entry.clientName || null, text: entry.title });
   };
 
   // One-time seed of real procedure content, condensed from OSHE's actual reference documents.
@@ -14810,6 +14973,16 @@ export default function App() {
     const current = onboardings[clientId] || [];
     const next = updaterFn(current);
     await setDoc(doc(db, "onboardings", clientId), { list: next });
+    try {
+      const cName = (clients.find((c) => c.id === clientId) || {}).name || null;
+      const oldInst = new Map(current.map((i) => [String(i.id), i]));
+      next.forEach((inst) => {
+        const o = oldInst.get(String(inst.id));
+        if (!o) { logActivity(currentUser, { action: "Workflow started", clientId, clientName: cName, text: inst.workflowName }); return; }
+        const oldSteps = new Map((o.steps || []).map((st) => [String(st.id), st]));
+        (inst.steps || []).forEach((st) => { const os = oldSteps.get(String(st.id)); if (os && !os.done && st.done) logActivity(currentUser, { action: "Workflow step completed", clientId, clientName: cName, text: `${inst.workflowName}: ${st.title}` }); });
+      });
+    } catch (err) { console.error("Workflow activity log failed:", err); }
   };
 
   // Notifications — real Firestore collection, starts empty (nothing to seed).

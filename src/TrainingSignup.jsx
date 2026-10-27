@@ -26,7 +26,7 @@ export default function TrainingSignup() {
   const [sessions, setSessions] = useState(null);
   const [loadError, setLoadError] = useState(false);
   const [selectedId, setSelectedId] = useState(null);
-  const [form, setForm] = useState({ company: "", name: "", email: "", website: "" });
+  const [form, setForm] = useState({ company: "", name: "", email: "", hp_ref: "" });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
   const [done, setDone] = useState(null);
@@ -122,7 +122,7 @@ export default function TrainingSignup() {
                 <input type={type} className={inputClass} style={inputStyle} value={form[k]} onChange={(e) => set(k, e.target.value)} />
               </label>
             ))}
-            <input tabIndex={-1} autoComplete="off" value={form.website} onChange={(e) => set("website", e.target.value)} style={{ position: "absolute", left: "-9999px", opacity: 0 }} aria-hidden="true" />
+            <input tabIndex={-1} autoComplete="off" value={form.hp_ref} onChange={(e) => set("hp_ref", e.target.value)} style={{ position: "absolute", left: "-9999px", opacity: 0 }} aria-hidden="true" />
             {error && <div className="text-sm rounded-lg px-4 py-3" style={{ background: "#F8EBE9", color: T.coral }}>{error}</div>}
             <button disabled={!valid || submitting} onClick={submit} className="text-sm font-semibold px-6 py-3 rounded-lg self-end"
               style={{ background: valid && !submitting ? T.tealDark : T.slateLight, color: "#fff", cursor: valid && !submitting ? "pointer" : "not-allowed" }}>

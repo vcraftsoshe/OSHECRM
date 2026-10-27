@@ -506,7 +506,7 @@ function clip(v, max) {
 exports.submitSiteReview = onCall({ cors: true }, async (request) => {
   const d = request.data || {};
   // Filled in only by bots.
-  if (d.website) return { ok: true };
+  if (d.hp_ref) { await db.collection("droppedSubmissions").add({ fn: request.rawRequest ? request.rawRequest.path || "" : "", date: today(), data: JSON.stringify({ ...d, signature: undefined, files: undefined }).slice(0, 4000) }).catch(() => {}); return { ok: true }; }
 
   const company = clip(d.company, 200);
   const address = clip(d.address, 300);
@@ -602,7 +602,7 @@ exports.getTrainingSessions = onCall({ cors: true }, async () => {
 });
 exports.signupForTraining = onCall({ cors: true }, async (request) => {
   const d = request.data || {};
-  if (d.website) return { ok: true };
+  if (d.hp_ref) { await db.collection("droppedSubmissions").add({ fn: request.rawRequest ? request.rawRequest.path || "" : "", date: today(), data: JSON.stringify({ ...d, signature: undefined, files: undefined }).slice(0, 4000) }).catch(() => {}); return { ok: true }; }
   const sessionId = clip(d.sessionId, 80);
   const company = clip(d.company, 200);
   const name = clip(d.name, 120);
@@ -688,7 +688,7 @@ exports.getPrequalSchemes = onCall({ cors: true }, async () => {
 });
 exports.startPrequal = onCall({ cors: true }, async (request) => {
   const d = request.data || {};
-  if (d.website) return { ok: true };
+  if (d.hp_ref) { await db.collection("droppedSubmissions").add({ fn: request.rawRequest ? request.rawRequest.path || "" : "", date: today(), data: JSON.stringify({ ...d, signature: undefined, files: undefined }).slice(0, 4000) }).catch(() => {}); return { ok: true }; }
   const company = clip(d.company, 200);
   const contactName = clip(d.contactName, 120);
   const email = clip(d.email, 200).toLowerCase();

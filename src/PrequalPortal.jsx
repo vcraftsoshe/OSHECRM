@@ -46,7 +46,7 @@ function Start({ onStarted }) {
   const [schemes, setSchemes] = useState(null);
   const [loadError, setLoadError] = useState(false);
   const [schemeId, setSchemeId] = useState(null);
-  const [form, setForm] = useState({ company: "", contactName: "", email: "", hp_ref: "" });
+  const [form, setForm] = useState({ company: "", contactName: "", email: "" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
@@ -93,7 +93,6 @@ function Start({ onStarted }) {
           <input placeholder="Company" className={inputClass} style={inputStyle} value={form.company} onChange={(e) => set("company", e.target.value)} />
           <input placeholder="Your name" className={inputClass} style={inputStyle} value={form.contactName} onChange={(e) => set("contactName", e.target.value)} />
           <input type="email" placeholder="Email" className={inputClass} style={inputStyle} value={form.email} onChange={(e) => set("email", e.target.value)} />
-          <input tabIndex={-1} autoComplete="off" aria-hidden="true" value={form.hp_ref} onChange={(e) => set("hp_ref", e.target.value)} style={{ position: "absolute", left: "-9999px", height: 0, width: 0, opacity: 0 }} />
           {error && <div className="text-sm rounded-lg px-4 py-3" style={{ background: "#F8EBE9", color: T.coral }}>{error}</div>}
           <button onClick={start} disabled={!valid || busy} className="text-sm font-semibold px-5 py-3 rounded-lg" style={{ background: valid ? T.tealDark : T.slateLight, color: "#fff", opacity: busy ? 0.7 : 1 }}>
             {busy ? "Starting…" : "Start"}

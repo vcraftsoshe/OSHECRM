@@ -39,7 +39,7 @@ export default function SiteReviewForm() {
   const [form, setForm] = useState({
     company: "", siteName: "", address: "", region: "", contactName: "", email: "", phone: "",
     frequency: "", inductionDetails: "", siteAccess: "", ppeRequirements: "", parkingRequirements: "", onApp: "", appJobName: "", sssp: "", notes: "",
-    siteStart: "", siteEnd: "", startMonth: "", hp_ref: "",
+    siteStart: "", siteEnd: "", startMonth: "",
   });
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
@@ -181,7 +181,6 @@ export default function SiteReviewForm() {
             <textarea rows={3} className={inputClass + " resize-y"} style={inputStyle} value={form.notes} onChange={(e) => set("notes", e.target.value)} />
           </Field>
           {/* Hidden from people, filled in by simple bots. */}
-          <input tabIndex={-1} autoComplete="off" value={form.hp_ref} onChange={(e) => set("hp_ref", e.target.value)} style={{ position: "absolute", left: "-9999px", opacity: 0 }} aria-hidden="true" />
         </div>
 
         {error && <div className="text-sm text-center rounded-lg px-4 py-3" style={{ background: "#F8EBE9", color: T.coral }}>{error}</div>}
